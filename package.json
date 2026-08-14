@@ -1,0 +1,30 @@
+{
+  "name": "claude-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "setup": "./install.sh",
+    "package": "./scripts/package.sh",
+    "dev": "./start.sh",
+    "server": "bun run --watch server/index.ts",
+    "ui": "vite",
+    "build": "vite build",
+    "start": "bun run server/index.ts",
+    "reindex": "bun run server/reindex.ts",
+    "icons": "python3 scripts/make-icons.py"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.231",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}
