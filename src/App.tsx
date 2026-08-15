@@ -20,7 +20,7 @@ import {
   currentIconUrl,
   faviconDataUrl,
   readStored,
-  setFaviconBadge,
+  setAttention,
   type Appearance,
 } from "./appearance.ts";
 import { Tile } from "./components/Charts.tsx";
@@ -159,7 +159,11 @@ export default function App() {
         body: `${p.body}\n${p.context}`,
         tag: p.key,
         icon: currentIconUrl(),
-      });
+        // A newer banner for the same session replaces the old one, and says so.
+        renotify: true,
+        // Something blocked on you should not slide away while you are elsewhere.
+        requireInteraction: p.urgent === true,
+      } as NotificationOptions);
       note.onclick = () => {
         window.focus();
         if (p.sessionId) window.location.hash = `#/session/${encodeURIComponent(p.sessionId)}`;
@@ -250,9 +254,10 @@ export default function App() {
   // another desktop, which is the whole point of the dashboard.
   useEffect(() => {
     document.title = blocked > 0 ? `(${blocked}) Claude Sessions` : "Claude Sessions";
-    // The title only reads if the tab is wide enough to show it; the badge
-    // survives a tab squeezed down to its icon, which is where this matters.
-    setFaviconBadge(blocked > 0);
+    // The title only reads if the tab is wide enough to show it; the favicon dot
+    // survives a tab squeezed down to its icon, and the Dock badge survives the
+    // window being hidden altogether, which is where this matters most.
+    setAttention(blocked);
   }, [blocked]);
 
   return (

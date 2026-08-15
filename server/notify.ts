@@ -1,4 +1,18 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { getSettings, inQuietHours, type NotifyEventKind } from "./settings.ts";
+
+/**
+ * The dashboard's own icon on the banner, so a Claude Sessions alert is not
+ * dressed as a generic terminal. Falls back to no override when unbuilt.
+ */
+const APP_ICON = ((): string | null => {
+  for (const dir of ["dist", "public"]) {
+    const p = join(import.meta.dir, "..", dir, "apple-touch-icon.png");
+    if (existsSync(p)) return p;
+  }
+  return null;
+})();
 
 /**
  * One thing that currently wants your attention. The caller builds these from the
@@ -13,9 +27,9 @@ export type NotifySubject = {
   sessionId: string | null;
   /** Session title, or the folder name when it has none. */
   label: string;
-  /** Where it is: "qargo/backend on feat/points". */
+  /** Where it is: "org/repo · feat/points". */
   context: string;
-  /** What happened: "needs input", "wants permission to run Bash". */
+  /** What it wants, in plain words: "Wants to run a command: bun test". */
   detail: string;
 };
 
@@ -41,11 +55,16 @@ export function setNotifyEmitter(fn: (event: string, data: unknown) => void) {
   emit = fn;
 }
 
-const HEADLINE: Record<NotifyEventKind, string> = {
-  needsInput: "needs input",
-  awaitingPermission: "needs permission",
-  turnComplete: "finished",
-  sessionError: "hit an error",
+/**
+ * How each kind presents itself. The icon and headline lead the banner so the
+ * *type* of interruption is readable before you read a word of it; the sound
+ * distinguishes "come back now" from "that one's done".
+ */
+const KIND: Record<NotifyEventKind, { icon: string; headline: string; sound: string; urgent: boolean }> = {
+  awaitingPermission: { icon: "🔐", headline: "Permission needed", sound: "Ping", urgent: true },
+  needsInput: { icon: "💬", headline: "Needs you", sound: "Ping", urgent: true },
+  turnComplete: { icon: "✅", headline: "Done", sound: "Glass", urgent: false },
+  sessionError: { icon: "⚠️", headline: "Error", sound: "Basso", urgent: false },
 };
 
 /**
@@ -119,13 +138,15 @@ async function fire(entry: Tracked) {
   if (entry.firedAt && now - entry.firedAt < n.cooldownSeconds * 1000) return;
   entry.firedAt = now;
 
-  const title = `${subject.label} ${HEADLINE[subject.kind]}`;
+  const kind = KIND[subject.kind];
+  const title = `${kind.icon} ${kind.headline} · ${subject.label}`;
   const url = deepLink(subject.sessionId ?? subject.key);
   const payload = {
     kind: subject.kind,
     title,
     body: subject.detail,
     context: subject.context,
+    urgent: kind.urgent,
     sessionId: subject.sessionId,
     key: subject.key,
     url,
@@ -135,7 +156,9 @@ async function fire(entry: Tracked) {
   console.log(`[claude-dashboard] notify: ${title} — ${subject.detail} (${subject.context})`);
 
   if (n.channels.browser) emit("notify", payload);
-  if (n.channels.native) native(title, subject.context, subject.detail, url, subject.key);
+  // Detail is the subtitle, not the message: terminal-notifier bolds the subtitle,
+  // and what the session wants matters more than where it lives.
+  if (n.channels.native) native(title, subject.detail, subject.context, url, subject.key, kind.sound);
   if (n.channels.googleChat && n.googleChatWebhook) {
     await googleChat(`*${title}*\n${subject.detail}\n_${subject.context}_\n${url}`);
   }
@@ -154,7 +177,14 @@ let notifierPath: string | null | undefined;
  * clickable and can carry a URL; osascript can only display text, which is still
  * better than nothing when terminal-notifier isn't installed.
  */
-function native(title: string, subtitle: string, message: string, url: string, group: string) {
+function native(
+  title: string,
+  subtitle: string,
+  message: string,
+  url: string,
+  group: string,
+  sound = "Ping",
+) {
   if (notifierPath === undefined) notifierPath = Bun.which("terminal-notifier");
 
   try {
@@ -174,7 +204,8 @@ function native(title: string, subtitle: string, message: string, url: string, g
           "-group",
           `claude-dashboard-${group}`,
           "-sound",
-          "default",
+          sound,
+          ...(APP_ICON ? ["-appIcon", APP_ICON] : []),
         ],
         { stdout: "ignore", stderr: "ignore" },
       );
@@ -189,7 +220,8 @@ function native(title: string, subtitle: string, message: string, url: string, g
       [
         osa,
         "-e",
-        `display notification "${esc(message)}" with title "${esc(title)}" subtitle "${esc(subtitle)}" sound name "default"`,
+        // osascript has no subtitle slot worth wasting: lead with what it wants.
+        `display notification "${esc(subtitle)} — ${esc(message)}" with title "${esc(title)}" sound name "${esc(sound)}"`,
       ],
       { stdout: "ignore", stderr: "ignore" },
     );
@@ -223,9 +255,10 @@ export async function sendTestNotification() {
   const url = deepLink("test");
   const payload = {
     kind: "needsInput" as NotifyEventKind,
-    title: "Claude Sessions test",
-    body: "If you can see this, notifications are working.",
+    title: `${KIND.needsInput.icon} Test · Claude Sessions`,
+    body: "Notifications are working.",
     context: "sent from the Settings page",
+    urgent: false,
     sessionId: null,
     key: "test",
     url,
@@ -233,7 +266,7 @@ export async function sendTestNotification() {
   };
 
   if (n.channels.browser) emit("notify", payload);
-  if (n.channels.native) native(payload.title, payload.context, payload.body, url, "test");
+  if (n.channels.native) native(payload.title, payload.body, payload.context, url, "test", KIND.needsInput.sound);
   if (n.channels.googleChat && n.googleChatWebhook) {
     await googleChat(`*${payload.title}*\n${payload.body}`);
   }

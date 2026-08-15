@@ -240,6 +240,18 @@ The tab icon also **badges itself** when a session is waiting on you — an ambe
 the tile plus a `(n)` count in the title, so a tab squeezed down to its favicon still
 tells you something needs answering.
 
+Installed as an app — Safari's **Add to Dock**, or any browser's install — the same
+count becomes a **badge on the Dock icon**, which is the one place it stays readable
+with the window hidden behind an editor. It needs notification permission granted,
+since that is what the platforms gate badging on. The window's title bar follows the
+palette too, via `theme-color`, so a Dock app is not left framing Ocean in default grey.
+
+The Dock **icon** itself cannot follow the picker: it is baked in when the app is
+installed, and nothing a running page does reaches it. Appearance → Dock icon →
+**Download as PNG** renders the current glyph and hue at 1024px so you can set it in
+the web app's own settings (File → Settings → General), which is the supported way to
+change it. Removing the app from the Dock and re-adding it picks up the current icon too.
+
 The choice is written to `settings.json` **and** mirrored in `localStorage`. The
 server copy is what another browser picks up; the local copy is what makes the first
 paint correct instead of flashing the default theme. The static icons in `public/` are

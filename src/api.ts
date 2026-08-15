@@ -238,6 +238,8 @@ export type NotifyPayload = {
   title: string;
   body: string;
   context: string;
+  /** Blocked on you — the banner should wait rather than auto-dismiss. */
+  urgent?: boolean;
   sessionId: string | null;
   key: string;
   url: string;

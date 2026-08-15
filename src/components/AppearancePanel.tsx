@@ -4,6 +4,7 @@ import {
   PALETTES,
   accentHex,
   faviconDataUrl,
+  iconPng,
   type AccentName,
   type Appearance,
   type FaviconName,
@@ -21,6 +22,24 @@ export function AppearancePanel({
   onChange: (patch: Partial<Appearance>) => void;
 }) {
   const a = appearance;
+
+  /**
+   * Render the chosen icon to a file. Revoking the object URL is deferred rather
+   * than done on the next line: the click is handled asynchronously, and pulling
+   * the URL out from under it cancels the download in some browsers.
+   */
+  const downloadIcon = () => {
+    iconPng(a)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `claude-sessions-${a.favicon}-${a.faviconColor}.png`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      })
+      .catch(() => {});
+  };
 
   return (
     <div className="panel">
@@ -154,7 +173,23 @@ export function AppearancePanel({
         </div>
         <span className="set-help">
           The dot and the count appear whenever a session is waiting on you. Browsers cache
-          favicons hard — a hard reload (⌘⇧R) settles it if the tab lags behind.
+          favicons hard — a hard reload (⌘⇧R) settles it if the tab lags behind. Installed to
+          the Dock, the same count becomes a badge on the app icon.
+        </span>
+
+        <div className="sub-label">Dock icon</div>
+        {/* The row wrapper is load-bearing: a bare inline-flex button leaves the
+            help text below flowing around it instead of under it. */}
+        <div className="swatch-row">
+          <button className="icon-btn" onClick={downloadIcon}>
+            Download as PNG
+          </button>
+        </div>
+        <span className="set-help">
+          A Dock app keeps whichever icon it was installed with, so the choice above cannot
+          reach it while it is running. Download the icon, then set it in the web app's own
+          settings (File → Settings → General → the icon well) — or remove it from the Dock
+          and add it again to pick up the current one.
         </span>
       </div>
     </div>

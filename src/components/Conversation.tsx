@@ -692,13 +692,7 @@ export function LiveConversation({
               }
             }}
           />
-          <button
-            className="icon-btn primary"
-            disabled={ended || (!draft.trim() && attached.length === 0)}
-            onClick={send}
-          >
-            Send
-          </button>
+          {/* No send button: ↵ sends, and the placeholder says so. */}
         </div>
       </div>
       {data.error && <div className="chat-error">{data.error}</div>}

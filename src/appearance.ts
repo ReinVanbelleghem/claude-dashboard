@@ -10,6 +10,11 @@
  * Favicons are generated as data URLs rather than shipped as files, so a glyph
  * and a colour combine without a build step. The static icons in public/ remain
  * the fallback for the first paint and for anything that fetches /favicon.ico.
+ *
+ * An installed web app is the exception to all of that: its Dock icon is fixed at
+ * install time and no live swap reaches it. What it does accept is the OS badge
+ * (setAttention) and the title bar colour (theme-color) — both applied here — plus
+ * an icon file exported by hand from iconPng().
  */
 
 export type ThemeName = "dark" | "light";
@@ -400,6 +405,92 @@ export function setFaviconBadge(on: boolean) {
   applyIcon();
 }
 
+/**
+ * The OS badge on the Dock or taskbar icon of an installed web app (Safari's
+ * "Add to Dock", or any PWA). This is the one attention signal that survives the
+ * window being hidden behind an editor — the favicon dot and the title count both
+ * need a visible tab to read.
+ *
+ * Two quirks are handled here. Safari mishandles `setAppBadge(0)`, so zero always
+ * goes through `clearAppBadge` rather than being passed as an argument. And both
+ * calls reject when the page is not installed, or when notification permission
+ * was never granted — neither is a failure worth surfacing, since the favicon
+ * badge is already carrying the same signal.
+ */
+function setDockBadge(count: number) {
+  const nav = navigator as Navigator & {
+    setAppBadge?: (n?: number) => Promise<void>;
+    clearAppBadge?: () => Promise<void>;
+  };
+  try {
+    const done = count > 0 ? nav.setAppBadge?.(count) : nav.clearAppBadge?.();
+    done?.catch(() => {});
+  } catch {
+    // Older engines throw synchronously rather than rejecting.
+  }
+}
+
+/**
+ * One call for "n sessions are waiting on you", fanned out to every surface that
+ * can show it. The favicon takes a boolean because a 16px tile has room for a dot
+ * and not a number; the Dock badge takes the count, because it has room for both.
+ */
+export function setAttention(count: number) {
+  setFaviconBadge(count > 0);
+  setDockBadge(count);
+}
+
+/**
+ * The window chrome colour. In a browser tab this is decoration, but in an
+ * installed web app it is the title bar, so setting it is what stops a Dock app
+ * from framing the palette in default grey.
+ *
+ * Read back off the computed value rather than the palette table because the
+ * Default palette has no entry there — it works by removing the inline overrides
+ * and letting the stylesheet's own variables show through, so the table would
+ * report nothing for exactly the case that matters most.
+ */
+function applyThemeColor() {
+  const surface = getComputedStyle(document.documentElement)
+    .getPropertyValue("--surface-0")
+    .trim();
+  if (!surface) return;
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.name = "theme-color";
+    document.head.appendChild(meta);
+  }
+  meta.content = surface;
+}
+
+/**
+ * The current icon as a PNG, for the icon picker's download button.
+ *
+ * Safari bakes a web app's Dock icon at install time, so none of the live favicon
+ * swapping above can reach it; the supported way to change it afterwards is the
+ * web app's own General settings, which wants an image file. This produces that
+ * file, at the size macOS wants, in whatever glyph and hue is currently chosen.
+ */
+export function iconPng(a: Appearance, size = 1024): Promise<Blob> {
+  const svg = faviconSvg(a.favicon, accentHex(a.faviconColor, a.theme));
+  const source = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return reject(new Error("no 2d context"));
+      ctx.drawImage(img, 0, 0, size, size);
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("encode failed"))), "image/png");
+    };
+    img.onerror = () => reject(new Error("icon did not load"));
+    img.src = source;
+  });
+}
+
 const KEY = "appearance";
 
 export function readStored(): Appearance {
@@ -433,6 +524,8 @@ export function applyAppearance(a: Appearance) {
 
   current = a;
   applyIcon();
+  // After the variables are written, not before: this reads the value back.
+  applyThemeColor();
 
   try {
     localStorage.setItem(KEY, JSON.stringify(a));

@@ -1,5 +1,6 @@
 import { watch } from "node:fs";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import {
   answerPermission,
@@ -189,18 +190,120 @@ const labelQuery = db.query<{ title: string | null; git_branch: string | null },
   "SELECT title, git_branch FROM sessions WHERE id = ?",
 );
 
-function contextOf(cwd: string, branch: string | null): string {
-  const where = cwd ? cwd.split("/").filter(Boolean).slice(-2).join("/") : "unknown folder";
-  return branch ? `${where} on ${branch}` : where;
+const HOME = homedir();
+
+/** `/Users/rein/src/app` → `~/src/app`, so a banner never leaks the home prefix. */
+function tildify(path: string): string {
+  if (path === HOME) return "~";
+  return path.startsWith(`${HOME}/`) ? `~${path.slice(HOME.length)}` : path;
 }
 
-/** The tool a session is currently blocked on, for a notification that says why. */
-function pendingTool(key: string): string | null {
+/** Trim to a length that survives the macOS banner without an ellipsis mid-word. */
+function clamp(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= max) return flat;
+  const cut = flat.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/** A branch worth naming. Detached heads and placeholders only add noise. */
+function realBranch(branch: string | null): string | null {
+  if (!branch) return null;
+  const b = branch.trim();
+  if (!b || b === "HEAD" || b === "(detached)" || b === "unknown") return null;
+  return b;
+}
+
+function contextOf(cwd: string, branch: string | null): string {
+  const short = cwd ? tildify(cwd) : "";
+  // Two trailing segments are enough to recognise a project; "~" stays whole.
+  const where = short === "~" ? "~" : short.split("/").filter(Boolean).slice(-2).join("/");
+  const b = realBranch(branch);
+  return b ? `${where || "unknown folder"} · ${b}` : where || "unknown folder";
+}
+
+/**
+ * What to call the session in a banner. A title beats a folder, a folder beats an
+ * id — and the home directory is not a project, so it never wins.
+ */
+function labelOf(title: string | null | undefined, cwd: string, key: string): string {
+  const named = title?.trim();
+  if (named) return clamp(named, 44);
+  const base = cwd && cwd !== HOME ? basename(cwd) : "";
+  return base || `session ${key.slice(0, 8)}`;
+}
+
+/** Plain-English verbs for the tools that block a turn most often. */
+const TOOL_VERB: Record<string, string> = {
+  Bash: "run a command",
+  BashOutput: "read command output",
+  Read: "read a file",
+  Edit: "edit a file",
+  Write: "write a file",
+  NotebookEdit: "edit a notebook",
+  Glob: "search for files",
+  Grep: "search the code",
+  WebFetch: "fetch a page",
+  WebSearch: "search the web",
+  Task: "start a subagent",
+  Agent: "start a subagent",
+  Workflow: "run a workflow",
+  SendMessage: "message another agent",
+  AskUserQuestion: "ask you a question",
+  ExitPlanMode: "start on its plan",
+  KillShell: "stop a running command",
+};
+
+/** The argument worth quoting for a given tool — the command, the file, the URL. */
+function toolObject(toolName: string, input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const i = input as Record<string, unknown>;
+  const pick = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  switch (toolName) {
+    case "Bash":
+      return pick(i.command);
+    case "Read":
+    case "Edit":
+    case "Write":
+    case "NotebookEdit": {
+      const p = pick(i.file_path ?? i.notebook_path);
+      return p ? basename(p) : null;
+    }
+    case "WebFetch":
+      return pick(i.url);
+    case "WebSearch":
+      return pick(i.query);
+    case "Task":
+    case "Agent":
+      return pick(i.description);
+    default:
+      return null;
+  }
+}
+
+/** "Wants to run a command: bun test" — the request, in words you can act on. */
+function permissionDetail(toolName: string, input: unknown, description: string | null): string {
+  if (toolName.startsWith("mcp__")) {
+    const [, server, tool] = toolName.split("__");
+    const pretty = (tool ?? toolName).replace(/[-_]/g, " ");
+    return clamp(`Wants to use ${pretty}${server ? ` (${server.replace(/_/g, " ")})` : ""}`, 90);
+  }
+  const verb = TOOL_VERB[toolName];
+  if (!verb) return clamp(`Wants to use ${toolName}${description ? `: ${description}` : ""}`, 90);
+  const object = toolObject(toolName, input);
+  return clamp(object ? `Wants to ${verb}: ${object}` : `Wants to ${verb}`, 90);
+}
+
+/** The permission a session is parked on, for a notification that says why. */
+function pendingRequest(key: string): string | null {
   const detail = getAgent(key);
   if (!detail) return null;
   for (let i = detail.timeline.length - 1; i >= 0; i--) {
     const item = detail.timeline[i];
-    if (item.kind === "permission" && item.decision === null) return item.toolName;
+    if (item.kind === "permission" && item.decision === null) {
+      return permissionDetail(item.toolName, item.input, item.description);
+    }
   }
   return null;
 }
@@ -220,32 +323,31 @@ function notifySubjects(): NotifySubject[] {
       kind: "needsInput",
       key: `needsInput:${s.sessionId}`,
       sessionId: s.sessionId,
-      label: s.name ?? row?.title ?? (basename(s.cwd || "") || s.sessionId.slice(0, 8)),
+      label: labelOf(s.name ?? row?.title, s.cwd, s.sessionId),
       context: contextOf(s.cwd, row?.git_branch ?? null),
-      detail: s.waitingFor ? `Waiting on you: ${s.waitingFor}` : "Waiting for your input",
+      detail: s.waitingFor ? clamp(`Waiting on you: ${s.waitingFor}`, 90) : "Waiting for your reply",
     });
   }
 
   for (const a of listAgents()) {
     const row = a.sessionId ? labelQuery.get(a.sessionId) : null;
-    const label = a.title ?? row?.title ?? (basename(a.cwd || "") || a.key.slice(0, 8));
+    const label = labelOf(a.title ?? row?.title, a.cwd, a.key);
     const context = contextOf(a.cwd, row?.git_branch ?? null);
     const base = { sessionId: a.sessionId, label, context };
 
     if (a.status === "awaiting-permission") {
-      const tool = pendingTool(a.key);
       out.push({
         ...base,
         kind: "awaitingPermission",
         key: `awaitingPermission:${a.key}`,
-        detail: tool ? `Asking to use ${tool}` : "Waiting for a permission decision",
+        detail: pendingRequest(a.key) ?? "Waiting for a permission decision",
       });
     } else if (a.status === "error") {
       out.push({
         ...base,
         kind: "sessionError",
         key: `sessionError:${a.key}`,
-        detail: a.error ?? a.endedReason ?? "The session stopped unexpectedly",
+        detail: clamp(a.error ?? a.endedReason ?? "The session stopped unexpectedly", 90),
       });
     } else if (a.status === "idle" && a.turns > 0) {
       // Idle with turns behind it means a reply just landed. A session that is
