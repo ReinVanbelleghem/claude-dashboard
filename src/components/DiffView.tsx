@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReviewComment } from "../api.ts";
 import { CommentThread, NewComment, type CommentHandlers } from "./ReviewComments.tsx";
 import { highlight } from "./highlight.tsx";
+import { EditorIcon, PencilIcon, TrashIcon } from "./Icons.tsx";
+import { FileEditor } from "./FileEditor.tsx";
 
 /** Everything the diff needs to host a review, or nothing to stay read-only. */
 export type ReviewProps = {
@@ -38,7 +40,8 @@ const LANG_BY_EXT: Record<string, string> = {
   json: "json", yaml: "yaml", yml: "yaml", css: "css", scss: "css", html: "html", md: "markdown",
 };
 
-function langOf(path: string): string | undefined {
+/** The highlighter's language for a path, by extension. Shared with the editor. */
+export function langOf(path: string): string | undefined {
   return LANG_BY_EXT[path.split(".").pop()?.toLowerCase() ?? ""];
 }
 
@@ -125,11 +128,29 @@ export function DiffView({
   mode,
   emptyLabel = "No changes.",
   review,
+  fileHref,
+  onDiscard,
+  edit,
 }: {
   patch: string;
   mode: "unified" | "split";
   emptyLabel?: string;
   review?: ReviewProps;
+  /**
+   * Where a file opens outside the dashboard, given its repo-relative path. The
+   * patch only carries relative paths, so whoever knows the repo root supplies this.
+   */
+  fileHref?: (path: string) => string | null;
+  /**
+   * Throw away this file's uncommitted changes. Only passed for a working-tree diff
+   * — a committed patch has nothing to discard — and the header asks before calling.
+   */
+  onDiscard?: (path: string, from: string | null) => void;
+  /**
+   * Lets each file be opened in an editor. Absent for a commit's patch: that shows a
+   * file as it was, and editing it would silently write to the current one instead.
+   */
+  edit?: { cwd: string; onSaved: () => void };
 }) {
   const files = useMemo(() => parsePatch(patch), [patch]);
 
@@ -190,6 +211,9 @@ export function DiffView({
             file={f}
             mode={mode}
             review={review}
+            href={fileHref?.(f.path) ?? null}
+            onDiscard={onDiscard}
+            edit={edit}
             open={!closed.has(k)}
             onToggle={() =>
               setClosed((prev) => {
@@ -212,37 +236,120 @@ function FileDiff({
   open,
   onToggle,
   review,
+  href,
+  onDiscard,
+  edit,
 }: {
   file: FilePatch;
   mode: "unified" | "split";
   open: boolean;
   onToggle: () => void;
   review?: ReviewProps;
+  /** Editor link for this file, when the caller knows where it lives on disk. */
+  href?: string | null;
+  onDiscard?: (path: string, from: string | null) => void;
+  edit?: { cwd: string; onSaved: () => void };
 }) {
   const lang = langOf(file.path);
   const lines = countLines(file);
   const [fileComment, setFileComment] = useState(false);
+  /** Discarding destroys work that exists nowhere else, so it is asked twice. */
+  const [asking, setAsking] = useState(false);
+  const [editing, setEditing] = useState(false);
   const mine = review?.comments.filter((c) => c.path === file.path) ?? [];
   const openCount = mine.filter((c) => c.status === "open").length;
   return (
     <div className={`diff-file ${open ? "" : "closed"}`}>
-      {/* The whole header toggles: a 3px chevron would be a silly click target. */}
-      <button className="diff-file-head" onClick={onToggle} aria-expanded={open}>
-        <span className={`diff-caret ${open ? "open" : ""}`} aria-hidden="true" />
-        <span className="diff-path">
-          {file.from && file.from !== file.path && <span className="diff-from">{file.from} → </span>}
-          {file.path}
-        </span>
-        {file.note && <span className="chip muted">{file.note}</span>}
-        <span className="diff-stat">
-          {openCount > 0 && <span className="diff-comments">{openCount} 💬</span>}
-          {!open && lines > 0 && <span className="diff-folded">{lines} lines</span>}
-          {file.insertions > 0 && <span className="tok-add">+{file.insertions}</span>}
-          {file.deletions > 0 && <span className="tok-del">−{file.deletions}</span>}
-        </span>
-      </button>
+      {/* The link sits beside the toggle rather than inside it: a header that is one
+          big button cannot also contain one. */}
+      <div className="diff-file-head-row">
+        {/* The whole header toggles: a 3px chevron would be a silly click target. */}
+        <button className="diff-file-head" onClick={onToggle} aria-expanded={open}>
+          <span className={`diff-caret ${open ? "open" : ""}`} aria-hidden="true" />
+          <span className="diff-path">
+            {file.from && file.from !== file.path && <span className="diff-from">{file.from} → </span>}
+            {file.path}
+          </span>
+          {file.note && <span className="chip muted">{file.note}</span>}
+          <span className="diff-stat">
+            {openCount > 0 && <span className="diff-comments">{openCount} 💬</span>}
+            {!open && lines > 0 && <span className="diff-folded">{lines} lines</span>}
+            {file.insertions > 0 && <span className="tok-add">+{file.insertions}</span>}
+            {file.deletions > 0 && <span className="tok-del">−{file.deletions}</span>}
+          </span>
+        </button>
+        {/* Asking replaces the actions rather than sitting beside them, so a yes
+            cannot be given to a question that isn't on screen. */}
+        {asking ? (
+          <div className="diff-actions asking">
+            <span className="diff-ask">
+              {file.note === "new file" ? "Delete this file?" : "Throw away these changes?"}
+            </span>
+            <button
+              className="diff-act danger"
+              onClick={() => {
+                setAsking(false);
+                onDiscard?.(file.path, file.from);
+              }}
+            >
+              {file.note === "new file" ? "delete" : "discard"}
+            </button>
+            <button className="diff-act" onClick={() => setAsking(false)}>
+              keep
+            </button>
+          </div>
+        ) : (
+          <div className="diff-actions">
+            {/* A deleted file has nothing to open — it isn't there any more. */}
+            {edit && file.note !== "deleted" && (
+              <button
+                className={`diff-act ${editing ? "on" : ""}`}
+                onClick={() => setEditing(!editing)}
+                title={editing ? "Close the editor" : `Edit ${file.path}`}
+              >
+                <PencilIcon />
+              </button>
+            )}
+            {href && (
+              <a className="diff-act" href={href} title={`Open ${file.path} in VS Code`}>
+                <EditorIcon />
+              </a>
+            )}
+            {onDiscard && (
+              <button
+                className="diff-act"
+                onClick={() => setAsking(true)}
+                title={`Discard the uncommitted changes to ${file.path}`}
+              >
+                <TrashIcon />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
-      {open && review && (
+      {/* The editor replaces the patch rather than sitting under it: they are two
+          renderings of the same file, and the patch is stale the moment you type. */}
+      {editing && edit && (
+        <FileEditor
+          cwd={edit.cwd}
+          path={file.path}
+          lang={lang}
+          /* An added line's number is its number in the file as it stands, which is
+             exactly what the editor is showing. */
+          changedLines={
+            new Set(
+              file.hunks.flatMap((h) =>
+                h.lines.flatMap((l) => (l.kind === "add" && l.newNo ? [l.newNo] : [])),
+              ),
+            )
+          }
+          onClose={() => setEditing(false)}
+          onSaved={edit.onSaved}
+        />
+      )}
+
+      {open && !editing && review && (
         <div className="file-review">
           {mine
             .filter((c) => c.line === null && (review.showResolved || c.status === "open"))
@@ -266,7 +373,7 @@ function FileDiff({
         </div>
       )}
 
-      {!open ? null : file.binary ? (
+      {!open || editing ? null : file.binary ? (
         <div className="hint" style={{ padding: "10px 12px" }}>
           Binary file — no textual diff.
         </div>

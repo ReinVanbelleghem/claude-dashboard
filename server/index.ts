@@ -39,16 +39,22 @@ import {
 import { loadConfig } from "./config.ts";
 import { openDb } from "./db.ts";
 import { listDirs, listFavourites, removeFavourite, saveFavourite } from "./dirs.ts";
+import { browse as browseFiles, readFile, writeFile } from "./files.ts";
 import {
   branchFiles,
   branches as gitBranches,
   checkout as gitCheckout,
+  commit as gitCommit,
   diff as gitDiff,
+  discard as gitDiscard,
   fetch as gitFetch,
   log as gitLog,
   pull as gitPull,
+  push as gitPush,
   repoStatus,
   show as gitShow,
+  stage as gitStage,
+  unstage as gitUnstage,
 } from "./git.ts";
 import { indexOnce } from "./indexer.ts";
 import {
@@ -615,9 +621,16 @@ const server = Bun.serve({
           branch?: string;
           create?: boolean;
           from?: string;
+          paths?: unknown;
+          all?: boolean;
+          message?: string;
+          noVerify?: boolean;
         };
         const root = b.cwd?.trim();
         if (!root) return json({ error: "cwd is required" }, 400);
+
+        /** Paths only ever arrive as a list of strings; git.ts validates each one. */
+        const paths = Array.isArray(b.paths) ? b.paths.filter((x): x is string => typeof x === "string") : [];
 
         if (action === "checkout") {
           const branch = b.branch?.trim();
@@ -636,6 +649,38 @@ const server = Bun.serve({
         if (action === "pull") {
           const r = await gitPull(root);
           // HEAD moved, so every tab's branch line and diff is now behind.
+          if (r.ok) broadcast("git", { root: r.status?.root ?? null, branch: r.status?.branch ?? null });
+          return json(r, r.ok ? 200 : 409);
+        }
+
+        if (action === "stage" || action === "unstage") {
+          if (!b.all && !paths.length) return json({ error: "paths or all is required" }, 400);
+          const fn = action === "stage" ? gitStage : gitUnstage;
+          const r = await fn(root, { paths, all: !!b.all });
+          // The index changed, so any tab showing this repo's file list is stale.
+          if (r.ok) broadcast("git", { root: r.status?.root ?? null, branch: r.status?.branch ?? null });
+          return json(r, r.ok ? 200 : 409);
+        }
+
+        // No `all` here, unlike stage: discarding is the one write that destroys
+        // work, so it always names its files.
+        if (action === "discard") {
+          if (!paths.length) return json({ error: "paths are required" }, 400);
+          const r = await gitDiscard(root, paths);
+          if (r.ok) broadcast("git", { root: r.status?.root ?? null, branch: r.status?.branch ?? null });
+          return json(r, r.ok ? 200 : 409);
+        }
+
+        if (action === "commit") {
+          const message = typeof b.message === "string" ? b.message : "";
+          const r = await gitCommit(root, message, { noVerify: !!b.noVerify });
+          // HEAD moved: branch history, the ahead count and the diff all changed.
+          if (r.ok) broadcast("git", { root: r.status?.root ?? null, branch: r.status?.branch ?? null });
+          return json(r, r.ok ? 200 : 409);
+        }
+
+        if (action === "push") {
+          const r = await gitPush(root);
           if (r.ok) broadcast("git", { root: r.status?.root ?? null, branch: r.status?.branch ?? null });
           return json(r, r.ok ? 200 : 409);
         }
@@ -686,6 +731,42 @@ const server = Bun.serve({
       }
 
       return json({ error: "not found" }, 404);
+    }
+
+    // Browse or search the repo, to open a file no diff mentions.
+    if (p === "/api/files/browse") {
+      const cwd = url.searchParams.get("cwd");
+      if (!cwd) return json({ error: "cwd is required" }, 400);
+      return json(
+        await browseFiles(cwd, {
+          path: url.searchParams.get("path") ?? undefined,
+          q: url.searchParams.get("q") ?? undefined,
+        }),
+      );
+    }
+
+    // ── one file, for the editor in the diff panel ───────────────────────────
+    if (p === "/api/file") {
+      if (req.method === "POST") {
+        const b = (await req.json().catch(() => ({}))) as {
+          cwd?: string;
+          path?: string;
+          content?: string;
+          baseHash?: string;
+        };
+        if (!b.cwd?.trim() || !b.path?.trim()) return json({ error: "cwd and path are required" }, 400);
+        if (typeof b.content !== "string") return json({ error: "content is required" }, 400);
+        const r = await writeFile(b.cwd, b.path, b.content, b.baseHash ?? "");
+        // The file list, the diff and every branch badge are now describing the
+        // working tree as it was a moment ago.
+        if (r.ok) broadcast("git", { root: null, branch: null });
+        return json(r, r.ok ? 200 : 409);
+      }
+      const cwd = url.searchParams.get("cwd");
+      const path = url.searchParams.get("path");
+      if (!cwd || !path) return json({ error: "cwd and path are required" }, 400);
+      const r = await readFile(cwd, path);
+      return json(r, r.ok ? 200 : 400);
     }
 
     // Models a session last reported. Empty until the first session has run, in

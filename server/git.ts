@@ -59,7 +59,11 @@ export type Commit = {
 const UNIT = "\x1f";
 const RECORD = "\x1e";
 
-async function run(cwd: string, args: string[]): Promise<{ ok: boolean; out: string; err: string }> {
+async function run(
+  cwd: string,
+  args: string[],
+  opts: { timeoutMs?: number } = {},
+): Promise<{ ok: boolean; out: string; err: string }> {
   try {
     const proc = Bun.spawn(["git", "--no-optional-locks", "-C", cwd, ...args], {
       stdout: "pipe",
@@ -67,11 +71,26 @@ async function run(cwd: string, args: string[]): Promise<{ ok: boolean; out: str
       // A pager or a prompt would hang the request forever.
       env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
     });
+    /**
+     * Reads are quick and unattended, but a commit runs the repo's hooks and a push
+     * talks to a server — either can wedge. Killing the process frees the repo lock
+     * this write holds; without it one stuck hook would block every later write.
+     */
+    let timedOut = false;
+    const timer = opts.timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          proc.kill();
+        }, opts.timeoutMs)
+      : null;
     const [out, err] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
     ]);
     const code = await proc.exited;
+    if (timer) clearTimeout(timer);
+    if (timedOut)
+      return { ok: false, out, err: `git ${args[0]} timed out after ${Math.round((opts.timeoutMs ?? 0) / 1000)}s` };
     return { ok: code === 0, out, err: err.trim() };
   } catch (e) {
     return { ok: false, out: "", err: e instanceof Error ? e.message : String(e) };
@@ -93,7 +112,7 @@ export function isSha(v: string): boolean {
  * A pathspec we were handed by the browser. Absolute paths and anything starting
  * with a dash could escape the repo or be read as a flag; `--` handles the rest.
  */
-function safePath(p: string): boolean {
+export function safePath(p: string): boolean {
   return !!p && !p.startsWith("-") && !isAbsolute(p) && !p.split("/").includes("..");
 }
 
@@ -298,6 +317,25 @@ function parseNumstatZ(raw: string): [string, number, number][] {
     if (path) out.push([path, ins, del]);
   }
   return out;
+}
+
+/**
+ * Every file in the repo worth offering to open: tracked, plus untracked ones git
+ * would add, minus everything .gitignore excludes. That last part is the point — a
+ * plain directory walk of a working repo is mostly node_modules and build output.
+ */
+export async function listFiles(cwd: string): Promise<string[]> {
+  const status = await repoStatus(cwd);
+  if (!status.isRepo || !status.root) return [];
+  const r = await run(status.root, [
+    "ls-files",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+    "-z",
+  ]);
+  if (!r.ok) return [];
+  return r.out.split("\0").filter(Boolean);
 }
 
 // ── diffs ─────────────────────────────────────────────────────────────────────
@@ -975,7 +1013,328 @@ export async function fetch(cwd: string): Promise<WriteResult> {
     return { ok: false, status, error: "not a git repository", hint: null };
 
   return withLock(status.root, async () => {
-    const r = await run(status.root!, ["fetch", "--all", "--prune", "--quiet"]);
+    const r = await run(status.root!, ["fetch", "--all", "--prune", "--quiet"], { timeoutMs: 120_000 });
     return finish(cwd, r.ok, r.ok ? null : r.err || "git fetch failed", null);
   });
+}
+
+// ── staging ───────────────────────────────────────────────────────────────────
+/**
+ * Pathspecs from the browser, hardened before they reach argv.
+ *
+ * Two things are being prevented. `safePath` stops a path escaping the repo or
+ * being read as a flag. `:(literal)` stops git reading the *contents* of a path as
+ * a pattern: a file genuinely called `*.ts` or `foo[1].ts` would otherwise stage a
+ * set of files nobody picked. The `--` separator handles the rest.
+ */
+function pathspecs(paths: string[]): string[] | null {
+  const clean = paths.map((p) => p.trim()).filter(Boolean);
+  if (!clean.length || clean.some((p) => !safePath(p))) return null;
+  return clean.map((p) => `:(literal)${p}`);
+}
+
+/** Whether the repo has a commit yet — an empty one has no HEAD to restore from. */
+async function hasHead(root: string): Promise<boolean> {
+  return !!(await line(root, ["rev-parse", "--verify", "--quiet", "HEAD"]));
+}
+
+/**
+ * Stage paths, or everything.
+ *
+ * `git add` is used for both, including for deletions and untracked files — the
+ * `-A` semantics of modern git make one command cover every case, so the UI never
+ * has to know which kind of change it is looking at.
+ */
+export async function stage(
+  cwd: string,
+  opts: { paths?: string[]; all?: boolean },
+): Promise<WriteResult> {
+  const status = await freshStatus(cwd);
+  if (!status.isRepo || !status.root)
+    return { ok: false, status, error: "not a git repository", hint: null };
+  const root = status.root;
+
+  const specs = opts.all ? [] : pathspecs(opts.paths ?? []);
+  if (!specs) return { ok: false, status, error: "bad path", hint: null };
+
+  return withLock(root, async () => {
+    const r = await run(root, ["add", "--all", "--", ...specs]);
+    if (!r.ok) return finish(cwd, false, r.err || "git add failed", null);
+    const n = opts.all ? null : specs.length;
+    return finish(cwd, true, null, null, n === null ? "Staged everything." : `Staged ${n} file${n === 1 ? "" : "s"}.`);
+  });
+}
+
+/**
+ * Take paths back out of the index, leaving the working tree alone.
+ *
+ * `restore --staged` needs a HEAD to restore the index entry from, so a repo with
+ * no commits yet uses `rm --cached` instead — there, unstaging means removing the
+ * entry outright rather than resetting it to a previous version.
+ */
+export async function unstage(
+  cwd: string,
+  opts: { paths?: string[]; all?: boolean },
+): Promise<WriteResult> {
+  const status = await freshStatus(cwd);
+  if (!status.isRepo || !status.root)
+    return { ok: false, status, error: "not a git repository", hint: null };
+  const root = status.root;
+
+  // `.` from the repo root is the whole tree, and is a literal pathspec already.
+  const specs = opts.all ? ["."] : pathspecs(opts.paths ?? []);
+  if (!specs) return { ok: false, status, error: "bad path", hint: null };
+
+  return withLock(root, async () => {
+    const args = (await hasHead(root))
+      ? ["restore", "--staged", "--", ...specs]
+      : ["rm", "--cached", "-r", "--quiet", "--", ...specs];
+    const r = await run(root, args);
+    if (!r.ok) return finish(cwd, false, r.err || "git restore --staged failed", null);
+    const n = opts.all ? null : specs.length;
+    return finish(
+      cwd,
+      true,
+      null,
+      null,
+      n === null ? "Unstaged everything." : `Unstaged ${n} file${n === 1 ? "" : "s"}.`,
+    );
+  });
+}
+
+/**
+ * Throw away a file's uncommitted changes.
+ *
+ * The one operation here that destroys work which exists nowhere else — an unstaged
+ * edit is not in any git object, so nothing brings it back. Three things keep that
+ * honest:
+ *
+ *  - It only ever takes an explicit list of paths. There is no `all`, so no single
+ *    click can empty a working tree.
+ *  - A tracked file goes back to HEAD, index and worktree together, which is what
+ *    "discard" is asked to mean. An untracked file is deleted, and that is said in
+ *    the result rather than left to be discovered.
+ *  - Directories are refused. `git clean` on one would take everything beneath it,
+ *    including files the caller never saw in the list it was choosing from.
+ */
+export async function discard(cwd: string, paths: string[]): Promise<WriteResult> {
+  const status = await freshStatus(cwd);
+  if (!status.isRepo || !status.root)
+    return { ok: false, status, error: "not a git repository", hint: null };
+  const root = status.root;
+
+  const wanted = paths.map((p) => p.trim()).filter(Boolean);
+  if (!wanted.length) return { ok: false, status, error: "no paths to discard", hint: null };
+  if (wanted.some((p) => !safePath(p))) return { ok: false, status, error: "bad path", hint: null };
+
+  /**
+   * Every path has to be one the status listed. That is what rules out a directory,
+   * a path outside the change set, and a stale name from a page that has been open
+   * since before the last commit.
+   */
+  const known = new Map(status.files.map((f) => [f.path, f]));
+  const unknown = wanted.filter((p) => !known.has(p));
+  if (unknown.length)
+    return {
+      ok: false,
+      status,
+      error: `not an uncommitted change: ${unknown.join(", ")}`,
+      hint: "Refresh — the file list is older than the repository.",
+    };
+
+  const untracked = wanted.filter((p) => known.get(p)!.untracked);
+  const tracked = wanted.filter((p) => !known.get(p)!.untracked);
+
+  return withLock(root, async () => {
+    if (tracked.length) {
+      if (!(await hasHead(root)))
+        return finish(
+          cwd,
+          false,
+          "this repository has no commits yet",
+          "There is no committed version to restore these files to.",
+        );
+      // Index and worktree together: a half-discarded file is nobody's intent.
+      const r = await run(root, [
+        "restore",
+        "--source=HEAD",
+        "--staged",
+        "--worktree",
+        "--",
+        ...tracked.map((p) => `:(literal)${p}`),
+      ]);
+      if (!r.ok) return finish(cwd, false, r.err || "git restore failed", null);
+    }
+
+    if (untracked.length) {
+      // No -d: these are files the status listed individually, and -d would let a
+      // directory take its contents with it.
+      const r = await run(root, ["clean", "-f", "--", ...untracked.map((p) => `:(literal)${p}`)]);
+      if (!r.ok) return finish(cwd, false, r.err || "git clean failed", null);
+    }
+
+    const n = wanted.length;
+    const deleted = untracked.length ? `, ${untracked.length} deleted from disk` : "";
+    return finish(cwd, true, null, null, `Discarded ${n} file${n === 1 ? "" : "s"}${deleted}.`);
+  });
+}
+
+// ── commit ────────────────────────────────────────────────────────────────────
+const MESSAGE_MAX = 20_000;
+
+/**
+ * Commit what is staged, and only what is staged.
+ *
+ * Deliberately never `-a`: the staging area is the review step, and a button that
+ * quietly swept in every other edit in the tree would make it meaningless. The
+ * message reaches git as one argv value, so no part of it can be read as a flag.
+ *
+ * Hooks run, because a repo that has them expects them to — but under a timeout,
+ * since a hook that waits for input would otherwise hold this repo's write lock
+ * forever with nothing on the far end to answer it.
+ */
+export async function commit(
+  cwd: string,
+  message: string,
+  opts: { noVerify?: boolean } = {},
+): Promise<WriteResult> {
+  const status = await freshStatus(cwd);
+  if (!status.isRepo || !status.root)
+    return { ok: false, status, error: "not a git repository", hint: null };
+  const root = status.root;
+
+  const msg = message.replace(/\r\n/g, "\n").trim();
+  if (!msg) return { ok: false, status, error: "a commit message is required", hint: null };
+  if (msg.length > MESSAGE_MAX)
+    return { ok: false, status, error: `message is too long (${msg.length} characters)`, hint: null };
+
+  if (status.counts.staged === 0)
+    return {
+      ok: false,
+      status,
+      error: "nothing staged",
+      hint: "Stage the files you want in this commit first — a commit only ever takes what is staged.",
+    };
+
+  return withLock(root, async () => {
+    /**
+     * Conflicted files are staged as far as porcelain is concerned, but committing
+     * one writes the conflict markers into history. git's own refusal only covers
+     * unmerged entries it still tracks as such, so this is checked up front.
+     */
+    const unmerged = await run(root, ["diff", "--name-only", "--diff-filter=U", "-z"]);
+    const conflicted = unmerged.out.split("\0").filter(Boolean);
+    if (conflicted.length)
+      return finish(
+        cwd,
+        false,
+        `unresolved conflicts in ${conflicted.slice(0, 5).join(", ")}${conflicted.length > 5 ? ` and ${conflicted.length - 5} more` : ""}`,
+        "Resolve them in a terminal, then stage the results.",
+      );
+
+    const args = ["commit", "-m", msg];
+    if (opts.noVerify) args.push("--no-verify");
+    const r = await run(root, args, { timeoutMs: 180_000 });
+    if (!r.ok) return finish(cwd, false, r.err || r.out.trim() || "git commit failed", commitHint(r.err + r.out));
+
+    const short = (await line(root, ["rev-parse", "--short", "HEAD"])) ?? "";
+    const subject = msg.split("\n")[0];
+    return finish(cwd, true, null, null, `Committed ${short} — ${subject}`);
+  });
+}
+
+/** git's commit failures are usually one of a few fixable setup problems. */
+function commitHint(err: string): string | null {
+  if (/Please tell me who you are|unable to auto-detect email|empty ident name/i.test(err))
+    return "git doesn't know who you are here. Set `user.name` and `user.email`, then commit again.";
+  if (/timed out/i.test(err))
+    return "A commit hook is still running or is waiting for input. Run the commit in a terminal to see it.";
+  if (/hook|pre-commit/i.test(err))
+    return "A commit hook rejected this. Fix what it reports, or commit in a terminal to skip it.";
+  return null;
+}
+
+// ── push ──────────────────────────────────────────────────────────────────────
+/**
+ * Publish this branch's commits.
+ *
+ * Never forced, and never with a refspec the browser chose: the destination is read
+ * from the branch's own config (`branch.<name>.remote` / `.merge`), which is the
+ * same place `git push` reads it from. A branch with no upstream gets one set, since
+ * that is the only way the first push of a new branch can work at all.
+ *
+ * A branch known to be behind is refused before contacting the remote, because the
+ * push would be rejected anyway and "pull first" is the answer either way.
+ */
+export async function push(cwd: string): Promise<WriteResult> {
+  const status = await freshStatus(cwd);
+  if (!status.isRepo || !status.root)
+    return { ok: false, status, error: "not a git repository", hint: null };
+  const root = status.root;
+
+  if (status.detached)
+    return {
+      ok: false,
+      status,
+      error: "HEAD is detached",
+      hint: "Switch to a branch first — there is nothing for a push to publish.",
+    };
+  if (!status.branch) return { ok: false, status, error: "no current branch", hint: null };
+  const branch = status.branch;
+
+  return withLock(root, async () => {
+    const remotes = (await run(root, ["remote"])).out
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!remotes.length)
+      return finish(cwd, false, "this repository has no remote", "Add one with `git remote add`, then push.");
+
+    const configured = await line(root, ["config", "--get", `branch.${branch}.remote`]);
+    const remote = configured ?? (remotes.includes("origin") ? "origin" : remotes[0]);
+    if (!plausibleRef(remote) || !remotes.includes(remote))
+      return finish(cwd, false, `unusable remote: ${remote}`, null);
+
+    if (!status.upstream) {
+      const r = await run(root, ["push", "--set-upstream", remote, `HEAD:refs/heads/${branch}`], {
+        timeoutMs: 180_000,
+      });
+      if (!r.ok) return finish(cwd, false, r.err || "git push failed", pushHint(r.err));
+      return finish(cwd, true, null, null, `Pushed ${branch} to ${remote} and set it as the upstream.`);
+    }
+
+    if (status.behind > 0)
+      return finish(
+        cwd,
+        false,
+        `${branch} is ${status.behind} commit${status.behind === 1 ? "" : "s"} behind ${status.upstream}`,
+        "Pull first — the remote would reject this push as non-fast-forward.",
+      );
+    if (status.ahead === 0) return finish(cwd, true, null, null, "Nothing to push — already up to date.");
+
+    /**
+     * The upstream branch may be named differently from the local one, so the
+     * destination comes from `branch.<name>.merge` rather than from the local name.
+     */
+    const merge = await line(root, ["config", "--get", `branch.${branch}.merge`]);
+    const dest = merge && plausibleRef(merge) ? merge : `refs/heads/${branch}`;
+
+    const r = await run(root, ["push", remote, `HEAD:${dest}`], { timeoutMs: 180_000 });
+    if (!r.ok) return finish(cwd, false, r.err || "git push failed", pushHint(r.err));
+
+    const n = status.ahead;
+    return finish(cwd, true, null, null, `Pushed ${n} commit${n === 1 ? "" : "s"} to ${status.upstream}.`);
+  });
+}
+
+function pushHint(err: string): string | null {
+  if (/non-fast-forward|fetch first|behind its remote/i.test(err))
+    return "The remote has commits this branch doesn't. Pull first, then push again.";
+  if (/timed out/i.test(err))
+    return "The remote didn't answer, or it wants credentials this daemon can't supply. Try the push in a terminal.";
+  if (/Authentication|could not read Username|Permission denied|publickey/i.test(err))
+    return "git couldn't authenticate without a prompt. Set up a credential helper or an SSH key, then push again.";
+  if (/protected branch|pre-receive hook declined/i.test(err))
+    return "The remote refused the push. Open a pull request from a branch instead.";
+  return null;
 }

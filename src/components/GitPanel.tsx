@@ -12,55 +12,21 @@ import {
   type ReviewComment,
   type Settings,
 } from "../api.ts";
-import { BranchSwitcher } from "./BranchSwitcher.tsx";
 import { requestCompose } from "./compose.ts";
-import { DiffView } from "./DiffView.tsx";
+import { DiffView, langOf } from "./DiffView.tsx";
+import { FileEditor } from "./FileEditor.tsx";
+import { FilePicker } from "./FilePicker.tsx";
 import type { CommentHandlers } from "./ReviewComments.tsx";
-import { GitIcon } from "./Icons.tsx";
+import { GitIcon, PencilIcon } from "./Icons.tsx";
+import { cachedStatus, watchStatus, type GitRepo } from "./useGitRepo.ts";
 
-/**
- * Branch state in one line, for headers and cards.
- *
- * Several of these can mount at once (one per session card), so results are shared
- * through a module-level cache; the daemon caches repoStatus too, but there is no
- * reason to ask it the same question five times on one render.
- */
-const statusCache = new Map<string, Promise<RepoStatus>>();
-
-function cachedStatus(cwd: string): Promise<RepoStatus> {
-  let p = statusCache.get(cwd);
-  if (!p) {
-    p = gitApi.status(cwd);
-    statusCache.set(cwd, p);
-    // Short-lived: a branch switch or a new edit should show up without a reload.
-    setTimeout(() => statusCache.delete(cwd), 5_000);
-  }
-  return p;
-}
-
-/**
- * Badges are scattered across the page — one per session card — and none of them
- * know that the panel just switched branch. Rather than give each one a poll, the
- * write path drops the cache and bumps a counter they all watch.
- */
-const watchers = new Set<() => void>();
-
-function invalidateStatusCache() {
-  statusCache.clear();
-  for (const w of watchers) w();
-}
-
+/** Branch state in one line, for headers and cards. */
 export function GitBadge({ cwd, compact = false }: { cwd: string; compact?: boolean }) {
   const [status, setStatus] = useState<RepoStatus | null>(null);
   const [nonce, setNonce] = useState(0);
 
-  useEffect(() => {
-    const bump = () => setNonce((n) => n + 1);
-    watchers.add(bump);
-    return () => {
-      watchers.delete(bump);
-    };
-  }, []);
+  // Any write, anywhere on the page, changes what this is counting.
+  useEffect(() => watchStatus(() => setNonce((n) => n + 1)), []);
 
   useEffect(() => {
     let alive = true;
@@ -90,32 +56,31 @@ export function GitBadge({ cwd, compact = false }: { cwd: string; compact?: bool
 }
 
 /**
- * What this branch is doing.
+ * What this branch is doing — the reading half of git.
  *
  * Two scopes answer two different questions: "worktree" is what is uncommitted
  * right now — the code a session just wrote and you have not reviewed — and
  * "branch" is everything this branch adds over its base, which is what a PR would
- * contain. The only thing this panel changes is which branch you are on, via the
- * header; staging and committing still stay with Claude.
- */
-/**
+ * contain. Staging lives here because picking files is part of reading them; the
+ * branch, the remote and the commit box are in the sidebar, with the other controls.
+ *
  * Memoised: the roster emits an event per timeline item, so the page re-renders
  * many times a second during a turn. None of that changes the git view, and
  * re-rendering a large diff that often is wasted work.
  */
 export const GitPanel = memo(function GitPanel({
-  cwd,
+  repo,
   settings,
   onSettings,
   agentKey,
 }: {
-  cwd: string;
+  repo: GitRepo;
   settings: Settings | null;
   onSettings: (s: Settings) => void;
   /** The session driving this directory, when the dashboard owns one. */
   agentKey?: string | null;
 }) {
-  const [status, setStatus] = useState<RepoStatus | null>(null);
+  const { cwd, status, busy, stage, unstage, discard } = repo;
   const [scope, setScope] = useState<DiffScope>("worktree");
   const [file, setFile] = useState<string | null>(null);
   const [patch, setPatch] = useState<string | null>(null);
@@ -129,69 +94,52 @@ export const GitPanel = memo(function GitPanel({
   const [showResolved, setShowResolved] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
   const [showOther, setShowOther] = useState(false);
-  const [pulling, setPulling] = useState(false);
-  /** Outcome of the last pull — a fast-forward count, or why it was refused. */
-  const [pulled, setPulled] = useState<{ ok: boolean; text: string; hint: string | null } | null>(null);
+  /**
+   * Bumped after the editor writes a file. Nothing else on the page can tell that a
+   * file's contents changed — HEAD is where it was and the counts may be identical,
+   * since a file that was already modified is still modified — so the diffs are told
+   * to re-read explicitly.
+   */
+  const [edits, setEdits] = useState(0);
+  /** Open the picker / edit a file the diff never mentioned. */
+  const [picking, setPicking] = useState(false);
+  const [editPath, setEditPath] = useState<string | null>(null);
 
   const mode = settings?.ui.diffMode ?? "unified";
   const ignoreWs = settings?.ui.diffIgnoreWhitespace ?? false;
 
-  const refresh = useCallback(() => {
-    gitApi.status(cwd, true).then(setStatus).catch(() => setStatus(null));
-  }, [cwd]);
-
   /**
-   * A branch switch invalidates nearly everything on screen: the selected file may
-   * not exist on the new branch, the base comparison is different, and the history
-   * is a different range. Clearing them is cheaper and less confusing than trying to
-   * work out which survived.
+   * HEAD moved — a switch, a pull, a commit — so nearly everything on screen belongs
+   * to a commit that is no longer current: the selected file may not exist there, the
+   * base comparison is different and the history is a different range. Clearing it is
+   * cheaper and less confusing than working out which parts survived.
    */
-  const onSwitched = useCallback((next: RepoStatus) => {
-    invalidateStatusCache();
-    setStatus(next);
+  useEffect(() => {
     setFile(null);
     setPatch(null);
     setBranchList(null);
     setCommits(null);
     setOpenSha(null);
     setSent(null);
-  }, []);
-
-  useEffect(() => {
-    gitApi.status(cwd).then(setStatus).catch(() => setStatus(null));
-  }, [cwd]);
+    setEditPath(null);
+  }, [repo.moved, cwd]);
 
   /**
-   * Fast-forward this branch onto its upstream. Lives here rather than in the branch
-   * dropdown because it acts on the branch you are already on — the dropdown is for
-   * changing which branch that is.
+   * Where a file opens in VS Code. `vscode://` is handled by the OS, so the browser
+   * hands it straight to the editor — no CLI on the daemon's PATH, and nothing for
+   * the dashboard to shell out for. Paths in the patch are relative to the repo root.
    */
-  const pull = useCallback(async () => {
-    setPulling(true);
-    setPulled(null);
-    const r = await gitApi.pull(cwd).catch((e: Error) => ({
-      ok: false,
-      status: null,
-      error: e.message,
-      hint: null,
-      note: null,
-    }));
-    setPulling(false);
-    setPulled({
-      ok: r.ok,
-      text: (r.ok ? r.note : r.error) ?? (r.ok ? "Pulled." : "Pull failed."),
-      hint: r.hint ?? null,
-    });
-    // New commits mean a different diff, a different history and a moved HEAD.
-    if (r.ok && r.status) onSwitched(r.status);
-    else if (r.status) setStatus(r.status);
-  }, [cwd, onSwitched]);
+  const root = status?.root ?? null;
+  const editorHref = useCallback(
+    (path: string) => (root ? `vscode://file${root}/${path}` : null),
+    [root],
+  );
 
   // The file list for branch scope is a different query from the worktree status.
   useEffect(() => {
     if (scope !== "branch" || !status?.isRepo) return;
     gitApi.branchFiles(cwd).then((r) => setBranchList(r.files)).catch(() => setBranchList([]));
-  }, [scope, cwd, status?.isRepo, status?.head]);
+  }, [scope, cwd, status?.isRepo, status?.head, edits]);
 
   useEffect(() => {
     if (tab !== "history" || !status?.isRepo) return;
@@ -207,7 +155,7 @@ export const GitPanel = memo(function GitPanel({
       .then((r) => setPatch(r.patch))
       .catch(() => setPatch(""))
       .finally(() => setLoading(false));
-  }, [cwd, scope, file, ignoreWs, status?.isRepo, status?.head, status?.counts.unstaged]);
+  }, [cwd, scope, file, ignoreWs, status?.isRepo, status?.head, status?.counts.unstaged, edits]);
 
   useEffect(() => {
     if (!openSha) return;
@@ -220,18 +168,18 @@ export const GitPanel = memo(function GitPanel({
 
   // Comments are keyed by repo root, so they follow the repo rather than the cwd
   // a session happens to be started in.
-  const repo = status?.root ?? null;
+  const repoRoot = status?.root ?? null;
   const reload = useCallback(() => {
-    if (!repo) return;
-    commentApi.list(repo).then((r) => setComments(r.comments)).catch(() => {});
-  }, [repo]);
+    if (!repoRoot) return;
+    commentApi.list(repoRoot).then((r) => setComments(r.comments)).catch(() => {});
+  }, [repoRoot]);
 
   useEffect(reload, [reload]);
 
   const handlers: CommentHandlers = {
     add: async (input) => {
-      if (!repo) return;
-      await commentApi.add({ ...input, repo, branch: status?.branch ?? null }).catch(() => {});
+      if (!repoRoot) return;
+      await commentApi.add({ ...input, repo: repoRoot, branch: status?.branch ?? null }).catch(() => {});
       reload();
     },
     update: async (id, patch) => {
@@ -265,9 +213,9 @@ export const GitPanel = memo(function GitPanel({
    * seen by the composer when the message actually goes.
    */
   const draftForClaude = async () => {
-    if (!repo) return;
+    if (!repoRoot) return;
     setSent(null);
-    const { text, ids } = await commentApi.prompt(repo, status?.branch ?? null);
+    const { text, ids } = await commentApi.prompt(repoRoot, status?.branch ?? null);
     if (!text) {
       setSent("Nothing to send — every open comment belongs to another branch.");
       return;
@@ -313,6 +261,58 @@ export const GitPanel = memo(function GitPanel({
   const files: ChangedFile[] = scope === "branch" ? (branchList ?? []) : status.files;
 
   /**
+   * Staging only exists for the working tree — a branch-scope list is history, and
+   * has nothing to add or remove. A partially staged file is deliberately in both
+   * groups: part of it is going into the next commit and part of it isn't, and one
+   * row in one group can't say that.
+   */
+  const staging = scope === "worktree";
+  const stagedFiles = staging ? files.filter((f) => f.staged) : [];
+  const pendingFiles = staging ? files.filter((f) => f.unstaged || f.untracked) : [];
+
+  /**
+   * Both paths of a rename move together. Staging only the new one would leave the
+   * deletion of the old one behind, which commits the file twice over.
+   */
+  const pathsOf = (f: ChangedFile) => (f.from ? [f.path, f.from] : [f.path]);
+
+  /**
+   * A row in the list picks a file and stages it. Opening it in an editor and
+   * discarding it are attached to the file's header in the diff instead — those act
+   * on the contents, which is what you are looking at over there.
+   */
+  const fileRow = (f: ChangedFile, group: "staged" | "pending" | null) => (
+    <div className="git-file-row" key={`${group ?? "all"}:${f.path}`}>
+      <button
+        className={`git-file ${file === f.path ? "active" : ""}`}
+        onClick={() => setFile(f.path)}
+        title={f.from ? `${f.from} → ${f.path}` : f.path}
+      >
+        <span className={`git-status s-${f.untracked ? "new" : f.status.toLowerCase()}`}>
+          {f.untracked ? "?" : f.status}
+        </span>
+        <span className="git-file-name">{f.path}</span>
+        <span className="git-file-stat">
+          {f.insertions > 0 && <span className="tok-add">+{f.insertions}</span>}
+          {f.deletions > 0 && <span className="tok-del">−{f.deletions}</span>}
+        </span>
+      </button>
+      {group && (
+        <button
+          className="git-act"
+          disabled={!!busy}
+          title={group === "staged" ? `Unstage ${f.path}` : `Stage ${f.path}`}
+          onClick={() =>
+            group === "staged" ? unstage({ paths: pathsOf(f) }) : stage({ paths: pathsOf(f) })
+          }
+        >
+          {group === "staged" ? "−" : "+"}
+        </button>
+      )}
+    </div>
+  );
+
+  /**
    * A comment belongs to a repo, but the diff on screen is one scope and possibly
    * one file. Counting all of them made the bar claim comments on a clean working
    * tree, so the two are reported separately: what you can see here, and what
@@ -330,61 +330,39 @@ export const GitPanel = memo(function GitPanel({
 
   return (
     <div className="panel git-panel">
+      {picking && (
+        <FilePicker
+          cwd={cwd}
+          onClose={() => setPicking(false)}
+          onPick={(p) => {
+            setPicking(false);
+            setEditPath(p);
+          }}
+        />
+      )}
+
       <div className="panel-head">
-        <h2>
-          <BranchSwitcher
-            cwd={cwd}
-            status={status}
-            onSwitched={onSwitched}
-            sessionHere={!!agentKey}
-          />
+        {/* Read-only here: the branch is switched from the controls in the sidebar,
+            so this line says where you are without being a second way to move. */}
+        <h2 className="git-branch">
+          <GitIcon />
+          {status.detached ? `detached ${status.head?.slice(0, 7)}` : status.branch}
         </h2>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <div className="seg">
-            <button className={tab === "changes" ? "active" : ""} onClick={() => setTab("changes")}>
-              Changes
-            </button>
-            <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>
-              History
-            </button>
-          </div>
-          {/* Offered whenever the branch tracks something, not only when `behind` is
-              above zero: that count is read from local refs, so it stays at zero
-              until someone fetches — which is the first thing a pull does. */}
-          {!status.detached && status.branch && status.upstream && (
-            <button
-              className="icon-btn primary"
-              onClick={pull}
-              disabled={pulling}
-              title={`Fast-forward ${status.branch} onto ${status.upstream}. Refuses if the histories have diverged — it never merges or rebases.`}
-            >
-              {pulling ? "Pulling…" : status.behind > 0 ? `Pull ↓${status.behind}` : "Pull"}
-            </button>
-          )}
-          <button className="icon-btn" onClick={refresh} title="Re-read the repository">
-            Refresh
+        <div className="seg">
+          <button className={tab === "changes" ? "active" : ""} onClick={() => setTab("changes")}>
+            Changes
+          </button>
+          <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>
+            History
           </button>
         </div>
       </div>
 
       <p className="hint git-meta">
         {status.name}
-        {status.upstream ? ` · tracking ${status.upstream}` : " · no upstream"}
-        {status.ahead > 0 && ` · ${status.ahead} ahead`}
-        {status.behind > 0 && ` · ${status.behind} behind`}
         {status.base && !status.onBase && ` · ${status.aheadOfBase} commit${status.aheadOfBase === 1 ? "" : "s"} over ${status.base}`}
         {status.onBase && status.base && ` · on the base branch (${status.base})`}
       </p>
-
-      {pulled && (
-        <div className={`git-msg ${pulled.ok ? "" : "bad"}`}>
-          <pre>{pulled.text}</pre>
-          {pulled.hint && <p>{pulled.hint}</p>}
-          <button className="link-btn inline" onClick={() => setPulled(null)}>
-            dismiss
-          </button>
-        </div>
-      )}
 
       {tab === "changes" ? (
         <>
@@ -400,6 +378,15 @@ export const GitPanel = memo(function GitPanel({
               </button>
             </div>
             <span style={{ flex: 1 }} />
+            {/* The diff can only offer files something has already changed. This is
+                the way to the rest of the repository. */}
+            <button
+              className="icon-btn"
+              onClick={() => setPicking(true)}
+              title="Open any file in this repository for editing"
+            >
+              <PencilIcon /> Open a file
+            </button>
             <div className="seg">
               <button className={mode === "unified" ? "active" : ""} onClick={() => saveUi({ diffMode: "unified" })}>
                 Unified
@@ -425,29 +412,37 @@ export const GitPanel = memo(function GitPanel({
           )}
 
           <div className="git-split">
-            <div className="git-files">
-              <button className={`git-file ${file === null ? "active" : ""}`} onClick={() => setFile(null)}>
-                <span className="git-file-name">All files</span>
-                <span className="git-file-stat">{files.length}</span>
-              </button>
-              {files.map((f) => (
-                <button
-                  key={f.path}
-                  className={`git-file ${file === f.path ? "active" : ""}`}
-                  onClick={() => setFile(f.path)}
-                  title={f.from ? `${f.from} → ${f.path}` : f.path}
-                >
-                  <span className={`git-status s-${f.untracked ? "new" : f.status.toLowerCase()}`}>
-                    {f.untracked ? "?" : f.status}
-                  </span>
-                  <span className="git-file-name">{f.path}</span>
-                  <span className="git-file-stat">
-                    {f.insertions > 0 && <span className="tok-add">+{f.insertions}</span>}
-                    {f.deletions > 0 && <span className="tok-del">−{f.deletions}</span>}
-                  </span>
+            <div className="git-side">
+              <div className="git-files">
+                <button className={`git-file ${file === null ? "active" : ""}`} onClick={() => setFile(null)}>
+                  <span className="git-file-name">All files</span>
+                  <span className="git-file-stat">{files.length}</span>
                 </button>
-              ))}
-              {files.length === 0 && <div className="hint" style={{ padding: "8px 4px" }}>Nothing changed.</div>}
+
+                {!staging && files.map((f) => fileRow(f, null))}
+
+                {staging && stagedFiles.length > 0 && (
+                  <div className="git-group">
+                    <span>Staged ({stagedFiles.length})</span>
+                    <button className="link-btn inline" disabled={!!busy} onClick={() => unstage({ all: true })}>
+                      unstage all
+                    </button>
+                  </div>
+                )}
+                {staging && stagedFiles.map((f) => fileRow(f, "staged"))}
+
+                {staging && pendingFiles.length > 0 && (
+                  <div className="git-group">
+                    <span>Not staged ({pendingFiles.length})</span>
+                    <button className="link-btn inline" disabled={!!busy} onClick={() => stage({ all: true })}>
+                      stage all
+                    </button>
+                  </div>
+                )}
+                {staging && pendingFiles.map((f) => fileRow(f, "pending"))}
+
+                {files.length === 0 && <div className="hint" style={{ padding: "8px 4px" }}>Nothing changed.</div>}
+              </div>
             </div>
 
             <div className="git-diff">
@@ -508,7 +503,7 @@ export const GitPanel = memo(function GitPanel({
                     <button
                       className="icon-btn"
                       onClick={() =>
-                        repo && commentApi.clearResolved(repo).then(reload).catch(() => {})
+                        repoRoot && commentApi.clearResolved(repoRoot).then(reload).catch(() => {})
                       }
                     >
                       Clear resolved
@@ -564,13 +559,47 @@ export const GitPanel = memo(function GitPanel({
                 </div>
               )}
 
-              {loading && patch === null ? (
+              {/* A file opened from the picker takes over this pane: it has no patch
+                  to sit under, and the diff is still there when you close it. */}
+              {editPath ? (
+                <div className="diff-file">
+                  <FileEditor
+                    key={editPath}
+                    cwd={cwd}
+                    path={editPath}
+                    lang={langOf(editPath)}
+                    onClose={() => setEditPath(null)}
+                    onSaved={() => {
+                      setEdits((n) => n + 1);
+                      repo.refresh();
+                    }}
+                  />
+                </div>
+              ) : loading && patch === null ? (
                 <div className="empty">Reading diff…</div>
               ) : (
                 <DiffView
                   patch={patch ?? ""}
                   mode={mode}
-                  review={repo ? { comments, handlers, showResolved } : undefined}
+                  fileHref={editorHref}
+                  // Only the working tree has anything to discard; a branch-scope
+                  // patch is commits, which this panel does not rewrite.
+                  onDiscard={
+                    scope === "worktree"
+                      ? (path, from) => void discard(from ? [path, from] : [path])
+                      : undefined
+                  }
+                  /* Both scopes edit the same thing — the file on disk — so a fix
+                     made while reading the branch diff lands as an uncommitted
+                     change, and both lists show it on the next read. */
+                  edit={{
+                    cwd,
+                    onSaved: () => {
+                      setEdits((n) => n + 1);
+                      repo.refresh();
+                    },
+                  }}
+                  review={repoRoot ? { comments, handlers, showResolved } : undefined}
                   emptyLabel={
                     scope === "worktree" ? "Working tree is clean." : "This branch adds no changes."
                   }
@@ -610,7 +639,7 @@ export const GitPanel = memo(function GitPanel({
                     {commitPatch === null ? (
                       <div className="empty">Reading commit…</div>
                     ) : (
-                      <DiffView patch={commitPatch} mode={mode} emptyLabel="Empty commit." />
+                      <DiffView patch={commitPatch} mode={mode} fileHref={editorHref} emptyLabel="Empty commit." />
                     )}
                   </div>
                 )}

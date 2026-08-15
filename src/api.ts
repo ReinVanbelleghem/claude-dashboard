@@ -438,6 +438,74 @@ export const gitApi = {
    * merging or rebasing — see the note on `pull` in server/git.ts.
    */
   pull: (cwd: string) => postResult<GitWriteResult>("/api/git/pull", { cwd }),
+  /** Add paths to the index, or everything with `{ all: true }`. */
+  stage: (cwd: string, opts: { paths?: string[]; all?: boolean }) =>
+    postResult<GitWriteResult>("/api/git/stage", { cwd, ...opts }),
+  /** Take paths back out of the index; the working tree is left untouched. */
+  unstage: (cwd: string, opts: { paths?: string[]; all?: boolean }) =>
+    postResult<GitWriteResult>("/api/git/unstage", { cwd, ...opts }),
+  /**
+   * Commit what is staged. Named apart from `commit` above, which reads one back.
+   * Only staged changes are included — never everything in the tree.
+   */
+  createCommit: (cwd: string, message: string, opts: { noVerify?: boolean } = {}) =>
+    postResult<GitWriteResult>("/api/git/commit", { cwd, message, ...opts }),
+  /** Publish this branch, setting an upstream if it doesn't have one. Never forced. */
+  push: (cwd: string) => postResult<GitWriteResult>("/api/git/push", { cwd }),
+  /**
+   * Throw away the uncommitted changes in these files — tracked ones go back to
+   * HEAD, untracked ones are deleted. Named paths only: there is no "discard
+   * everything", and unstaged work exists in no git object, so this cannot be undone.
+   */
+  discard: (cwd: string, paths: string[]) =>
+    postResult<GitWriteResult>("/api/git/discard", { cwd, paths }),
+};
+
+export type FileRead = {
+  ok: boolean;
+  path: string;
+  content: string;
+  /** Hash of what was read. Hand it back on save so a concurrent write is caught. */
+  hash: string;
+  error: string | null;
+};
+
+export type FileWrite = {
+  ok: boolean;
+  hash: string | null;
+  error: string | null;
+  hint: string | null;
+};
+
+export type BrowseEntry = { name: string; path: string; dir: boolean };
+
+export type Browse = {
+  ok: boolean;
+  root: string | null;
+  /** Repo-relative folder being listed; "" is the repo root. */
+  path: string;
+  parent: string | null;
+  entries: BrowseEntry[];
+  /** A search matched more than the daemon is willing to send. */
+  truncated: boolean;
+  error: string | null;
+};
+
+/**
+ * One file inside a session's repository. Paths are repo-relative and the daemon
+ * pins them to the repo root, so this can only ever reach a file the diff could
+ * already show you.
+ */
+export const fileApi = {
+  read: (cwd: string, path: string) => get<FileRead>(`/api/file?${q({ cwd, path })}`),
+  /**
+   * List a folder in the repo, or search the whole repo with `q`. Searching goes
+   * through git, so it sees tracked and untracked files but nothing gitignored.
+   */
+  browse: (cwd: string, opts: { path?: string; q?: string } = {}) =>
+    get<Browse>(`/api/files/browse?${q({ cwd, path: opts.path, q: opts.q })}`),
+  save: (cwd: string, path: string, content: string, baseHash: string) =>
+    postResult<FileWrite>("/api/file", { cwd, path, content, baseHash }),
 };
 
 /** Models the CLI offers, cached by the daemon from the last session that ran. */

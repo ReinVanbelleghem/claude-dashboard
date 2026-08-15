@@ -136,10 +136,53 @@ metadata sidebar.
 
 ### Git and review
 
-Git for the session's repository. Reading is unrestricted; the only things it writes
-are the branch you are on and the remote refs — staging and committing still stay with
-Claude.
+Git for the session's repository. Reading is unrestricted. Writing is deliberately
+narrow: switch branch, stage, commit, push, pull, fetch, edit or discard a named file.
+Anything that can lose work wholesale or leave a conflicted tree — merge, rebase,
+reset, force-push — stays in a terminal.
 
+The two halves are split by what they are for. **Git** in the sidebar is what you act
+on — branch, pull, push, commit — and stays put while the page grows. The panel below
+the conversation is what you read: the file lists and the diffs. Both are the same
+repository state, so a commit made in one empties the file list in the other.
+
+- **Stage and unstage** per file, or all at once, from the **Uncommitted** file list.
+  Staged and not-staged are separate groups, and a partially staged file appears in
+  both, because part of it is going into the next commit and part of it isn't. Both
+  halves of a rename move together
+- **Edit a file in place** from the pencil on its header, in both the **Uncommitted**
+  and **Whole branch** views. It edits the file on disk rather than the patch, which is
+  why a fix made while reading the branch diff turns up as an uncommitted change: there
+  is one file, and both views are reading it. Saving carries the hash of what was
+  loaded, so an edit that a session overwrote in the meantime is refused instead of
+  clobbering it. `⌘S` saves, `Esc` closes, `Tab` indents
+- **Open a file** from the button above the diff, for a file nothing has changed yet —
+  the diff only knows about files that are already in it. The picker browses the
+  repository or searches it by name; searching goes through git, so it finds tracked
+  and untracked files and skips everything `.gitignore` excludes, which is most of a
+  working checkout. It is scoped to the repo, like every other file operation here
+- Syntax highlighting, line numbers, and a gutter mark beside the lines the diff shows
+  as changed. It is a real textarea with the colour painted on a layer underneath, so
+  every editing behaviour the OS gives you still works. The change marks are dropped
+  while an edit changes the line count — the diff's numbers no longer point at the same
+  code — and come back when you save and the diff is re-read
+- **Open in VS Code** from any file header in a diff, in every scope — uncommitted,
+  whole branch, and a commit in the History tab. It is a `vscode://` link, so the OS
+  hands it to the editor; nothing is shelled out on the daemon's side
+- **Discard** a file's uncommitted changes from its header in the **Uncommitted** diff.
+  It asks first, because an unstaged edit exists in no git object and nothing brings it
+  back: a tracked file goes back to HEAD (index and worktree together), an untracked
+  one is deleted from disk and the button says so. Named files only — there is no
+  discard-everything, and the daemon refuses any path the status didn't list, which is
+  what rules out a directory taking its contents with it
+- **Commit** the staged files with the message box in the sidebar (`⌘↵`). It is only
+  ever the staged files — never `-a`, since the staging area is the review step. Hooks
+  run, under a timeout so one waiting for input can't wedge the repo. Unresolved
+  conflicts are refused before git can write the markers into history
+- **Push** publishes the branch's commits, and sets an upstream on the first push of a
+  new branch. Never forced, and never with a refspec the browser chose — the
+  destination comes from the branch's own config. A branch known to be behind is
+  refused with "pull first" rather than being rejected by the remote
 - **Pull** in the header fast-forwards the current branch onto its upstream. It is a
   fetch plus `merge --ff-only`, never `git pull`, so no repo config can turn the click
   into a rebase or a merge commit: if the histories have diverged it refuses and says

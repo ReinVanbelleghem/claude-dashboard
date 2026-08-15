@@ -9,7 +9,9 @@ import {
 } from "../api.ts";
 import { HBars } from "./Charts.tsx";
 import { LiveConversation } from "./Conversation.tsx";
+import { GitControls } from "./GitControls.tsx";
 import { GitBadge, GitPanel } from "./GitPanel.tsx";
+import { useGitRepo } from "./useGitRepo.ts";
 import { ExternalNotice, turnsOf } from "./SessionDrawer.tsx";
 import { Transcript } from "./Transcript.tsx";
 
@@ -75,6 +77,13 @@ export function SessionPage({
   const priorTurns = agent
     ? turnsOf(data).filter((t) => (t.ts ?? 0) < agent.createdAt)
     : turnsOf(data);
+
+  /**
+   * One repository, two panels: the controls sit in the sidebar and the diff at the
+   * bottom of the page, so the state they share is owned here. A commit made in one
+   * has to empty the file list in the other.
+   */
+  const repo = useGitRepo(cwd ?? "");
 
   return (
     <div className="page">
@@ -171,7 +180,7 @@ export function SessionPage({
           {cwd && (
             <GitPanel
               key={cwd}
-              cwd={cwd}
+              repo={repo}
               settings={settings}
               onSettings={onSettings}
               agentKey={agent?.key}
@@ -180,28 +189,34 @@ export function SessionPage({
         </div>
 
         <div className="page-side">
+          {/* First in the sidebar: it is the part you act on, and it should not move
+              down the page as the session accumulates statistics. */}
+          {cwd && <GitControls repo={repo} agentKey={agent?.key} />}
+
+          {data && s && (
+            <div className="panel">
+              <h2>Session</h2>
+              <table>
+                <tbody>
+                  <tr>
+                    <td style={{ color: "var(--text-muted)" }}>Started</td>
+                    <td>{s.first_ts ? new Date(s.first_ts).toLocaleString() : "—"}</td>
+                  </tr>
+                  <tr>
+                    <td style={{ color: "var(--text-muted)" }}>Last active</td>
+                    <td>{s.last_ts ? new Date(s.last_ts).toLocaleString() : "—"}</td>
+                  </tr>
+                  <tr>
+                    <td style={{ color: "var(--text-muted)" }}>Id</td>
+                    <td style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{s.id}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {data && s && (
             <>
-              <div className="panel">
-                <h2>Session</h2>
-                <table>
-                  <tbody>
-                    <tr>
-                      <td style={{ color: "var(--text-muted)" }}>Started</td>
-                      <td>{s.first_ts ? new Date(s.first_ts).toLocaleString() : "—"}</td>
-                    </tr>
-                    <tr>
-                      <td style={{ color: "var(--text-muted)" }}>Last active</td>
-                      <td>{s.last_ts ? new Date(s.last_ts).toLocaleString() : "—"}</td>
-                    </tr>
-                    <tr>
-                      <td style={{ color: "var(--text-muted)" }}>Id</td>
-                      <td style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{s.id}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
               {data.prLinks.length > 0 && (
                 <div className="panel">
                   <h2>Pull requests</h2>
