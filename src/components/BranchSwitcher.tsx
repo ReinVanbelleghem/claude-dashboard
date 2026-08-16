@@ -167,7 +167,7 @@ export function BranchSwitcher({
       <button
         className={`branch-trigger ${open ? "open" : ""}`}
         onClick={() => setOpen(!open)}
-        title="Switch branch"
+        title={label ? `${label} — switch branch` : "Switch branch"}
       >
         <GitIcon />
         <span className="branch-trigger-name">{label}</span>

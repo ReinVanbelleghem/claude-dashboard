@@ -1142,11 +1142,20 @@ a { color: var(--accent); }
   color: var(--text-primary);
   font: 600 13px/1.4 var(--mono);
   cursor: pointer;
+  min-width: 0;
+  max-width: 100%;
+  text-align: left;
 }
 .branch-trigger:hover, .branch-trigger.open { border-color: var(--border-strong); background: var(--surface-2); }
-.branch-trigger .icon { width: 13px; height: 13px; color: var(--accent); }
-.branch-trigger-name { overflow-wrap: anywhere; }
-.branch-caret { color: var(--text-muted); font-size: 10px; }
+.branch-trigger .icon { width: 13px; height: 13px; color: var(--accent); flex: 0 0 auto; }
+.branch-trigger-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.branch-caret { color: var(--text-muted); font-size: 10px; flex: 0 0 auto; margin-left: auto; }
 
 .branch-pop {
   position: absolute;
