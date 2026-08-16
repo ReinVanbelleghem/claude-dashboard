@@ -205,16 +205,24 @@ repository state, so a commit made in one empties the file list in the other.
   the session's composer — grouped by file with each commented line quoted — where you
   can edit it before sending. Nothing is sent on your behalf, and comments are marked
   as seen only when the message actually goes
-- Comments are keyed by repository, so they survive branch switches. Only those
-  belonging to the branch you are on go into the prompt: one written against another
-  branch's code points at lines that aren't in the tree, so it is held back and listed
-  under **review those** instead, which is also the only place it can be deleted from.
-  A comment whose line has since changed is flagged as adrift rather than silently
-  re-pointed
+- Comments are keyed by repository, so they survive branch switches, but they are
+  **read back scoped to the repository _and_ the branch you are on**: one written
+  against another branch's code points at lines that aren't in this tree, so showing it
+  in this diff would pin it to whatever now sits on that line number. Off-branch
+  comments are counted as *N hidden* and listed under **review those**, which is also
+  the only place they can be deleted from. Comments written with no branch recorded
+  show on every branch, so nothing written before branch tracking becomes unreachable.
+  The prompt and **Clear resolved** use the same scope as the list, so neither can act
+  on a comment you were not shown. A comment whose line has since changed is flagged as
+  adrift rather than silently re-pointed
 
 ### History and Usage
 
-Full-text search over every prompt you have typed, across every project. Usage shows
+Full-text search over every prompt you have typed, across every project, **paginated**
+— 20 rows a page by default, with 10/50/100 as alternatives, remembered per browser.
+The pager reports where you are in the whole result set (`21–40 of 1,179`) rather than
+just the page, because a range alone cannot tell you whether there are thirty sessions
+behind it or three thousand. Usage shows
 **fresh tokens** — uncached input + cache writes + output — against local budgets.
 Cache reads are reported separately: they are typically ~97% of raw token volume at a
 tenth of the input rate, so including them makes every gauge read as maxed out. Costs

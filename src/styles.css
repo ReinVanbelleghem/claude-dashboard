@@ -375,6 +375,40 @@ tr.click:hover td { background: var(--surface-2); }
 }
 .search:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
 
+/* Paging controls under a table. Counts are tabular so the numbers do not shuffle
+   sideways as you page through them. */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.pager-range { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.pager-size { display: inline-flex; align-items: center; gap: 6px; }
+.pager-size select {
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font: inherit;
+}
+.pager-nav { display: inline-flex; align-items: center; gap: 6px; }
+.pager-nav .icon-btn { padding: 4px 9px; font-size: 12px; }
+.pager-nav .icon-btn:disabled { opacity: 0.35; cursor: default; }
+.pager-page {
+  min-width: 62px;
+  text-align: center;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
 /* Horizontal magnitude bars — one hue, length carries the value. */
 .hbars { display: flex; flex-direction: column; gap: 9px; }
 .hbar { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; }

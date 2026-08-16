@@ -85,14 +85,52 @@ function mutate<T>(fn: (rows: ReviewComment[]) => { rows: ReviewComment[]; resul
 
 load();
 
-export function listComments(repo?: string): ReviewComment[] {
+/**
+ * Does this comment belong to the branch being looked at?
+ *
+ * A comment with no branch recorded counts as being on whichever branch you are
+ * on. Those predate branch tracking or were written off a branch entirely, and
+ * there is nothing to say they belong elsewhere — hiding them would make a review
+ * nobody can get back invisible from every branch at once.
+ */
+function onBranch(c: ReviewComment, branch: string | null): boolean {
+  return !c.branch || c.branch === branch;
+}
+
+/**
+ * The comments for a repo, optionally narrowed to one branch.
+ *
+ * Storage is keyed by repo so a comment survives a branch switch, which is right
+ * for keeping them and wrong for showing them: a comment written against another
+ * branch's code points at lines that are not in this tree, so rendering it in this
+ * branch's diff attaches it to whatever now happens to sit on that line number.
+ * Reading is therefore scoped to (repo, branch) and the store is not.
+ *
+ * `branch` distinguishes three cases deliberately: omitted means the whole repo,
+ * a name means that branch, and `null` means a detached HEAD — where the only
+ * comments that can apply are the ones written with no branch of their own.
+ */
+export function listComments(repo?: string, branch?: string | null): ReviewComment[] {
   // Re-read so a second dashboard tab, or an edit made by hand, is picked up.
   load();
-  const rows = repo ? all.filter((c) => c.repo === repo) : all;
+  let rows = repo ? all.filter((c) => c.repo === repo) : all;
+  if (branch !== undefined) rows = rows.filter((c) => onBranch(c, branch));
   // Oldest first within a file, so a thread reads top to bottom.
   return [...rows].sort(
     (a, b) => a.path.localeCompare(b.path) || (a.line ?? 0) - (b.line ?? 0) || a.createdAt - b.createdAt,
   );
+}
+
+/**
+ * How many open comments in this repo belong to a branch other than this one.
+ *
+ * A count rather than the comments themselves: they are deliberately not rendered
+ * here, but a review you cannot see and cannot count is one you forget you wrote.
+ * This is what lets the UI offer a way back to them without putting them on screen.
+ */
+export function countOffBranch(repo: string, branch: string | null): number {
+  load();
+  return all.filter((c) => c.repo === repo && c.status === "open" && !onBranch(c, branch)).length;
 }
 
 export function addComment(input: {
@@ -149,11 +187,24 @@ export function deleteComment(id: string): boolean {
   );
 }
 
-/** Clear the resolved ones for a repo; open comments are never bulk-deleted. */
-export function clearResolved(repo: string): number {
+/**
+ * Clear the resolved ones; open comments are never bulk-deleted.
+ *
+ * Scoped to a branch when one is given, because the button that calls this sits
+ * next to a count of what is on screen. Clearing more than you were shown is a
+ * delete you did not agree to.
+ */
+export function clearResolved(repo: string, branch?: string | null): number {
   return (
     mutate((rows) => {
-      const kept = rows.filter((c) => !(c.repo === repo && c.status === "resolved"));
+      const kept = rows.filter(
+        (c) =>
+          !(
+            c.repo === repo &&
+            c.status === "resolved" &&
+            (branch === undefined || onBranch(c, branch))
+          ),
+      );
       return { rows: kept, result: rows.length - kept.length };
     }) ?? 0
   );
@@ -181,20 +232,13 @@ export function buildPrompt(
   opts: { ids?: string[]; branch?: string | null } = {},
 ): { text: string; ids: string[] } {
   /**
-   * Scoped to the branch when one is given. Comments are keyed by repo so they
-   * survive a branch switch, which is right for storage and wrong for a prompt: a
-   * comment written against another branch's code describes lines that aren't in the
-   * tree any more, so sending it asks the session to act on code it cannot see.
-   *
-   * Comments with no branch recorded are kept. They predate branch tracking or were
-   * written outside a branch, and there is no evidence they belong elsewhere —
-   * dropping them would silently discard a review nobody could get back.
+   * Scoped exactly like the list the user was looking at when they pressed the
+   * button. Sending a comment that is not on screen is the one thing this must not
+   * do: it asks the session to act on code that is not in the tree, and does it
+   * without the reviewer ever having seen the request.
    */
-  const rows = listComments(repo).filter(
-    (c) =>
-      c.status === "open" &&
-      (!opts.ids || opts.ids.includes(c.id)) &&
-      (!opts.branch || !c.branch || c.branch === opts.branch),
+  const rows = listComments(repo, opts.branch).filter(
+    (c) => c.status === "open" && (!opts.ids || opts.ids.includes(c.id)),
   );
   if (rows.length === 0) return { text: "", ids: [] };
 

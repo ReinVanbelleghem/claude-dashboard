@@ -276,9 +276,27 @@ export type ReviewComment = {
   sentAt: number | null;
 };
 
+/**
+ * How a branch is put on the wire.
+ *
+ * `undefined` sends nothing and means the whole repo; `null` sends an empty value
+ * and means a detached HEAD. The server tells them apart by whether the parameter
+ * arrived at all, so this must not collapse the two into an omitted key.
+ */
+function branchParam(branch: string | null | undefined): string {
+  if (branch === undefined) return "";
+  return `&branch=${encodeURIComponent(branch ?? "")}`;
+}
+
 export const commentApi = {
-  list: (repo: string) =>
-    get<{ comments: ReviewComment[] }>(`/api/comments?repo=${encodeURIComponent(repo)}`),
+  /**
+   * Comments for a repo, scoped to a branch unless `branch` is omitted. `offBranch`
+   * counts the open ones this scope deliberately left out.
+   */
+  list: (repo: string, branch?: string | null) =>
+    get<{ comments: ReviewComment[]; offBranch: number }>(
+      `/api/comments?repo=${encodeURIComponent(repo)}${branchParam(branch)}`,
+    ),
   add: (input: {
     repo: string;
     path?: string;
@@ -293,11 +311,11 @@ export const commentApi = {
   remove: (id: string) => fetch(`/api/comments/${id}`, { method: "DELETE" }),
   prompt: (repo: string, branch: string | null) =>
     get<{ text: string; ids: string[] }>(
-      `/api/comments/prompt?repo=${encodeURIComponent(repo)}` +
-        (branch ? `&branch=${encodeURIComponent(branch)}` : ""),
+      `/api/comments/prompt?repo=${encodeURIComponent(repo)}${branchParam(branch)}`,
     ),
   markSent: (ids: string[]) => post("/api/comments/sent", { ids }),
-  clearResolved: (repo: string) => post<{ removed: number }>("/api/comments/clear-resolved", { repo }),
+  clearResolved: (repo: string, branch: string | null) =>
+    post<{ removed: number }>("/api/comments/clear-resolved", { repo, branch }),
 };
 
 // ── git (read-only) ───────────────────────────────────────────────────────────
@@ -628,9 +646,10 @@ export const api = {
   live: () => get<LivePayload>("/api/live"),
   usage: () => get<UsagePayload>("/api/usage"),
   overview: () => get<Overview>("/api/overview"),
-  sessions: (q: string, limit = 200) =>
-    get<{ sessions: SessionRow[] }>(
-      `/api/sessions?limit=${limit}${q ? `&q=${encodeURIComponent(q)}` : ""}`,
+  /** One page of history. `total` is the size of the whole result set, for the pager. */
+  sessions: (q: string, limit = 200, offset = 0) =>
+    get<{ sessions: SessionRow[]; total: number }>(
+      `/api/sessions?limit=${limit}&offset=${offset}${q ? `&q=${encodeURIComponent(q)}` : ""}`,
     ),
   session: (id: string) => get<SessionDetail>(`/api/sessions/${encodeURIComponent(id)}`),
 };

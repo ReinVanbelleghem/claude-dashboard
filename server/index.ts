@@ -32,6 +32,7 @@ import {
   addComment,
   buildPrompt,
   clearResolved,
+  countOffBranch,
   deleteComment,
   listComments,
   markSent,
@@ -420,6 +421,14 @@ const SESSION_COLS = `id, project_slug, cwd, git_branch, title, first_ts, last_t
   msg_count, prompt_count, tool_count, input_tokens, output_tokens, cache_read,
   cache_write, model`;
 
+/**
+ * One page of sessions, newest first, with the size of the whole result set.
+ *
+ * The total is what makes paging navigable rather than a guess: without it the
+ * client cannot tell a last page from a page that happens to be short, so it can
+ * neither disable "next" nor say how much is behind it. It counts the same
+ * predicate the page does, so the two can never disagree.
+ */
 function listSessions(limit: number, offset: number, q: string | null) {
   if (q && q.trim()) {
     // FTS5 needs a sanitized query — bare punctuation is a syntax error, so we
@@ -435,20 +444,32 @@ function listSessions(limit: number, offset: number, q: string | null) {
       )
       .all(terms)
       .map((r) => r.session_id);
-    if (ids.length === 0) return [];
+    if (ids.length === 0) return { sessions: [], total: 0 };
     const holes = ids.map(() => "?").join(",");
-    return db
+    const sessions = db
       .query<SessionRow, string[]>(
         `SELECT ${SESSION_COLS} FROM sessions WHERE id IN (${holes})
          ORDER BY last_ts DESC LIMIT ${limit} OFFSET ${offset}`,
       )
       .all(...ids);
+    /**
+     * Counted from the matched rows rather than from `ids.length`: FTS can name a
+     * session the index has since dropped, and a total larger than the pages can
+     * ever reach leaves a last page that is permanently empty.
+     */
+    const total =
+      db
+        .query<{ n: number }, string[]>(`SELECT COUNT(*) AS n FROM sessions WHERE id IN (${holes})`)
+        .get(...ids)?.n ?? sessions.length;
+    return { sessions, total };
   }
-  return db
+  const sessions = db
     .query<SessionRow, [number, number]>(
       `SELECT ${SESSION_COLS} FROM sessions ORDER BY last_ts DESC LIMIT ? OFFSET ?`,
     )
     .all(limit, offset);
+  const total = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM sessions`).get()?.n ?? 0;
+  return { sessions, total };
 }
 
 function sessionDetail(id: string) {
@@ -668,7 +689,20 @@ const server = Bun.serve({
     if (p === "/api/comments") {
       if (req.method === "GET") {
         const repo = url.searchParams.get("repo") ?? undefined;
-        return json({ comments: listComments(repo) });
+        /**
+         * `branch` present scopes the read to that branch; absent returns the whole
+         * repo. Present-but-empty is a detached HEAD, which is why this asks whether
+         * the parameter was sent rather than reading its value — the two are the
+         * same string and mean different things.
+         */
+        const branch = url.searchParams.has("branch")
+          ? url.searchParams.get("branch") || null
+          : undefined;
+        const comments = listComments(repo, branch);
+        return json({
+          comments,
+          offBranch: repo && branch !== undefined ? countOffBranch(repo, branch) : 0,
+        });
       }
       if (req.method === "POST") {
         const b = (await req.json().catch(() => ({}))) as Parameters<typeof addComment>[0];
@@ -685,7 +719,10 @@ const server = Bun.serve({
     if (p === "/api/comments/prompt") {
       const repo = url.searchParams.get("repo");
       if (!repo) return json({ error: "repo is required" }, 400);
-      return json(buildPrompt(repo, { branch: url.searchParams.get("branch") }));
+      const branch = url.searchParams.has("branch")
+        ? url.searchParams.get("branch") || null
+        : undefined;
+      return json(buildPrompt(repo, { branch }));
     }
 
     if (p === "/api/comments/sent" && req.method === "POST") {
@@ -695,8 +732,11 @@ const server = Bun.serve({
     }
 
     if (p === "/api/comments/clear-resolved" && req.method === "POST") {
-      const b = (await req.json().catch(() => ({}))) as { repo?: string };
-      return json({ removed: b.repo ? clearResolved(b.repo) : 0 });
+      const b = (await req.json().catch(() => ({}))) as { repo?: string; branch?: string | null };
+      // Same three-way distinction as the read: a missing key clears the repo, a
+      // present one clears only that branch.
+      const branch = "branch" in b ? (b.branch ?? null) : undefined;
+      return json({ removed: b.repo ? clearResolved(b.repo, branch) : 0 });
     }
 
     if (p.startsWith("/api/comments/")) {
@@ -894,10 +934,13 @@ const server = Bun.serve({
     if (p === "/api/config") return json({ budgets: cfg.budgets, pricing: cfg.pricing });
 
     if (p === "/api/sessions") {
-      const limit = Math.min(500, Number(url.searchParams.get("limit") ?? 100));
-      const offset = Number(url.searchParams.get("offset") ?? 0);
+      // Clamped rather than trusted: these come off a URL, and a NaN or a negative
+      // offset is a SQL error rather than an empty page.
+      const limit = Math.min(500, Math.max(1, Math.floor(Number(url.searchParams.get("limit")) || 100)));
+      const offset = Math.max(0, Math.floor(Number(url.searchParams.get("offset")) || 0));
       const q = url.searchParams.get("q");
-      return json({ sessions: listSessions(limit, offset, q) });
+      const { sessions, total } = listSessions(limit, offset, q);
+      return json({ sessions, total, limit, offset });
     }
 
     if (p.startsWith("/api/sessions/")) {

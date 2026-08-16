@@ -90,10 +90,15 @@ export const GitPanel = memo(function GitPanel({
   const [openSha, setOpenSha] = useState<string | null>(null);
   const [commitPatch, setCommitPatch] = useState<string | null>(null);
   const [tab, setTab] = useState<"changes" | "history">("changes");
+  /** Only ever the comments for this repo *and* this branch — see `reload` below. */
   const [comments, setComments] = useState<ReviewComment[]>([]);
   const [showResolved, setShowResolved] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
   const [showOther, setShowOther] = useState(false);
+  /** How many open comments this branch's scope is holding back. */
+  const [offBranch, setOffBranch] = useState(0);
+  /** Those comments themselves, fetched only when you ask to see them. */
+  const [otherRows, setOtherRows] = useState<ReviewComment[] | null>(null);
   /**
    * Bumped after the editor writes a file. Nothing else on the page can tell that a
    * file's contents changed — HEAD is where it was and the counts may be identical,
@@ -166,45 +171,73 @@ export const GitPanel = memo(function GitPanel({
       .catch(() => setCommitPatch(""));
   }, [openSha, cwd, ignoreWs]);
 
-  // Comments are keyed by repo root, so they follow the repo rather than the cwd
-  // a session happens to be started in.
+  /**
+   * Comments are read for one repo and one branch.
+   *
+   * The repo root, not the cwd, so they follow the repository rather than the
+   * directory a session happened to start in — and the branch, because a comment
+   * written against another branch's code describes lines that are not in this
+   * tree. Rendering those inline would pin them to whatever now sits on that line
+   * number, which is worse than not showing them: it looks like a review of code
+   * nobody reviewed.
+   *
+   * A comment with no branch recorded comes back on every branch. Those predate
+   * branch tracking, and hiding them everywhere would lose them.
+   */
   const repoRoot = status?.root ?? null;
+  const branch = status?.branch ?? null;
   const reload = useCallback(() => {
     if (!repoRoot) return;
-    commentApi.list(repoRoot).then((r) => setComments(r.comments)).catch(() => {});
-  }, [repoRoot]);
+    commentApi
+      .list(repoRoot, branch)
+      .then((r) => {
+        setComments(r.comments);
+        setOffBranch(r.offBranch);
+      })
+      .catch(() => {});
+  }, [repoRoot, branch]);
 
   useEffect(reload, [reload]);
+
+  /**
+   * Switching branch changes which comments exist here, so anything held from the
+   * last one has to go — including the off-branch list, which was computed against
+   * a different "other".
+   */
+  useEffect(() => {
+    setShowOther(false);
+    setOtherRows(null);
+  }, [branch, repoRoot]);
+
+  /** Fetch the repo-wide list and keep what this branch's scope excluded. */
+  const loadOther = useCallback(async () => {
+    if (!repoRoot) return;
+    const r = await commentApi.list(repoRoot).catch(() => null);
+    if (!r) return;
+    setOtherRows(r.comments.filter((c) => c.status === "open" && c.branch && c.branch !== branch));
+  }, [repoRoot, branch]);
 
   const handlers: CommentHandlers = {
     add: async (input) => {
       if (!repoRoot) return;
-      await commentApi.add({ ...input, repo: repoRoot, branch: status?.branch ?? null }).catch(() => {});
+      await commentApi.add({ ...input, repo: repoRoot, branch }).catch(() => {});
       reload();
     },
     update: async (id, patch) => {
       await commentApi.update(id, patch).catch(() => {});
       reload();
+      // The off-branch list is a separate read, so it has to be told as well.
+      if (otherRows) void loadOther();
     },
     remove: async (id) => {
       await commentApi.remove(id).catch(() => {});
       reload();
+      if (otherRows) void loadOther();
     },
   };
 
   const openComments = comments.filter((c) => c.status === "open");
-
-  /**
-   * Comments belong to a repo, but a prompt only makes sense for the branch you are
-   * on: one written against another branch's code points at lines that aren't in the
-   * tree any more. Those are held back from the prompt and listed separately, because
-   * a comment you can neither send nor reach in a diff is one you can't get rid of.
-   *
-   * A comment with no branch recorded counts as this branch — there is nothing to say
-   * it belongs elsewhere.
-   */
-  const onThisBranch = openComments.filter((c) => !c.branch || c.branch === status?.branch);
-  const otherBranches = openComments.filter((c) => c.branch && c.branch !== status?.branch);
+  const resolvedCount = comments.length - openComments.length;
 
   /**
    * Compose the comments into a prompt and put it in the session's composer. It is
@@ -215,7 +248,7 @@ export const GitPanel = memo(function GitPanel({
   const draftForClaude = async () => {
     if (!repoRoot) return;
     setSent(null);
-    const { text, ids } = await commentApi.prompt(repoRoot, status?.branch ?? null);
+    const { text, ids } = await commentApi.prompt(repoRoot, branch);
     if (!text) {
       setSent("Nothing to send — every open comment belongs to another branch.");
       return;
@@ -234,10 +267,18 @@ export const GitPanel = memo(function GitPanel({
     );
   };
 
+  /** Show, or stop showing, the comments this branch's scope holds back. */
+  const toggleOther = () => {
+    const next = !showOther;
+    setShowOther(next);
+    if (next && otherRows === null) void loadOther();
+  };
+
   /** Drop every comment that belongs to a branch other than this one. */
   const clearOtherBranches = async () => {
-    await Promise.all(otherBranches.map((c) => commentApi.remove(c.id).catch(() => {})));
+    await Promise.all((otherRows ?? []).map((c) => commentApi.remove(c.id).catch(() => {})));
     setShowOther(false);
+    setOtherRows(null);
     reload();
   };
 
@@ -319,14 +360,14 @@ export const GitPanel = memo(function GitPanel({
    * exists elsewhere in this repo.
    */
   const shown = new Set(file ? [file] : files.map((f) => f.path));
-  const inView = onThisBranch.filter((c) => shown.has(c.path));
+  const inView = openComments.filter((c) => shown.has(c.path));
   /**
    * On this branch but not in the diff on screen — reachable by widening the scope or
    * clearing the file filter. Off-branch comments are deliberately not counted here:
    * no scope change brings them into view, so offering "show whole branch" for them
    * sends you looking for something that cannot appear.
    */
-  const elsewhere = onThisBranch.length - inView.length;
+  const elsewhere = openComments.length - inView.length;
 
   return (
     <div className="panel git-panel">
@@ -446,7 +487,11 @@ export const GitPanel = memo(function GitPanel({
             </div>
 
             <div className="git-diff">
-              {comments.length > 0 && (
+              {/* Shown when there is anything to say about this branch's review —
+                  including when this branch has nothing but another one does, since
+                  that count is the only thing pointing at comments that are now
+                  deliberately out of sight. */}
+              {(comments.length > 0 || offBranch > 0) && (
                 <div className="review-bar">
                   <span className="review-count">
                     {inView.length > 0
@@ -458,14 +503,18 @@ export const GitPanel = memo(function GitPanel({
                         {elsewhere} elsewhere on this branch
                       </span>
                     )}
-                    {otherBranches.length > 0 && (
-                      <span className="review-elsewhere">
+                    {/* Terse on purpose: this bar already carries four counts, and the
+                        "review those" link next to it is what explains the word. */}
+                    {offBranch > 0 && (
+                      <span
+                        className="review-elsewhere"
+                        title={`${offBranch} open comment${offBranch === 1 ? "" : "s"} written on ${offBranch === 1 ? "another branch" : "other branches"} — hidden here because the code they point at is not in this tree`}
+                      >
                         {" · "}
-                        {otherBranches.length} on another branch
+                        {offBranch} hidden
                       </span>
                     )}
-                    {comments.length > openComments.length &&
-                      ` · ${comments.length - openComments.length} resolved`}
+                    {resolvedCount > 0 && ` · ${resolvedCount} resolved`}
                   </span>
                   {/* A comment on a committed file is unreachable from the working
                       tree, so offer the scope that does show it. */}
@@ -485,8 +534,8 @@ export const GitPanel = memo(function GitPanel({
                       show all files
                     </button>
                   )}
-                  {otherBranches.length > 0 && (
-                    <button className="link-btn inline" onClick={() => setShowOther(!showOther)}>
+                  {offBranch > 0 && (
+                    <button className="link-btn inline" onClick={toggleOther}>
                       {showOther ? "hide those" : "review those"}
                     </button>
                   )}
@@ -499,11 +548,13 @@ export const GitPanel = memo(function GitPanel({
                     />
                     Show resolved
                   </label>
-                  {comments.length > openComments.length && (
+                  {resolvedCount > 0 && (
                     <button
                       className="icon-btn"
+                      title={`Deletes the ${resolvedCount} resolved comment${resolvedCount === 1 ? "" : "s"} on this branch — other branches are left alone`}
                       onClick={() =>
-                        repoRoot && commentApi.clearResolved(repoRoot).then(reload).catch(() => {})
+                        repoRoot &&
+                        commentApi.clearResolved(repoRoot, branch).then(reload).catch(() => {})
                       }
                     >
                       Clear resolved
@@ -511,11 +562,11 @@ export const GitPanel = memo(function GitPanel({
                   )}
                   <button
                     className="icon-btn primary"
-                    disabled={onThisBranch.length === 0}
+                    disabled={openComments.length === 0}
                     onClick={draftForClaude}
                     title={
                       agentKey
-                        ? `Drafts all ${onThisBranch.length} open comment${onThisBranch.length === 1 ? "" : "s"} on this branch into the composer — nothing is sent until you send it`
+                        ? `Drafts all ${openComments.length} open comment${openComments.length === 1 ? "" : "s"} on this branch into the composer — nothing is sent until you send it`
                         : "No session running here — copies the prompt instead"
                     }
                   >
@@ -528,18 +579,21 @@ export const GitPanel = memo(function GitPanel({
               {/* Off-branch comments, shown in full because there is nowhere else to
                   see them: their code isn't in this tree, so no diff will ever render
                   them inline. Listing the text is what makes them deletable. */}
-              {showOther && otherBranches.length > 0 && (
+              {showOther && (
                 <div className="review-orphans">
                   <div className="review-orphans-head">
                     <span>
-                      Written on another branch — not included in the prompt, and not
-                      reachable from any diff here.
+                      Written on another branch — hidden from this branch's diff, not
+                      included in the prompt, and not reachable from any diff here.
                     </span>
-                    <button className="icon-btn tiny danger" onClick={clearOtherBranches}>
-                      Delete all {otherBranches.length}
-                    </button>
+                    {otherRows && otherRows.length > 0 && (
+                      <button className="icon-btn tiny danger" onClick={clearOtherBranches}>
+                        Delete all {otherRows.length}
+                      </button>
+                    )}
                   </div>
-                  {otherBranches.map((c) => (
+                  {otherRows === null && <div className="hint">Reading them…</div>}
+                  {(otherRows ?? []).map((c) => (
                     <div className="review-orphan" key={c.id}>
                       <span className="review-orphan-where">
                         {c.branch}
