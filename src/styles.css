@@ -447,6 +447,22 @@ tr.click:hover td { background: var(--surface-2); }
 .drawer-actions a { text-decoration: none; }
 
 /* ── transcript ────────────────────────────────────────────────────────────── */
+/* On the full page the transcript is bounded and scrolls inside its panel, so a
+   long history no longer stretches the page past everything beside it. In the
+   drawer the panel is unbounded and the drawer itself keeps scrolling. */
+.transcript-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: calc(100vh - 210px);
+}
+.transcript-panel .transcript-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin-right: -8px;
+  padding-right: 8px;
+}
 /* Speaker is carried by the accent bar and the tint, not by an avatar column. */
 .turn {
   border-left: 2px solid var(--border-strong);

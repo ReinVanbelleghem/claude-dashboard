@@ -96,7 +96,11 @@ export function Transcript({ turns }: { turns: TurnRow[] }) {
       {shown.length === 0 ? (
         <div className="empty">Nothing recorded.</div>
       ) : (
-        shown.map((t) => <Turn key={t.uuid} turn={t} />)
+        <div className="transcript-scroll">
+          {shown.map((t) => (
+            <Turn key={t.uuid} turn={t} />
+          ))}
+        </div>
       )}
     </>
   );

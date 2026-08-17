@@ -160,7 +160,7 @@ export function SessionPage({
       <div className="page-cols">
         <div>
           {priorTurns.length > 0 && (
-            <div className="panel">
+            <div className="panel transcript-panel">
               <Transcript turns={priorTurns} />
             </div>
           )}
