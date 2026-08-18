@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
+import { join, sep } from "node:path";
 import { DATA_DIR } from "./paths.ts";
 import {
   query,
@@ -274,6 +283,35 @@ export function ownedSessionIds(): Set<string> {
   const ids = new Set<string>();
   for (const a of agents.values()) if (a.sessionId) ids.add(a.sessionId);
   return ids;
+}
+
+/**
+ * Live sessions whose working directory is inside `root`.
+ *
+ * Used to refuse deleting a worktree that something is still working in. Real paths
+ * on both sides: a cwd recorded through a symlinked parent would otherwise compare
+ * unequal to the path git reports, and the check would pass when it should not.
+ * A session that has already ended holds no files, so only running ones count.
+ */
+export function agentsUnder(root: string): string[] {
+  let real: string;
+  try {
+    real = realpathSync(root);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const a of agents.values()) {
+    if (a.status === "ended" || a.status === "error") continue;
+    let cwd: string;
+    try {
+      cwd = realpathSync(a.cwd);
+    } catch {
+      continue;
+    }
+    if (cwd === real || cwd.startsWith(real + sep)) out.push(a.key);
+  }
+  return out;
 }
 
 export function listAgents() {
@@ -890,16 +928,27 @@ export async function stopAgent(key: string, reason = "ended from the dashboard"
   return true;
 }
 
-/** Bring a past session back under dashboard control, history intact. */
-export function restoreAgent(sessionId: string): string | null {
+/**
+ * Bring a past session back under dashboard control, history intact.
+ *
+ * The recorded cwd is checked first. `POST /api/agents` validates the directory it is
+ * handed, but this path takes one off disk that was written months ago — and a
+ * worktree that has since been removed would otherwise reach the SDK as a spawn into
+ * nowhere, failing somewhere far less legible than here.
+ */
+export function restoreAgent(sessionId: string): { key: string } | { error: string } {
   const row = restorable.find((r) => r.sessionId === sessionId);
-  if (!row) return null;
-  return startAgent({
-    cwd: row.cwd,
-    model: row.model ?? undefined,
-    title: row.title ?? undefined,
-    resume: sessionId,
-  });
+  if (!row) return { error: "unknown session" };
+  if (!existsSync(row.cwd))
+    return { error: `${row.cwd} no longer exists — the worktree or folder it ran in is gone` };
+  return {
+    key: startAgent({
+      cwd: row.cwd,
+      model: row.model ?? undefined,
+      title: row.title ?? undefined,
+      resume: sessionId,
+    }),
+  };
 }
 
 /** Drop a past session from the resumable list without touching its transcript. */

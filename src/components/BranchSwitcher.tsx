@@ -7,7 +7,7 @@ import {
   type GitWriteResult,
   type RepoStatus,
 } from "../api.ts";
-import { CheckIcon, GitIcon, PlusIcon } from "./Icons.tsx";
+import { CheckIcon, GitIcon, PlusIcon, WorktreeIcon } from "./Icons.tsx";
 
 /**
  * Switch branch from the dashboard.
@@ -32,11 +32,18 @@ export function BranchSwitcher({
   onSwitched,
   /** Set when the dashboard owns a session working in this directory. */
   sessionHere = false,
+  onOpenWorktree,
 }: {
   cwd: string;
   status: RepoStatus;
   onSwitched: (next: RepoStatus) => void;
   sessionHere?: boolean;
+  /**
+   * Go and work in another checkout of this repo. A branch git already has open
+   * somewhere cannot be checked out again, so for those rows this replaces switching
+   * rather than sitting beside it.
+   */
+  onOpenWorktree?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [list, setList] = useState<BranchList | null>(null);
@@ -160,6 +167,19 @@ export function BranchSwitcher({
     load(query);
   };
 
+  /**
+   * The checkout this popover is acting on. A branch whose worktree is *this* one is
+   * simply the current branch, so it must not be offered as somewhere else to go.
+   */
+  const here = status.root;
+
+  const openTree = onOpenWorktree
+    ? (path: string) => {
+        setOpen(false);
+        onOpenWorktree(path);
+      }
+    : null;
+
   const label = status.detached ? `detached at ${status.head?.slice(0, 8)}` : status.branch;
 
   return (
@@ -241,10 +261,10 @@ export function BranchSwitcher({
                 {/* The exact match is pinned when paging left it out, so a name you
                     typed in full is always one click away. */}
                 {exact && !shown.some((b) => b.name === exact.name) && (
-                  <Row branch={exact} busy={busy} onPick={run} />
+                  <Row branch={exact} busy={busy} onPick={run} here={here} onOpen={openTree} />
                 )}
                 {shown.map((b) => (
-                  <Row key={b.name} branch={b} busy={busy} onPick={run} />
+                  <Row key={b.name} branch={b} busy={busy} onPick={run} here={here} onOpen={openTree} />
                 ))}
 
                 {canCreate && (
@@ -291,16 +311,58 @@ export function BranchSwitcher({
   );
 }
 
-/** One branch in the list. */
+/**
+ * One branch in the list.
+ *
+ * Three shapes, not one. A branch git already has checked out in another worktree
+ * cannot be checked out again — `git switch` answers that with a fatal — so rather
+ * than offer a click that is guaranteed to fail, the row says where the branch is and
+ * offers to go there. The current branch stays inert as before.
+ */
 function Row({
   branch: b,
   busy,
   onPick,
+  here,
+  onOpen,
 }: {
   branch: Branch;
   busy: string | null;
   onPick: (name: string) => void;
+  /** Root of the checkout this popover acts on. */
+  here: string | null;
+  onOpen: ((path: string) => void) | null;
 }) {
+  /** Held somewhere that is not where we are standing. */
+  const elsewhere = !!b.worktreePath && b.worktreePath !== here ? b.worktreePath : null;
+  const name = (
+    <span className="branch-row-name">
+      {b.remote && <span className="branch-remote">{b.remote}/</span>}
+      {b.remote ? b.name.slice(b.remote.length + 1) : b.name}
+    </span>
+  );
+
+  if (elsewhere) {
+    const dir = elsewhere.split("/").filter(Boolean).pop() ?? elsewhere;
+    return (
+      <button
+        className="branch-row held"
+        disabled={!onOpen || !!busy}
+        onClick={() => onOpen?.(elsewhere)}
+        title={`${b.name} is checked out in ${elsewhere}. A branch can only be checked out once, so this opens that worktree instead of switching here.`}
+      >
+        <span className="branch-row-mark">
+          <WorktreeIcon />
+        </span>
+        <span className="branch-row-main">
+          {name}
+          <span className="branch-row-sub">in {dir}</span>
+        </span>
+        <span className="branch-row-meta">{onOpen ? "open" : "in use"}</span>
+      </button>
+    );
+  }
+
   return (
     <button
       className={`branch-row ${b.current ? "current" : ""}`}
@@ -310,10 +372,7 @@ function Row({
     >
       <span className="branch-row-mark">{b.current ? <CheckIcon /> : null}</span>
       <span className="branch-row-main">
-        <span className="branch-row-name">
-          {b.remote && <span className="branch-remote">{b.remote}/</span>}
-          {b.remote ? b.name.slice(b.remote.length + 1) : b.name}
-        </span>
+        {name}
         <span className="branch-row-sub">{b.subject || "no commits"}</span>
       </span>
       <span className="branch-row-meta">

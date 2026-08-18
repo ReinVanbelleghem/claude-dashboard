@@ -54,6 +54,13 @@ async function locate(
 ): Promise<{ abs: string; root: string } | { error: string }> {
   const rel = path.trim();
   if (!rel || !safePath(rel)) return { error: "bad path" };
+  /**
+   * Git's own bookkeeping is never editable content. This matters most in a linked
+   * worktree, where `.git` is a *file* holding `gitdir: …` rather than a directory:
+   * the isFile() check below would wave it through, and writing to it severs the
+   * worktree from its repository.
+   */
+  if (rel === ".git" || rel.startsWith(".git/")) return { error: "not editable: .git" };
 
   const status = await repoStatus(cwd);
   if (!status.isRepo || !status.root) return { error: "not a git repository" };
@@ -172,7 +179,9 @@ export async function browse(
   let entries: BrowseEntry[] = [];
   try {
     entries = readdirSync(real, { withFileTypes: true })
-      .filter((e) => !(e.isDirectory() && SKIP_DIRS.has(e.name)))
+      // `.git` is skipped whatever it is: a directory in the main checkout, a file
+      // in a linked worktree. The rest are only ever build directories.
+      .filter((e) => e.name !== ".git" && !(e.isDirectory() && SKIP_DIRS.has(e.name)))
       .map((e) => ({
         name: e.name,
         path: rel ? `${rel}/${e.name}` : e.name,

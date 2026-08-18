@@ -1,4 +1,13 @@
-import { basename, isAbsolute } from "node:path";
+import { realpathSync } from "node:fs";
+import {
+  excludeLocally,
+  provision,
+  summarise,
+  unprovision,
+  type ProvisionOutcome,
+  type ProvisionRule,
+} from "./provision.ts";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 /**
  * Git access for the dashboard. Every command goes through run(), which never uses
@@ -26,6 +35,18 @@ export type ChangedFile = {
 export type RepoStatus = {
   isRepo: boolean;
   root: string | null;
+  /**
+   * The shared `.git` directory, which every worktree of one repository has in
+   * common. `root` identifies *this checkout*; this identifies *the repository*, and
+   * the two differ the moment a linked worktree is involved. Anything that should
+   * survive moving between worktrees — review comments, session grouping, the lock
+   * that guards the ref store — keys on this.
+   */
+  commonDir: string | null;
+  /** Toplevel of the main worktree, i.e. the checkout that owns `commonDir`. */
+  mainRoot: string | null;
+  /** True when `root` is a linked worktree rather than the main checkout. */
+  isLinkedWorktree: boolean;
   /** Display name for the repo — its directory name. */
   name: string | null;
   branch: string | null;
@@ -97,6 +118,35 @@ async function run(
   }
 }
 
+/**
+ * Like run(), but writes to the child's stdin. Only `check-ignore --stdin` needs this:
+ * passing a list of paths as argv risks one being read as a flag, and --stdin with NUL
+ * separators has neither that problem nor a length limit.
+ */
+async function runWithInput(
+  cwd: string,
+  args: string[],
+  input: string,
+): Promise<{ ok: boolean; out: string; err: string }> {
+  try {
+    const proc = Bun.spawn(["git", "--no-optional-locks", "-C", cwd, ...args], {
+      stdin: new TextEncoder().encode(input),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
+    });
+    const [out, err] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const code = await proc.exited;
+    // check-ignore exits 1 when nothing matched, which is an answer, not a failure.
+    return { ok: code === 0 || code === 1, out, err: err.trim() };
+  } catch (e) {
+    return { ok: false, out: "", err: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 async function line(cwd: string, args: string[]): Promise<string | null> {
   const r = await run(cwd, args);
   const v = r.out.trim();
@@ -141,6 +191,9 @@ async function detectBase(root: string, branch: string | null): Promise<string |
 const NOT_A_REPO: RepoStatus = {
   isRepo: false,
   root: null,
+  commonDir: null,
+  mainRoot: null,
+  isLinkedWorktree: false,
   name: null,
   branch: null,
   detached: false,
@@ -190,11 +243,24 @@ async function computeStatus(cwd: string): Promise<RepoStatus> {
   const root = await line(cwd, ["rev-parse", "--show-toplevel"]);
   if (!root) return NOT_A_REPO;
 
-  const [branchRaw, head, upstream] = await Promise.all([
+  const [branchRaw, head, upstream, dirs] = await Promise.all([
     line(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
     line(root, ["rev-parse", "--short", "HEAD"]),
     line(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]),
+    /**
+     * Both dirs in one call. They are equal in the main checkout and differ in a
+     * linked worktree (`…/.git` vs `…/.git/worktrees/<name>`), which is the canonical
+     * test — cheaper and more reliable than comparing toplevels, and it does not care
+     * how the worktree directory is laid out on disk.
+     */
+    line(root, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"]),
   ]);
+
+  const [gitDir, commonDirRaw] = (dirs ?? "").split("\n").map((s) => s.trim());
+  const commonDir = commonDirRaw || null;
+  const isLinkedWorktree = !!gitDir && !!commonDir && gitDir !== commonDir;
+  // `<repo>/.git` → `<repo>`. A bare repo has no main working tree to point at.
+  const mainRoot = commonDir && basename(commonDir) === ".git" ? dirname(commonDir) : null;
 
   const detached = branchRaw === "HEAD" || branchRaw === null;
   const branch = detached ? null : branchRaw;
@@ -224,6 +290,9 @@ async function computeStatus(cwd: string): Promise<RepoStatus> {
   return {
     isRepo: true,
     root,
+    commonDir,
+    mainRoot,
+    isLinkedWorktree,
     name: basename(root),
     branch,
     detached,
@@ -339,12 +408,12 @@ export async function listFiles(cwd: string): Promise<string[]> {
 }
 
 // ── diffs ─────────────────────────────────────────────────────────────────────
-export type DiffScope = "worktree" | "branch";
+export type DiffScope = "uncommitted" | "branch";
 
 /**
  * A unified diff, as text, for the whole scope or one file.
  *
- * "worktree" is everything not yet committed, staged or not, against HEAD — the
+ * "uncommitted" is everything not yet committed, staged or not, against HEAD — the
  * answer to "what is different right now". "branch" is the three-dot diff against
  * the base, i.e. what this branch introduces, ignoring what landed on the base
  * since it was cut.
@@ -366,7 +435,7 @@ export async function diff(opts: {
   if (opts.path && !safePath(opts.path)) return { ok: false, patch: "", error: "bad path" };
 
   // An untracked file has no blob to diff against, so compare it to /dev/null.
-  if (opts.path && opts.scope === "worktree") {
+  if (opts.path && opts.scope === "uncommitted") {
     const f = status.files.find((x) => x.path === opts.path);
     if (f?.untracked) {
       const r = await run(root, ["diff", ...flags, "--no-index", "--", "/dev/null", opts.path]);
@@ -473,6 +542,149 @@ export async function log(cwd: string, limit = 50): Promise<{ commits: Commit[];
   return { commits, range };
 }
 
+// ── worktrees ─────────────────────────────────────────────────────────────────
+export type Worktree = {
+  /** Absolute path of the checkout. */
+  path: string;
+  /** Directory name, for display. */
+  name: string;
+  /** Branch checked out here, or null when detached or bare. */
+  branch: string | null;
+  head: string | null;
+  detached: boolean;
+  bare: boolean;
+  /** True for the checkout that owns the shared `.git`. */
+  isMain: boolean;
+  /** Set when the worktree is locked; the string is git's reason, possibly empty. */
+  locked: string | null;
+  /** Set when the directory is gone and only the admin record remains. */
+  prunable: string | null;
+};
+
+/**
+ * Every checkout of this repository.
+ *
+ * `git worktree list` answers identically from any worktree of a repo, main or
+ * linked, so this needs no notion of "ask the real repo first" — wherever the
+ * session happens to sit is a fine place to ask from.
+ *
+ * The porcelain format is a stanza per worktree of `key value` lines, blank-line
+ * separated, with valueless keys (`bare`, `detached`) present as bare words. `-z`
+ * swaps the line breaks for NULs so a path containing a newline cannot forge a
+ * stanza boundary — paths here are user-chosen directories, so that is reachable.
+ */
+export async function worktrees(cwd: string): Promise<{
+  ok: boolean;
+  worktrees: Worktree[];
+  error: string | null;
+}> {
+  const status = await repoStatus(cwd);
+  if (!status.isRepo || !status.root)
+    return { ok: false, worktrees: [], error: "not a git repository" };
+
+  const r = await run(status.root, ["worktree", "list", "--porcelain", "-z"]);
+  if (!r.ok) return { ok: false, worktrees: [], error: r.err || "git worktree list failed" };
+
+  const out: Worktree[] = [];
+  let cur: Partial<Worktree> & { path?: string } = {};
+  const flush = () => {
+    if (!cur.path) return;
+    const branch = cur.branch ?? null;
+    out.push({
+      path: cur.path,
+      name: basename(cur.path),
+      branch,
+      head: cur.head ?? null,
+      detached: !!cur.detached,
+      bare: !!cur.bare,
+      // The main worktree is always the first stanza, but say it structurally
+      // rather than positionally so a future format change cannot mislabel it.
+      isMain: !!status.mainRoot && cur.path === status.mainRoot,
+      locked: cur.locked ?? null,
+      prunable: cur.prunable ?? null,
+    });
+    cur = {};
+  };
+
+  for (const raw of r.out.split("\0")) {
+    const l = raw.trim();
+    // A stanza ends at an empty record.
+    if (!l) {
+      flush();
+      continue;
+    }
+    const sp = l.indexOf(" ");
+    const key = sp === -1 ? l : l.slice(0, sp);
+    const value = sp === -1 ? "" : l.slice(sp + 1);
+    if (key === "worktree") {
+      flush();
+      cur.path = value;
+    } else if (key === "HEAD") cur.head = value;
+    else if (key === "branch") cur.branch = value.replace(/^refs\/heads\//, "");
+    else if (key === "detached") cur.detached = true;
+    else if (key === "bare") cur.bare = true;
+    // Both carry an optional reason, and an absent reason must still register as set.
+    else if (key === "locked") cur.locked = value;
+    else if (key === "prunable") cur.prunable = value;
+  }
+  flush();
+
+  return { ok: true, worktrees: out, error: null };
+}
+
+export type WorktreeRepo = {
+  /** The shared `.git`, which is what makes two checkouts one repository. */
+  repoKey: string;
+  /** Repository name, taken from the main checkout rather than a branch-named directory. */
+  name: string;
+  /** A checkout that exists on disk, to ask this repository's questions from. */
+  root: string;
+  mainRoot: string | null;
+  count: number;
+};
+
+/**
+ * The repositories behind a set of directories, one entry per repository.
+ *
+ * Candidates arrive as "places sessions have run" plus "whatever sits in the worktree
+ * directory", so several of them are usually checkouts of the same repository. Folding
+ * them on the shared `.git` is what turns that list into a list of repositories, and
+ * asking from the main checkout when there is one keeps the reported name stable — a
+ * linked worktree's directory is named for its branch.
+ */
+export async function worktreeRepos(candidates: string[]): Promise<WorktreeRepo[]> {
+  const byKey = new Map<string, WorktreeRepo>();
+
+  for (const dir of candidates) {
+    if (!dir || !isAbsolute(dir)) continue;
+    const status = await repoStatus(dir).catch(() => null);
+    if (!status?.isRepo || !status.root || !status.commonDir) continue;
+    const prev = byKey.get(status.commonDir);
+    // A main checkout answers for the repository better than a linked one, so it wins
+    // even when a linked worktree was seen first.
+    if (prev && !(status.mainRoot && status.root === status.mainRoot)) continue;
+    const named = status.mainRoot ?? status.root;
+    byKey.set(status.commonDir, {
+      repoKey: status.commonDir,
+      name: basename(named),
+      root: status.root,
+      mainRoot: status.mainRoot,
+      count: 0,
+    });
+  }
+
+  const out: WorktreeRepo[] = [];
+  for (const repo of byKey.values()) {
+    const listed = await worktrees(repo.root).catch(() => null);
+    // A repository whose list cannot be read has nothing to manage, and reporting it
+    // would put an empty group on screen with no action in it.
+    if (!listed?.ok) continue;
+    out.push({ ...repo, count: listed.worktrees.length });
+  }
+
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 // ── branches ──────────────────────────────────────────────────────────────────
 export type Branch = {
   /** Short name: "feat/x" for a local branch, "origin/feat/x" for a remote one. */
@@ -492,6 +704,12 @@ export type Branch = {
    * checking this out would just switch to that local branch. The UI hides these.
    */
   hasLocal: boolean;
+  /**
+   * The worktree that has this branch checked out, if any. Git refuses to check a
+   * branch out twice, so this is what turns an unavoidable `fatal:` into an offer to
+   * open the checkout that already holds it.
+   */
+  worktreePath: string | null;
 };
 
 export type BranchList = {
@@ -558,6 +776,7 @@ export async function branches(
     "%(committerdate:unix)",
     "%(objectname:short)",
     "%(HEAD)",
+    "%(worktreepath)",
     "%(contents:subject)",
   ].join(UNIT);
 
@@ -585,7 +804,7 @@ export async function branches(
 
   for (const l of r.out.split("\n")) {
     if (!l.trim()) continue;
-    const [ref, name, upstream, track, at, head, headMark, subject] = l.split(UNIT);
+    const [ref, name, upstream, track, at, head, headMark, wtPath, subject] = l.split(UNIT);
     if (!ref || !name) continue;
     // origin/HEAD is a symbolic alias for the default branch, not a branch of its own.
     if (ref.endsWith("/HEAD")) continue;
@@ -609,6 +828,7 @@ export async function branches(
       head: head ?? "",
       subject: subject ?? "",
       hasLocal: false,
+      worktreePath: wtPath || null,
     });
   }
 
@@ -740,7 +960,27 @@ function freshStatus(cwd: string): Promise<RepoStatus> {
   return repoStatus(cwd, true);
 }
 
-/** Serialises writes per repo root. */
+/**
+ * Serialises writes, in two tiers.
+ *
+ * Worktrees of one repository share an object store and a ref store but each has its
+ * own index and its own HEAD, so "one write at a time" means different things
+ * depending on what is being written:
+ *
+ *  - **Per checkout** (`status.root`) for anything touching the index or the working
+ *    tree: stage, unstage, discard, commit, checkout. A commit does write a ref, but
+ *    only the branch this checkout exclusively holds — git refuses to check one out
+ *    twice, which is what makes that safe.
+ *  - **Per repository** (`status.commonDir`) for anything touching the shared ref
+ *    store or the worktree administration: fetch, and worktree add/remove/prune. Two
+ *    of these racing across different checkouts would take different per-checkout
+ *    locks while contending for the same files.
+ *
+ * The two sets are disjoint and must stay that way: a repository-tier operation that
+ * reached for a checkout-tier lock, or vice versa, would deadlock on the second
+ * acquisition. Where one of each overlaps — a fetch during a commit — they touch
+ * different refs and git's own per-ref locking covers the rest.
+ */
 const locks = new Map<string, Promise<unknown>>();
 
 function withLock<T>(root: string, fn: () => Promise<T>): Promise<T> {
@@ -804,6 +1044,22 @@ async function localBranchExists(root: string, name: string): Promise<boolean> {
   return !!(await line(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]));
 }
 
+/**
+ * "origin/feat/x" → "feat/x", but only when "origin" is a real remote publishing that
+ * ref. A branch genuinely called "origin/feat/x" is left alone: the ref decides, not
+ * the shape of the name.
+ */
+async function unqualifyRemote(root: string, name: string): Promise<string> {
+  const cut = name.indexOf("/");
+  if (cut <= 0) return name;
+  if (await localBranchExists(root, name)) return name;
+  const remotes = await run(root, ["remote"]);
+  if (!remotes.ok) return name;
+  if (!remotes.out.split("\n").map((s) => s.trim()).includes(name.slice(0, cut))) return name;
+  const ref = await line(root, ["rev-parse", "--verify", "--quiet", `refs/remotes/${name}`]);
+  return ref ? name.slice(cut + 1) : name;
+}
+
 /** Remote-tracking refs for a bare branch name, e.g. "feat/x" → ["origin/feat/x"]. */
 async function remoteBranchesNamed(root: string, name: string): Promise<string[]> {
   const r = await run(root, ["for-each-ref", "--format=%(refname:short)", `refs/remotes/*/${name}`]);
@@ -845,7 +1101,14 @@ export async function checkout(
     return { ok: false, status, error: "not a git repository", hint: null };
   const root = status.root;
 
-  const name = opts.branch.trim();
+  /**
+   * "origin/feat/x" names a remote-tracking ref, not a branch — the checkout it feeds
+   * holds "feat/x". Accepting the qualified spelling matters because it is what this
+   * function's own refusal tells you to ask for.
+   */
+  const name = opts.create
+    ? opts.branch.trim()
+    : await unqualifyRemote(root, opts.branch.trim());
   if (!(await validBranchName(root, name)))
     return { ok: false, status, error: `not a valid branch name: ${name}`, hint: null };
 
@@ -914,6 +1177,15 @@ export async function checkout(
  * need `-u` or they stay behind and block the switch again.
  */
 function switchHint(err: string): string | null {
+  /**
+   * A branch can only be checked out once across a repository. There is nothing to
+   * stash or commit here — the work is in the other checkout — so the remedy is to go
+   * there, and the path git names is where. The branch popover normally offers that
+   * as an Open action before the click, so reaching this means the tree was created
+   * between the list being drawn and the switch being attempted.
+   */
+  const held = err.match(/already used by worktree at '([^']+)'/i);
+  if (held) return `That branch is checked out in ${held[1]} — open that worktree instead.`;
   if (/untracked working tree files/i.test(err))
     return "Those files aren't tracked, so a plain stash won't move them — use `git stash -u`, or delete them.";
   if (/local changes|would be overwritten|commit your changes or stash/i.test(err))
@@ -961,6 +1233,13 @@ export async function pull(cwd: string): Promise<WriteResult> {
       hint: "Nothing to pull from. Push it with `-u` first to set one.",
     };
 
+  /**
+   * Checkout tier, even though a pull opens with a fetch and fetch is repository tier.
+   * The two halves want different locks and taking both would break the no-nesting rule,
+   * so this takes the one guarding the half that can damage something: `merge --ff-only`
+   * moves this checkout's HEAD and index. The fetch half only adds remote-tracking refs,
+   * where git's own per-ref locking is enough for two checkouts doing it at once.
+   */
   return withLock(root, async () => {
     /**
      * Which remote to contact comes from this branch's own config rather than from
@@ -1012,7 +1291,8 @@ export async function fetch(cwd: string): Promise<WriteResult> {
   if (!status.isRepo || !status.root)
     return { ok: false, status, error: "not a git repository", hint: null };
 
-  return withLock(status.root, async () => {
+  // Repository tier: this rewrites refs/remotes, which every worktree shares.
+  return withLock(status.commonDir ?? status.root, async () => {
     const r = await run(status.root!, ["fetch", "--all", "--prune", "--quiet"], { timeoutMs: 120_000 });
     return finish(cwd, r.ok, r.ok ? null : r.err || "git fetch failed", null);
   });
@@ -1337,4 +1617,463 @@ function pushHint(err: string): string | null {
   if (/protected branch|pre-receive hook declined/i.test(err))
     return "The remote refused the push. Open a pull request from a branch instead.";
   return null;
+}
+
+// ── worktrees ─────────────────────────────────────────────────────────────────
+/**
+ * Where a new worktree goes, and what it is called.
+ *
+ * Sibling to the main checkout, named for the branch: `~/src/app` on `feat/login`
+ * becomes `~/src/app-feat-login`. Siblings rather than somewhere central because an
+ * editor, a terminal and a file browser all have to find these, and a checkout is not
+ * dashboard state — it is your work.
+ *
+ * The branch name is slugified rather than used as-is. `feat/login` contains a
+ * separator, so pasting it into a path would silently nest the worktree one directory
+ * deeper than intended and put it somewhere nothing else looks.
+ */
+export function worktreeSlug(branch: string): string {
+  return (
+    branch
+      .replace(/[^A-Za-z0-9._-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^[-.]+|[-.]+$/g, "")
+      // Every character was a separator, which no longer describes a directory.
+      .slice(0, 80) || "worktree"
+  );
+}
+
+export function defaultWorktreePath(mainRoot: string, branch: string, root?: string): string {
+  const base = root?.trim() ? root.trim() : dirname(mainRoot);
+  return join(base, `${basename(mainRoot)}-${worktreeSlug(branch)}`);
+}
+
+/**
+ * Resolve a path the way git reports one, so the two can be compared.
+ *
+ * `git worktree list` prints real paths: on macOS `/tmp/x` comes back as
+ * `/private/tmp/x`, and a repo reached through any symlinked parent does the same.
+ * Comparing a browser-supplied path against those directly silently fails to match —
+ * which for the nesting guard below means it waves through exactly the case it exists
+ * to catch. The target of an `add` does not exist yet, so the deepest existing
+ * ancestor is resolved and the remainder re-appended.
+ */
+function realPathOf(p: string): string {
+  let head = resolve(p);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(head), ...tail);
+    } catch {
+      const parent = dirname(head);
+      // Reached the filesystem root without finding anything that exists.
+      if (parent === head) return resolve(p);
+      tail.unshift(basename(head));
+      head = parent;
+    }
+  }
+}
+
+/**
+ * Reject a target that would put a checkout inside another one.
+ *
+ * Git allows this and it is a genuine footgun: a worktree nested inside a tracked
+ * tree shows up as thousands of untracked files in the parent's status, and `add -A`
+ * in the parent will happily commit the whole second checkout. The reverse — a target
+ * that *contains* an existing worktree — is worse still, since git would be asked to
+ * populate a directory that already holds a repository.
+ */
+function nestingError(target: string, trees: Worktree[]): { error: string; hint: string | null } | null {
+  for (const w of trees) {
+    const real = realPathOf(w.path);
+    if (target === real)
+      return {
+        error: `${target} is already a worktree of this repository${w.branch ? `, on ${w.branch}` : ""}.`,
+        hint: "Open it instead, or pick a different path.",
+      };
+    if (target.startsWith(real + sep))
+      return {
+        error: `${target} is inside ${real}. A worktree cannot live inside another checkout of the same repository.`,
+        hint: "Pick a path outside the repository.",
+      };
+    if (real.startsWith(target + sep))
+      return {
+        error: `${target} contains ${real}, which is already a worktree of this repository.`,
+        hint: "Pick a path that does not contain the repository.",
+      };
+  }
+  return null;
+}
+
+export type WorktreeResult = WriteResult & {
+  /** Path of the worktree the call created or removed, when it succeeded. */
+  path: string | null;
+  /** Every checkout of the repo after the attempt, successful or not. */
+  worktrees: Worktree[];
+  /** What was carried into a newly created worktree. Empty unless one was created. */
+  provisioned?: ProvisionOutcome[];
+};
+
+async function worktreeFinish(
+  cwd: string,
+  ok: boolean,
+  error: string | null,
+  hint: string | null,
+  opts: {
+    note?: string | null;
+    path?: string | null;
+    provisioned?: ProvisionOutcome[];
+    /**
+     * Where to read the resulting state from, when `cwd` is no longer a place that can
+     * answer. Removing the checkout you were viewing is the case: reporting from a
+     * directory that has just been deleted would come back "not a git repository" and an
+     * empty worktree list, hiding every checkout that is still there.
+     */
+    reportFrom?: string | null;
+  } = {},
+): Promise<WorktreeResult> {
+  invalidateStatus();
+  const from = opts.reportFrom || cwd;
+  const [status, list] = await Promise.all([repoStatus(from, true), worktrees(from)]);
+  return {
+    ok,
+    status,
+    error,
+    hint,
+    note: opts.note ?? null,
+    path: opts.path ?? null,
+    worktrees: list.worktrees,
+    provisioned: opts.provisioned ?? [],
+  };
+}
+
+/**
+ * Create a checkout of this repository at its own path, on its own branch.
+ *
+ * This is the operation the whole feature exists for: it is what lets a session work
+ * on a branch without moving the files under any other session. Purely additive —
+ * nothing existing is touched, so unlike a branch switch there is no work it can put
+ * at risk.
+ *
+ * A branch can only be checked out once across a repository, so the branch being
+ * asked for is checked against the other worktrees first. Git would refuse anyway;
+ * catching it here means naming the checkout that holds it instead of passing on a
+ * `fatal:` about a path the user never mentioned.
+ */
+export async function worktreeAdd(
+  cwd: string,
+  opts: {
+    branch: string;
+    create?: boolean;
+    from?: string;
+    path?: string;
+    root?: string;
+    /**
+     * Untracked paths to carry into the new checkout — dependencies, env files. Omitted
+     * means carry nothing; an empty array means the same, explicitly.
+     */
+    provision?: ProvisionRule[];
+    /**
+     * Add provisioned paths to the repository's local exclude file when git would
+     * otherwise treat them as untracked. Off unless the caller asks — it writes to the
+     * repo's own `info/exclude`.
+     */
+    excludeProvisioned?: boolean;
+  },
+): Promise<WorktreeResult> {
+  const status = await freshStatus(cwd);
+  if (!status.isRepo || !status.root)
+    return worktreeFinish(cwd, false, "not a git repository", null);
+  const root = status.root;
+  if (!status.mainRoot)
+    return worktreeFinish(cwd, false, "this repository has no main working tree", null);
+
+  /**
+   * "origin/feat/x" names a remote-tracking ref, not a branch — the checkout it feeds
+   * holds "feat/x". Accepting the qualified spelling matters because it is what this
+   * function's own refusal tells you to ask for.
+   */
+  const name = opts.create
+    ? opts.branch.trim()
+    : await unqualifyRemote(root, opts.branch.trim());
+  if (!(await validBranchName(root, name)))
+    return worktreeFinish(cwd, false, `not a valid branch name: ${name}`, null);
+
+  /**
+   * An explicit path is taken as given but still has to be absolute — a relative one
+   * would resolve against the daemon's cwd, which is nowhere the user was thinking of.
+   */
+  if (opts.path && !isAbsolute(opts.path))
+    return worktreeFinish(cwd, false, `path must be absolute: ${opts.path}`, null);
+  if (opts.root && !isAbsolute(opts.root))
+    return worktreeFinish(cwd, false, `worktree root must be absolute: ${opts.root}`, null);
+
+  const target = realPathOf(opts.path?.trim() || defaultWorktreePath(status.mainRoot, name, opts.root));
+
+  // Repository tier: this writes refs and the shared worktrees/ administration.
+  return withLock(status.commonDir ?? root, async () => {
+    const before = await worktrees(cwd);
+    const nest = nestingError(target, before.worktrees);
+    if (nest) return worktreeFinish(cwd, false, nest.error, nest.hint);
+
+    const held = before.worktrees.find((w) => w.branch === name);
+    if (held)
+      return worktreeFinish(
+        cwd,
+        false,
+        `${name} is already checked out in ${held.path}`,
+        "A branch can only be checked out once. Open that worktree instead.",
+      );
+
+    const args = ["worktree", "add"];
+    if (opts.create) {
+      if (await localBranchExists(root, name))
+        return worktreeFinish(
+          cwd,
+          false,
+          `branch already exists: ${name}`,
+          "Add a worktree for the existing branch instead of creating it.",
+        );
+      /**
+       * Same rule as creating a branch to switch to: a name that exists on a remote is
+       * refused rather than shadowed by an unrelated local branch off HEAD.
+       */
+      const remotes = await remoteBranchesNamed(root, name);
+      if (remotes.length > 0)
+        return worktreeFinish(
+          cwd,
+          false,
+          `${remotes[0]} already exists on the remote`,
+          `Add a worktree for ${remotes[0]} to work on it, or pick a different name.`,
+        );
+
+      if (opts.from && !(await refExists(root, opts.from)))
+        return worktreeFinish(cwd, false, `no such commit: ${opts.from}`, null);
+      args.push("-b", name, target);
+      if (opts.from) args.push(opts.from);
+    } else if (await localBranchExists(root, name)) {
+      args.push(target, name);
+    } else {
+      /**
+       * Not a local branch. If exactly one remote publishes it, create the local
+       * branch tracking that ref — the same DWIM `git switch` does, spelled out here
+       * because `worktree add` will not guess it. More than one remote match is
+       * ambiguous, and guessing which one would be a coin flip.
+       */
+      const remotes = await remoteBranchesNamed(root, name);
+      if (remotes.length === 1) args.push("--track", "-b", name, target, remotes[0]);
+      else if (remotes.length > 1)
+        return worktreeFinish(
+          cwd,
+          false,
+          `${name} exists on more than one remote: ${remotes.join(", ")}`,
+          "Ask for the remote-qualified branch instead.",
+        );
+      else
+        return worktreeFinish(
+          cwd,
+          false,
+          `no such branch: ${name}`,
+          "Pass create to make a new branch of that name.",
+        );
+    }
+
+    const r = await run(root, args);
+    if (!r.ok)
+      return worktreeFinish(cwd, false, r.err || "git worktree add failed", worktreeAddHint(r.err));
+
+    /**
+     * The checkout exists at this point, so provisioning failures are reported rather
+     * than raised: a worktree with no `node_modules` symlink is still a worktree, and
+     * undoing the create over it would throw away the part that worked.
+     */
+    let carried: ProvisionOutcome[] = [];
+    if (opts.provision && opts.provision.length > 0) {
+      /**
+       * Two passes, and the second is the one that matters.
+       *
+       * The first asks the source tree which of these paths git ignores, which rules out
+       * anything obviously tracked before any work is done. But whether git ignores
+       * something depends on what it *is*, not only what it is called: `node_modules/` in
+       * a `.gitignore` matches a directory and not a symlink to one. So after placing
+       * them, the new tree is asked again about what actually landed, and anything it
+       * does not ignore is taken back out. Otherwise provisioning would leave untracked
+       * work behind — visible in the diff, caught by `stage all`, and enough to make the
+       * worktree undeletable, since a dirty one is refused.
+       */
+      const wanted = opts.provision.map((r) => r.path.trim()).filter(Boolean);
+      carried = provision(status.mainRoot!, target, opts.provision, await ignoredIn(status.mainRoot!, wanted));
+
+      const placed = carried.filter((o) => o.result === "linked" || o.result === "copied");
+      if (placed.length > 0) {
+        let stillIgnored = await ignoredIn(target, placed.map((o) => o.path));
+        let stray = placed.filter((o) => !stillIgnored.has(o.path));
+
+        /**
+         * Asked to, and something landed that git would call untracked — almost always a
+         * `node_modules` symlink against a `node_modules/` pattern. Adding the bare path
+         * to the local exclude file settles it for good; then re-ask, because the answer
+         * is git's to give and not ours to assume.
+         */
+        if (stray.length > 0 && opts.excludeProvisioned && status.commonDir) {
+          excludeLocally(status.commonDir, stray.map((o) => o.path));
+          stillIgnored = await ignoredIn(target, placed.map((o) => o.path));
+          stray = placed.filter((o) => !stillIgnored.has(o.path));
+        }
+
+        for (const o of stray) {
+          unprovision(target, o.path);
+          o.result = "skipped-tracked";
+        }
+      }
+    }
+
+    const extra = summarise(carried);
+    return worktreeFinish(cwd, true, null, null, {
+      path: target,
+      note: `Created ${basename(target)} on ${name}.${extra ? ` Also ${extra}.` : ""}`,
+      provisioned: carried,
+    });
+  });
+}
+
+/** Which of these paths git ignores, asked of one particular working tree. */
+async function ignoredIn(root: string, paths: string[]): Promise<Set<string>> {
+  if (paths.length === 0) return new Set();
+  const r = await runWithInput(
+    root,
+    ["check-ignore", "-z", "--stdin"],
+    paths.map((x) => `${x}\0`).join(""),
+  );
+  return new Set(r.out.split("\0").filter(Boolean));
+}
+
+function worktreeAddHint(err: string): string | null {
+  if (/already exists/i.test(err))
+    return "That directory is not empty. Pick another path, or remove it first.";
+  if (/already used by worktree/i.test(err))
+    return "That branch is checked out somewhere else already.";
+  if (/invalid reference|not a valid/i.test(err))
+    return "git did not recognise that as a branch or commit.";
+  return null;
+}
+
+/**
+ * Remove a checkout, leaving the branch and its commits alone.
+ *
+ * `git worktree remove` deletes the directory but not the ref, so everything
+ * committed survives and the branch can be checked out again anywhere. Uncommitted
+ * work does not survive, and exists in no git object, so a dirty worktree is refused
+ * outright — `--force` is deliberately never passed. That is the same line the rest of
+ * the dashboard draws: discarding is a named-file operation you confirm, and anything
+ * that throws away work wholesale stays in a terminal.
+ */
+export async function worktreeRemove(cwd: string, path: string): Promise<WorktreeResult> {
+  const status = await freshStatus(cwd);
+  if (!status.isRepo || !status.root)
+    return worktreeFinish(cwd, false, "not a git repository", null);
+  const root = status.root;
+
+  if (!path?.trim() || !isAbsolute(path))
+    return worktreeFinish(cwd, false, "worktree path must be absolute", null);
+  const target = realPathOf(path.trim());
+
+  return withLock(status.commonDir ?? root, async () => {
+    const before = await worktrees(cwd);
+    const tree = before.worktrees.find((w) => realPathOf(w.path) === target);
+    if (!tree)
+      return worktreeFinish(cwd, false, `${target} is not a worktree of this repository`, null);
+    if (tree.isMain)
+      return worktreeFinish(
+        cwd,
+        false,
+        "that is the repository's main checkout, not a linked worktree",
+        "Only linked worktrees can be removed here.",
+      );
+    if (tree.locked !== null)
+      return worktreeFinish(
+        cwd,
+        false,
+        `${basename(target)} is locked${tree.locked ? `: ${tree.locked}` : ""}`,
+        "Unlock it in a terminal if you really mean to remove it.",
+      );
+
+    /**
+     * A worktree whose directory is already gone cannot be dirty and cannot be asked
+     * about — `worktree remove` refuses it too, and `prune` is the operation that
+     * clears the leftover record.
+     */
+    if (tree.prunable !== null) {
+      const r = await run(root, ["worktree", "prune"]);
+      return worktreeFinish(
+        cwd,
+        r.ok,
+        r.ok ? null : r.err || "git worktree prune failed",
+        null,
+        r.ok
+          ? { path: target, note: `${basename(target)} was already gone; cleared its record.` }
+          : {},
+      );
+    }
+
+    /**
+     * Checked here rather than left to git so the refusal can count the files and name
+     * the remedy. git's own message names no files at all, just suggests --force.
+     */
+    const inTree = await repoStatus(target, true);
+    const dirty = inTree.counts.staged + inTree.counts.unstaged + inTree.counts.untracked;
+    if (dirty > 0)
+      return worktreeFinish(
+        cwd,
+        false,
+        `${basename(target)} has ${dirty} uncommitted change${dirty === 1 ? "" : "s"}`,
+        "Commit them, or discard them from the file list, then remove it. Nothing here deletes uncommitted work.",
+      );
+
+    const r = await run(root, ["worktree", "remove", target]);
+    if (!r.ok)
+      return worktreeFinish(
+        cwd,
+        false,
+        r.err || "git worktree remove failed",
+        /modified or untracked/i.test(r.err)
+          ? "Something changed in it since this was checked. Re-read and try again."
+          : null,
+      );
+
+    /**
+     * `cwd` may be inside what was just deleted — removing the checkout you are looking
+     * at is perfectly legal. Report from the main worktree in that case, so the answer
+     * still lists the checkouts that remain.
+     */
+    const gone = realPathOf(cwd) === target || realPathOf(cwd).startsWith(target + sep);
+    return worktreeFinish(cwd, true, null, null, {
+      path: target,
+      note: `Removed ${basename(target)}. ${tree.branch ?? "Its commits"} is untouched.`,
+      reportFrom: gone ? status.mainRoot : null,
+    });
+  });
+}
+
+/**
+ * Drop administrative records for worktrees whose directories are gone.
+ *
+ * Safe by construction: it only ever forgets checkouts that no longer exist on disk,
+ * which is why it needs no confirmation. Someone deleting a worktree directory by hand
+ * is the normal way to arrive here.
+ */
+export async function worktreePrune(cwd: string): Promise<WorktreeResult> {
+  const status = await freshStatus(cwd);
+  if (!status.isRepo || !status.root)
+    return worktreeFinish(cwd, false, "not a git repository", null);
+  const root = status.root;
+
+  return withLock(status.commonDir ?? root, async () => {
+    const before = (await worktrees(cwd)).worktrees.filter((w) => w.prunable !== null).length;
+    const r = await run(root, ["worktree", "prune"]);
+    if (!r.ok) return worktreeFinish(cwd, false, r.err || "git worktree prune failed", null);
+    return worktreeFinish(cwd, true, null, null, {
+      note: before > 0 ? `Cleared ${before} stale worktree record${before === 1 ? "" : "s"}.` : "Nothing to prune.",
+    });
+  });
 }

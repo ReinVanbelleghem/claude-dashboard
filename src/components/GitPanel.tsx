@@ -17,7 +17,7 @@ import { DiffView, langOf } from "./DiffView.tsx";
 import { FileEditor } from "./FileEditor.tsx";
 import { FilePicker } from "./FilePicker.tsx";
 import type { CommentHandlers } from "./ReviewComments.tsx";
-import { GitIcon, PencilIcon } from "./Icons.tsx";
+import { GitIcon, PencilIcon, WorktreeIcon } from "./Icons.tsx";
 import { cachedStatus, watchStatus, type GitRepo } from "./useGitRepo.ts";
 
 /** Branch state in one line, for headers and cards. */
@@ -41,9 +41,29 @@ export function GitBadge({ cwd, compact = false }: { cwd: string; compact?: bool
   if (!status?.isRepo) return null;
   const dirty = status.counts.staged + status.counts.unstaged + status.counts.untracked;
 
+  /**
+   * In a linked worktree the directory name is the worktree's, not the repository's,
+   * so a card sitting in `app-feat-login` would otherwise never mention `app`. The
+   * repo name is prepended and the icon changes, which is what keeps five cards on
+   * five checkouts of one repo distinguishable from five unrelated projects.
+   */
+  const repo = status.isLinkedWorktree && status.mainRoot
+    ? (status.mainRoot.split("/").filter(Boolean).pop() ?? null)
+    : null;
+
   return (
-    <span className={`git-badge ${compact ? "compact" : ""}`} title={`${status.name} · ${status.root}`}>
-      <GitIcon />
+    <span
+      className={`git-badge ${compact ? "compact" : ""}`}
+      title={
+        status.isLinkedWorktree
+          ? `${repo ?? status.name} · ${status.branch ?? "detached"} · worktree at ${status.root}`
+          : `${status.name} · ${status.root}`
+      }
+    >
+      {status.isLinkedWorktree ? <WorktreeIcon /> : <GitIcon />}
+      {/* Shown even when compact: the session cards are the crowded place, and they
+          are also the one place where telling two checkouts apart actually matters. */}
+      {repo && <span className="git-badge-repo">{repo}</span>}
       <span className="git-badge-branch">
         {status.detached ? `detached ${status.head?.slice(0, 7)}` : status.branch}
       </span>
@@ -58,7 +78,7 @@ export function GitBadge({ cwd, compact = false }: { cwd: string; compact?: bool
 /**
  * What this branch is doing — the reading half of git.
  *
- * Two scopes answer two different questions: "worktree" is what is uncommitted
+ * Two scopes answer two different questions: "uncommitted" is what is uncommitted
  * right now — the code a session just wrote and you have not reviewed — and
  * "branch" is everything this branch adds over its base, which is what a PR would
  * contain. Staging lives here because picking files is part of reading them; the
@@ -81,7 +101,7 @@ export const GitPanel = memo(function GitPanel({
   agentKey?: string | null;
 }) {
   const { cwd, status, busy, stage, unstage, discard } = repo;
-  const [scope, setScope] = useState<DiffScope>("worktree");
+  const [scope, setScope] = useState<DiffScope>("uncommitted");
   const [file, setFile] = useState<string | null>(null);
   const [patch, setPatch] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -186,17 +206,19 @@ export const GitPanel = memo(function GitPanel({
    * branch tracking, and hiding them everywhere would lose them.
    */
   const repoRoot = status?.root ?? null;
+  /** Identity of the repository rather than this checkout — see commentApi.list. */
+  const repoKey = status?.commonDir ?? null;
   const branch = status?.branch ?? null;
   const reload = useCallback(() => {
     if (!repoRoot) return;
     commentApi
-      .list(repoRoot, branch)
+      .list(repoRoot, branch, repoKey)
       .then((r) => {
         setComments(r.comments);
         setOffBranch(r.offBranch);
       })
       .catch(() => {});
-  }, [repoRoot, branch]);
+  }, [repoRoot, repoKey, branch]);
 
   useEffect(reload, [reload]);
 
@@ -213,15 +235,15 @@ export const GitPanel = memo(function GitPanel({
   /** Fetch the repo-wide list and keep what this branch's scope excluded. */
   const loadOther = useCallback(async () => {
     if (!repoRoot) return;
-    const r = await commentApi.list(repoRoot).catch(() => null);
+    const r = await commentApi.list(repoRoot, undefined, repoKey).catch(() => null);
     if (!r) return;
     setOtherRows(r.comments.filter((c) => c.status === "open" && c.branch && c.branch !== branch));
-  }, [repoRoot, branch]);
+  }, [repoRoot, repoKey, branch]);
 
   const handlers: CommentHandlers = {
     add: async (input) => {
       if (!repoRoot) return;
-      await commentApi.add({ ...input, repo: repoRoot, branch }).catch(() => {});
+      await commentApi.add({ ...input, repo: repoRoot, repoKey, branch }).catch(() => {});
       reload();
     },
     update: async (id, patch) => {
@@ -308,7 +330,7 @@ export const GitPanel = memo(function GitPanel({
    * groups: part of it is going into the next commit and part of it isn't, and one
    * row in one group can't say that.
    */
-  const staging = scope === "worktree";
+  const staging = scope === "uncommitted";
   const stagedFiles = staging ? files.filter((f) => f.staged) : [];
   const pendingFiles = staging ? files.filter((f) => f.unstaged || f.untracked) : [];
 
@@ -416,7 +438,7 @@ export const GitPanel = memo(function GitPanel({
         <>
           <div className="git-controls">
             <div className="seg">
-              <button className={scope === "worktree" ? "active" : ""} onClick={() => { setScope("worktree"); setFile(null); }}>
+              <button className={scope === "uncommitted" ? "active" : ""} onClick={() => { setScope("uncommitted"); setFile(null); }}>
                 Uncommitted
                 {status.counts.staged + status.counts.unstaged + status.counts.untracked > 0 &&
                   ` (${status.counts.staged + status.counts.unstaged + status.counts.untracked})`}
@@ -525,7 +547,7 @@ export const GitPanel = memo(function GitPanel({
                   </span>
                   {/* A comment on a committed file is unreachable from the working
                       tree, so offer the scope that does show it. */}
-                  {elsewhere > 0 && scope === "worktree" && (
+                  {elsewhere > 0 && scope === "uncommitted" && (
                     <button
                       className="link-btn inline"
                       onClick={() => {
@@ -701,7 +723,7 @@ export const GitPanel = memo(function GitPanel({
                   // Only the working tree has anything to discard; a branch-scope
                   // patch is commits, which this panel does not rewrite.
                   onDiscard={
-                    scope === "worktree"
+                    scope === "uncommitted"
                       ? (path, from) => void discard(from ? [path, from] : [path])
                       : undefined
                   }
@@ -717,7 +739,7 @@ export const GitPanel = memo(function GitPanel({
                   }}
                   review={repoRoot ? { comments, handlers, showResolved } : undefined}
                   emptyLabel={
-                    scope === "worktree" ? "Working tree is clean." : "This branch adds no changes."
+                    scope === "uncommitted" ? "Working tree is clean." : "This branch adds no changes."
                   }
                 />
               )}

@@ -120,6 +120,22 @@ function migrate(db: Database) {
   // auto-generated one cannot quietly replace it.
   ensureColumn(db, "sessions", "title_custom", "INTEGER NOT NULL DEFAULT 0");
 
+  /**
+   * Which repository a session's cwd belongs to, and which checkout of it.
+   *
+   * Transcripts are keyed by cwd, so every worktree of one repo files as a separate
+   * project — the thing that made five checkouts of one codebase look like five
+   * unrelated projects in History. `repo_key` is the shared `.git`, so all of them
+   * group under one repository again.
+   *
+   * Both are derived from `cwd` alone, never from the transcript, which is why filling
+   * them in needs no re-index: see repoKeys.ts. NULL means "not resolved yet", and a
+   * cwd that is not in a repository stays NULL for good.
+   */
+  ensureColumn(db, "sessions", "repo_key", "TEXT");
+  ensureColumn(db, "sessions", "worktree_root", "TEXT");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_repo ON sessions(repo_key)");
+
   if (needsBackfill) {
     // A missing offset makes the next pass a full re-read, which clears and
     // rebuilds each session's rows — so this is a re-index, not a duplication.

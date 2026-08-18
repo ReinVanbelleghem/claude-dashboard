@@ -137,9 +137,9 @@ metadata sidebar.
 ### Git and review
 
 Git for the session's repository. Reading is unrestricted. Writing is deliberately
-narrow: switch branch, stage, commit, push, pull, fetch, edit or discard a named file.
-Anything that can lose work wholesale or leave a conflicted tree — merge, rebase,
-reset, force-push — stays in a terminal.
+narrow: switch branch, stage, commit, push, pull, fetch, edit or discard a named file,
+and add or remove a worktree. Anything that can lose work wholesale or leave a
+conflicted tree — merge, rebase, reset, force-push — stays in a terminal.
 
 The two halves are split by what they are for. **Git** in the sidebar is what you act
 on — branch, pull, push, commit — and stays put while the page grows. The panel below
@@ -216,6 +216,65 @@ repository state, so a commit made in one empties the file list in the other.
   on a comment you were not shown. A comment whose line has since changed is flagged as
   adrift rather than silently re-pointed
 
+### Worktrees
+
+One session per branch, without the sessions fighting over one checkout. A git worktree
+is a second working directory for the same repository — its own branch, its own index,
+one shared object store — so a session can work `feat/login` while another stays on
+`main` and neither moves the files under the other.
+
+- **New worktree** from the Worktrees panel, or straight from **+ New session** with
+  *Work in a new worktree*, which is the flow this exists for: name a branch and the
+  session starts in a checkout of its own. Created beside the repository as
+  `<repo>-<branch>` — `~/src/app` on `feat/login` becomes `~/src/app-feat-login` — with
+  the branch name slugified, since a `/` in a path would nest the directory somewhere
+  nothing looks. Settings → Git can point them elsewhere
+- **A fresh checkout holds only what git tracks**, which is not enough to run anything:
+  no `node_modules`, no `.env`. So a declared set of paths is carried over —
+  `node_modules` symlinked because copying one is slow and doubles the disk, `.env` and
+  friends copied because a symlink would mean editing one checkout's secrets edits every
+  other one's. **Only paths git ignores are carried**: anything else would arrive as
+  untracked work, turn up in the diff and in *stage all*, and — since a dirty worktree is
+  refused — leave the new worktree impossible to remove. It is checked twice, once against
+  the source and again against what actually landed, because whether git ignores something
+  depends on what it *is*: the conventional `node_modules/` pattern matches a directory and
+  not a symlink to one. A path that fails the second check is taken back out and named in
+  the result. The list is `ui.worktreeProvision` in `settings.json`
+- **That `node_modules/` trailing slash is worth knowing about**, since it is what most
+  repos have and it is why a symlink would otherwise be left behind. Settings → Git
+  can allow provisioning to add the bare path to `.git/info/exclude` — the local ignore
+  file git never commits, which matches a symlink as well as a directory, and which
+  changes nothing in your main checkout where `node_modules` is a real directory already
+  ignored. Off by default: it writes inside your repository's git directory
+- **A branch can only be checked out once.** The branch popover knows which worktree
+  holds which branch, so a branch open elsewhere offers **open that checkout** instead of
+  a switch that git would refuse. The refusal is still handled if a worktree appears
+  between the list being drawn and the click landing
+- **Remove** deletes the directory and nothing else: the branch and every commit on it
+  survive, which is why it needs no confirmation beyond the one it asks for. Uncommitted
+  work does not survive and exists in no git object, so **a dirty worktree is refused** —
+  `--force` is never passed, and the refusal counts the files. A worktree with a live
+  session in it is refused too, since git would happily delete the directory out from
+  under a running process. The main checkout is never removable, nor is a locked one
+- **Review comments follow the branch, not the directory.** They are keyed by the shared
+  `.git`, so a comment written against `feat/login` in one checkout is there when you look
+  at `feat/login` in another. Comments written before this shipped keep working against
+  the checkout they were made in
+- **The Worktrees tab is the same panel for every repository at once.** Cleaning up is
+  the one worktree job you cannot do from a session, because a checkout you are finished
+  with is one you have no session open in. The repository list folds session history and
+  the configured worktree directory onto the shared `.git`, so a checkout nothing has run
+  in yet shows up too, and each group creates, opens and removes exactly as the
+  in-session panel does
+- **Sessions group by repository.** Transcripts are keyed by working directory, so every
+  worktree used to file as a separate project — and so did every subdirectory a session
+  happened to run in. History and Usage now roll those up under the repository, with each
+  real checkout listed underneath
+
+Writes are serialised in two tiers, because worktrees share a ref store but not an index:
+per checkout for staging, committing and switching, and per repository for fetching and
+for worktree add/remove.
+
 ### History and Usage
 
 Full-text search over every prompt you have typed, across every project, **paginated**
@@ -230,7 +289,7 @@ are pay-as-you-go list-price equivalents, not what a subscription charges.
 
 ### Settings
 
-Four sections behind a left rail — Appearance, Notifications, Sessions, Diffs — one
+Four sections behind a left rail — Appearance, Notifications, Sessions, Git — one
 panel at a time, with the section you last used remembered. Everything saves as you
 change it; there is no save button.
 
@@ -371,7 +430,7 @@ is invisible to lines already consumed. Rows are rebuilt, not duplicated.
 ~/.claude/projects/**.jsonl ──► indexer ──► index.db ──► History, Usage, transcripts
 ~/.claude/sessions/*.json   ──► registry ─────────────► Live (external sessions)
 Agent SDK child processes   ──► agents.ts ────────────► Live (your sessions), chat
-git                         ──► git.ts ───────────────► branches, diffs, history, switch
+git                         ──► git.ts ───────────────► branches, diffs, history, switch, worktrees
 ```
 
 The UI holds **one SSE connection** (`/api/events`) that carries live session state,
@@ -386,7 +445,9 @@ usage rollups, index ticks, agent timelines, streaming tokens, and notifications
 | `db.ts` | SQLite schema and migrations |
 | `agents.ts` | Sessions the dashboard owns: spawn, stream, permissions, subagents |
 | `registry.ts` | Reads Claude Code's own session registry |
-| `git.ts` | Git: never a shell, always `--no-optional-locks`; writes are limited to switch/create/fetch, serialised per repo, ref names validated by git itself |
+| `git.ts` | Git: never a shell, always `--no-optional-locks`; writes are limited to switch/create/fetch and worktree add/remove, ref names validated by git itself, and serialised in two tiers — per checkout for the index, per repository for the shared ref store |
+| `provision.ts` | What a new worktree carries over so it can actually run |
+| `repoKeys.ts` | Which repository each indexed session belongs to, so worktrees group |
 | `comments.ts` | Review comments and the prompt they compose into |
 | `notify.ts` | Whether, when and where to interrupt you |
 | `settings.ts`, `config.ts`, `dirs.ts`, `usage.ts`, `paths.ts` | Preferences, pricing, folder picking, rollups, paths |
@@ -416,5 +477,6 @@ rendered as React elements, never `innerHTML`, so a transcript cannot inject mar
 - **Subagent transcripts are not indexed.** They exist under
   `~/.claude/projects/<dir>/<sessionId>/subagents/` but the indexer reads only
   top-level files, so subagent work is missing from History and usage totals
-- **Sessions in a git worktree file as a separate project**, since transcripts are
-  keyed by cwd
+- **A worktree's own directory name is what the OS shows**, so two checkouts of one
+  repository are told apart in the dashboard by the `repo ▸ branch` badge rather than by
+  their window titles

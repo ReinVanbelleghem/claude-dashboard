@@ -17,10 +17,13 @@ import type { GitRepo } from "./useGitRepo.ts";
 export const GitControls = memo(function GitControls({
   repo,
   agentKey,
+  onOpenWorktree,
 }: {
   repo: GitRepo;
   /** The session working in this directory, when the dashboard owns one. */
   agentKey?: string | null;
+  /** Start work in another checkout of this repo, for a branch already held there. */
+  onOpenWorktree?: (path: string) => void;
 }) {
   const { status, busy, notice } = repo;
 
@@ -44,6 +47,7 @@ export const GitControls = memo(function GitControls({
         status={status}
         onSwitched={repo.applySwitch}
         sessionHere={!!agentKey}
+        onOpenWorktree={onOpenWorktree}
       />
 
       <p className="hint git-meta">

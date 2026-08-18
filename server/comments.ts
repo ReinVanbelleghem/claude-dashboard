@@ -21,8 +21,18 @@ export type CommentSide = "old" | "new";
 
 export type ReviewComment = {
   id: string;
-  /** Absolute path of the repository root. */
+  /**
+   * Absolute path of the checkout the comment was written against. Kept as the stored
+   * identity so nothing written before worktree support became unreachable.
+   */
   repo: string;
+  /**
+   * The repository's shared `.git`, which every worktree of it has in common. This is
+   * what makes a comment follow the code rather than the directory: the same branch
+   * checked out in a second worktree is the same lines, so the review belongs there
+   * too. Absent on comments written before this existed — see migrateRepoKeys.
+   */
+  repoKey?: string | null;
   /** Repo-relative file path. Empty string for a comment about the review itself. */
   path: string;
   /** 1-based line number, or null for a file-level comment. */
@@ -110,10 +120,27 @@ function onBranch(c: ReviewComment, branch: string | null): boolean {
  * a name means that branch, and `null` means a detached HEAD — where the only
  * comments that can apply are the ones written with no branch of their own.
  */
-export function listComments(repo?: string, branch?: string | null): ReviewComment[] {
+/**
+ * Does this comment belong to the repository being asked about?
+ *
+ * Two ways to match, and the fallback matters. `repoKey` is the shared `.git`, so it
+ * holds across every worktree of one repository — that is the point. But a comment
+ * written before that field existed has only the checkout path it was made in, and
+ * dropping those would make an existing review vanish. So the stored path still counts.
+ */
+function inRepo(c: ReviewComment, repo: string, repoKey?: string | null): boolean {
+  if (repoKey && c.repoKey) return c.repoKey === repoKey;
+  return c.repo === repo;
+}
+
+export function listComments(
+  repo?: string,
+  branch?: string | null,
+  repoKey?: string | null,
+): ReviewComment[] {
   // Re-read so a second dashboard tab, or an edit made by hand, is picked up.
   load();
-  let rows = repo ? all.filter((c) => c.repo === repo) : all;
+  let rows = repo ? all.filter((c) => inRepo(c, repo, repoKey)) : all;
   if (branch !== undefined) rows = rows.filter((c) => onBranch(c, branch));
   // Oldest first within a file, so a thread reads top to bottom.
   return [...rows].sort(
@@ -128,13 +155,60 @@ export function listComments(repo?: string, branch?: string | null): ReviewComme
  * here, but a review you cannot see and cannot count is one you forget you wrote.
  * This is what lets the UI offer a way back to them without putting them on screen.
  */
-export function countOffBranch(repo: string, branch: string | null): number {
+export function countOffBranch(
+  repo: string,
+  branch: string | null,
+  repoKey?: string | null,
+): number {
   load();
-  return all.filter((c) => c.repo === repo && c.status === "open" && !onBranch(c, branch)).length;
+  return all.filter((c) => inRepo(c, repo, repoKey) && c.status === "open" && !onBranch(c, branch))
+    .length;
+}
+
+/**
+ * Stamp `repoKey` onto comments written before it existed.
+ *
+ * Runs once at boot. Non-destructive by construction: `repo` is left exactly as it was,
+ * so the fallback in inRepo() keeps working even for a repository this cannot resolve —
+ * one whose directory has since moved or been deleted. Resolving is per distinct
+ * repository path, of which there are a handful, so this is a few git calls at most.
+ */
+export async function migrateRepoKeys(
+  resolve: (repo: string) => Promise<string | null>,
+): Promise<number> {
+  if (!load()) return 0;
+  const paths = [...new Set(all.filter((c) => !c.repoKey).map((c) => c.repo))];
+  if (paths.length === 0) return 0;
+
+  /**
+   * Resolved before the write, not during it: `mutate` re-reads the file and must stay
+   * synchronous, since awaiting inside it would reopen the read-modify-write race it
+   * exists to close.
+   */
+  const keys = new Map<string, string>();
+  for (const path of paths) {
+    const key = await resolve(path);
+    if (key) keys.set(path, key);
+  }
+  if (keys.size === 0) return 0;
+
+  return (
+    mutate((rows) => {
+      let stamped = 0;
+      const next = rows.map((c) => {
+        const key = c.repoKey ? null : keys.get(c.repo);
+        if (!key) return c;
+        stamped++;
+        return { ...c, repoKey: key };
+      });
+      return { rows: next, result: stamped };
+    }) ?? 0
+  );
 }
 
 export function addComment(input: {
   repo: string;
+  repoKey?: string | null;
   path?: string;
   line?: number | null;
   side?: CommentSide;
@@ -148,6 +222,7 @@ export function addComment(input: {
   const comment: ReviewComment = {
     id: randomUUID(),
     repo: input.repo,
+    repoKey: input.repoKey ?? null,
     path: input.path ?? "",
     line: input.line ?? null,
     side: input.side ?? "new",

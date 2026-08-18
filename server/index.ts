@@ -1,5 +1,5 @@
 import { watch } from "node:fs";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -18,6 +18,7 @@ import {
   restoreAgent,
   interruptAgent,
   listAgents,
+  agentsUnder,
   ownedSessionIds,
   rosterPayload,
   sendMessage,
@@ -37,6 +38,7 @@ import {
   deleteComment,
   listComments,
   markSent,
+  migrateRepoKeys,
   updateComment,
 } from "./comments.ts";
 import { loadConfig } from "./config.ts";
@@ -58,8 +60,14 @@ import {
   show as gitShow,
   stage as gitStage,
   unstage as gitUnstage,
+  worktreeAdd as gitWorktreeAdd,
+  worktreePrune as gitWorktreePrune,
+  worktreeRemove as gitWorktreeRemove,
+  worktrees as gitWorktrees,
+  worktreeRepos as gitWorktreeRepos,
 } from "./git.ts";
 import { indexOnce } from "./indexer.ts";
+import { invalidateRepoKeys, resolveRepoKeys } from "./repoKeys.ts";
 import {
   reconcile,
   sendTestNotification,
@@ -96,6 +104,15 @@ console.log(
       ` via ${channels.join(", ") || "no channel"} (${n.delaySeconds}s delay)`,
   );
 }
+/**
+ * Stamp the repository key onto reviews written before worktree support. One pass, a
+ * few git calls, and nothing is rewritten that this cannot resolve.
+ */
+{
+  const stamped = await migrateRepoKeys(async (repo) => (await repoStatus(repo)).commonDir);
+  if (stamped > 0) console.log(`[claude-dashboard] tagged ${stamped} review comment(s) with their repository`);
+}
+
 console.log("[claude-dashboard] backfilling index…");
 const t0 = Date.now();
 const touched = await indexOnce(db);
@@ -394,6 +411,12 @@ setInterval(async () => {
       broadcast("index", { at: Date.now() });
       broadcast("usage", usageSummary(db, cfg, Date.now()));
     }
+    /**
+     * Runs after the index pass rather than inside it: this one spawns git, and the
+     * indexer is synchronous throughout. A batch at a time, so a first run over a large
+     * history cannot stall the tick.
+     */
+    if ((await resolveRepoKeys(db)) > 0) broadcast("index", { at: Date.now() });
   } catch (err) {
     console.error("[claude-dashboard] index pass failed:", err);
   }
@@ -523,20 +546,71 @@ function overview() {
   // "/" with "-", so a path segment containing a dash is unrecoverable from it.
   const projects = db
     .query<
-      { project_slug: string; cwd: string | null; sessions: number; last_ts: number | null },
+      {
+        project_slug: string;
+        cwd: string | null;
+        sessions: number;
+        last_ts: number | null;
+        repo_key: string | null;
+        worktree_root: string | null;
+      },
       []
     >(
-      `SELECT project_slug, MAX(cwd) AS cwd, COUNT(*) AS sessions, MAX(last_ts) AS last_ts
+      `SELECT project_slug, MAX(cwd) AS cwd, COUNT(*) AS sessions, MAX(last_ts) AS last_ts,
+              MAX(repo_key) AS repo_key, MAX(worktree_root) AS worktree_root
          FROM sessions GROUP BY project_slug ORDER BY last_ts DESC`,
     )
     .all()
     .map((p) => ({ ...p, path: p.cwd ?? slugToPath(p.project_slug) }));
+
+  /**
+   * The same sessions, grouped by the repository they belong to and then by the checkout
+   * they ran in.
+   *
+   * Two levels, because a cwd is neither. Sessions run in subdirectories all the time —
+   * `backend/projects/tms` and `backend/platform/redis-queue` are one checkout of one
+   * repository — so grouping on cwd invents checkouts that do not exist. `worktree_root`
+   * is the real checkout, and `repo_key` the real repository, which is why the rollup
+   * uses those and not the project slug.
+   *
+   * Reported only when a repository genuinely has more than one checkout. Otherwise this
+   * would be a heading over a single child, restating what `projects` already says.
+   */
+  const byRepo = new Map<string, Map<string, { sessions: number; last_ts: number | null }>>();
+  for (const p of projects) {
+    if (!p.repo_key || !p.worktree_root) continue;
+    let trees = byRepo.get(p.repo_key);
+    if (!trees) byRepo.set(p.repo_key, (trees = new Map()));
+    const prev = trees.get(p.worktree_root);
+    trees.set(p.worktree_root, {
+      sessions: (prev?.sessions ?? 0) + p.sessions,
+      last_ts: Math.max(prev?.last_ts ?? 0, p.last_ts ?? 0) || null,
+    });
+  }
+
+  const repos = [...byRepo.entries()]
+    .filter(([, trees]) => trees.size > 1)
+    .map(([repoKey, trees]) => {
+      const checkouts = [...trees.entries()]
+        .map(([path, v]) => ({ path, sessions: v.sessions, last_ts: v.last_ts }))
+        .sort((a, b) => (b.last_ts ?? 0) - (a.last_ts ?? 0));
+      return {
+        repoKey,
+        // `<repo>/.git` → `repo`. The checkout directories are named for their branches,
+        // so none of them is a good name for the repository itself.
+        name: repoKey.replace(/\/\.git$/, "").split("/").filter(Boolean).pop() ?? repoKey,
+        sessions: checkouts.reduce((n, c) => n + c.sessions, 0),
+        last_ts: checkouts.reduce<number | null>((m, c) => (c.last_ts && (!m || c.last_ts > m) ? c.last_ts : m), null),
+        checkouts,
+      };
+    })
+    .sort((a, b) => (b.last_ts ?? 0) - (a.last_ts ?? 0));
   const topTools = db
     .query<{ name: string; count: number }, []>(
       "SELECT name, SUM(count) AS count FROM tools GROUP BY name ORDER BY count DESC LIMIT 15",
     )
     .all();
-  return { totals, projects, topTools };
+  return { totals, projects, repos, topTools };
 }
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────
@@ -563,8 +637,11 @@ const server = Bun.serve({
 
     if (p === "/api/agents/restore" && req.method === "POST") {
       const body = (await req.json().catch(() => ({}))) as { sessionId?: string };
-      const key = body.sessionId ? restoreAgent(body.sessionId) : null;
-      return key ? json({ key }) : json({ error: "unknown session" }, 404);
+      const r = body.sessionId ? restoreAgent(body.sessionId) : { error: "unknown session" };
+      if ("key" in r) return json({ key: r.key });
+      // A missing directory is a different failure from a missing session: the
+      // session is known, its checkout is not there any more.
+      return json({ error: r.error }, r.error === "unknown session" ? 404 : 409);
     }
 
     if (p === "/api/agents/forget" && req.method === "POST") {
@@ -704,10 +781,16 @@ const server = Bun.serve({
         const branch = url.searchParams.has("branch")
           ? url.searchParams.get("branch") || null
           : undefined;
-        const comments = listComments(repo, branch);
+        /**
+         * The repository's shared `.git`, when the caller knows it. Supplying it is what
+         * lets a comment written in one worktree show up in another on the same branch;
+         * without it the read falls back to matching the checkout path, exactly as before.
+         */
+        const repoKey = url.searchParams.get("repoKey") || undefined;
+        const comments = listComments(repo, branch, repoKey);
         return json({
           comments,
-          offBranch: repo && branch !== undefined ? countOffBranch(repo, branch) : 0,
+          offBranch: repo && branch !== undefined ? countOffBranch(repo, branch, repoKey) : 0,
         });
       }
       if (req.method === "POST") {
@@ -766,6 +849,21 @@ const server = Bun.serve({
       const action = p.slice("/api/git/".length);
 
       /**
+       * Every open tab is showing a branch name that may have just changed. `repoKey`
+       * is the shared `.git`, which is what lets a tab sitting in a *different*
+       * worktree of the same repository know a fetch or a branch creation concerns it
+       * too — `root` alone only ever matches the one checkout that was written.
+       */
+      const gitChanged = (r: { ok: boolean; status: { root: string | null; branch: string | null; commonDir: string | null } | null }) => {
+        if (!r.ok) return;
+        broadcast("git", {
+          root: r.status?.root ?? null,
+          branch: r.status?.branch ?? null,
+          repoKey: r.status?.commonDir ?? null,
+        });
+      };
+
+      /**
        * Writes take cwd from the body rather than the query string: they are POSTs,
        * and a mutating URL is one accidental link-share away from being followed.
        */
@@ -776,6 +874,8 @@ const server = Bun.serve({
           create?: boolean;
           from?: string;
           paths?: unknown;
+          path?: string;
+          provision?: boolean;
           all?: boolean;
           message?: string;
           noVerify?: boolean;
@@ -786,12 +886,72 @@ const server = Bun.serve({
         /** Paths only ever arrive as a list of strings; git.ts validates each one. */
         const paths = Array.isArray(b.paths) ? b.paths.filter((x): x is string => typeof x === "string") : [];
 
+        if (action === "worktree-add") {
+          const branch = b.branch?.trim();
+          if (!branch) return json({ error: "branch is required" }, 400);
+          const ui = getSettings().ui;
+          const r = await gitWorktreeAdd(root, {
+            branch,
+            create: !!b.create,
+            from: b.from,
+            path: b.path,
+            root: ui.worktreeRoot || undefined,
+            /**
+             * Opt-out per request, so a caller that wants a bare checkout can say so
+             * while the dialog's normal path gets a tree it can actually run in.
+             */
+            provision: b.provision === false ? [] : (ui.worktreeProvision ?? []),
+            excludeProvisioned: ui.worktreeExclude === true,
+          });
+          if (r.ok) {
+            gitChanged(r);
+            invalidateRepoKeys(db);
+            broadcast("worktrees", { repoKey: r.status?.commonDir ?? null, worktrees: r.worktrees });
+          }
+          return json(r, r.ok ? 200 : 409);
+        }
+
+        if (action === "worktree-remove") {
+          const path = b.path?.trim();
+          if (!path) return json({ error: "path is required" }, 400);
+          /**
+           * A session working inside the checkout is a refusal the daemon has to make:
+           * git only knows about files, and would happily delete the directory out from
+           * under a running child process.
+           */
+          const busy = agentsUnder(path);
+          if (busy.length > 0)
+            return json(
+              {
+                ok: false,
+                status: null,
+                worktrees: [],
+                path: null,
+                error: `${busy.length} session${busy.length === 1 ? " is" : "s are"} running in that worktree`,
+                hint: "End them first — removing it would pull the files out from under them.",
+              },
+              409,
+            );
+          const r = await gitWorktreeRemove(root, path);
+          if (r.ok) {
+            gitChanged(r);
+            broadcast("worktrees", { repoKey: r.status?.commonDir ?? null, worktrees: r.worktrees });
+          }
+          return json(r, r.ok ? 200 : 409);
+        }
+
+        if (action === "worktree-prune") {
+          const r = await gitWorktreePrune(root);
+          if (r.ok) broadcast("worktrees", { repoKey: r.status?.commonDir ?? null, worktrees: r.worktrees });
+          return json(r, r.ok ? 200 : 409);
+        }
+
         if (action === "checkout") {
           const branch = b.branch?.trim();
           if (!branch) return json({ error: "branch is required" }, 400);
           const r = await gitCheckout(root, { branch, create: !!b.create, from: b.from });
           // Every open tab is showing a branch name that may have just changed.
-          if (r.ok) broadcast("git", { root: r.status?.root ?? null, branch: r.status?.branch ?? null });
+          gitChanged(r);
           return json(r, r.ok ? 200 : 409);
         }
 
@@ -803,7 +963,7 @@ const server = Bun.serve({
         if (action === "pull") {
           const r = await gitPull(root);
           // HEAD moved, so every tab's branch line and diff is now behind.
-          if (r.ok) broadcast("git", { root: r.status?.root ?? null, branch: r.status?.branch ?? null });
+          gitChanged(r);
           return json(r, r.ok ? 200 : 409);
         }
 
@@ -812,7 +972,7 @@ const server = Bun.serve({
           const fn = action === "stage" ? gitStage : gitUnstage;
           const r = await fn(root, { paths, all: !!b.all });
           // The index changed, so any tab showing this repo's file list is stale.
-          if (r.ok) broadcast("git", { root: r.status?.root ?? null, branch: r.status?.branch ?? null });
+          gitChanged(r);
           return json(r, r.ok ? 200 : 409);
         }
 
@@ -821,7 +981,7 @@ const server = Bun.serve({
         if (action === "discard") {
           if (!paths.length) return json({ error: "paths are required" }, 400);
           const r = await gitDiscard(root, paths);
-          if (r.ok) broadcast("git", { root: r.status?.root ?? null, branch: r.status?.branch ?? null });
+          gitChanged(r);
           return json(r, r.ok ? 200 : 409);
         }
 
@@ -829,17 +989,50 @@ const server = Bun.serve({
           const message = typeof b.message === "string" ? b.message : "";
           const r = await gitCommit(root, message, { noVerify: !!b.noVerify });
           // HEAD moved: branch history, the ahead count and the diff all changed.
-          if (r.ok) broadcast("git", { root: r.status?.root ?? null, branch: r.status?.branch ?? null });
+          gitChanged(r);
           return json(r, r.ok ? 200 : 409);
         }
 
         if (action === "push") {
           const r = await gitPush(root);
-          if (r.ok) broadcast("git", { root: r.status?.root ?? null, branch: r.status?.branch ?? null });
+          gitChanged(r);
           return json(r, r.ok ? 200 : 409);
         }
 
         return json({ error: "not found" }, 404);
+      }
+
+      /**
+       * Every repository the dashboard could manage worktrees for — the one read that
+       * is deliberately not about a single cwd, because the manager's question is
+       * "what exists anywhere" rather than "what is beside me".
+       *
+       * Candidates are the checkouts sessions have run in plus whatever sits directly
+       * in the configured worktree directory. That second source is what surfaces a
+       * checkout nothing has run in yet, and one whose sessions have all been forgotten.
+       */
+      if (action === "repos") {
+        const seen = db
+          .query<{ dir: string | null }, []>(
+            `SELECT DISTINCT worktree_root AS dir FROM sessions
+               WHERE worktree_root IS NOT NULL AND worktree_root <> ''`,
+          )
+          .all()
+          .map((r) => r.dir)
+          .filter((d): d is string => !!d);
+        const root = getSettings().ui.worktreeRoot?.trim();
+        let placed: string[] = [];
+        if (root && existsSync(root)) {
+          try {
+            placed = readdirSync(root, { withFileTypes: true })
+              .filter((e) => e.isDirectory() || e.isSymbolicLink())
+              .map((e) => join(root, e.name));
+          } catch {
+            // An unreadable worktree directory is not an error for this list: the
+            // repositories from session history still answer the question.
+          }
+        }
+        return json({ repos: await gitWorktreeRepos([...seen, ...placed]) });
       }
 
       const cwd = url.searchParams.get("cwd");
@@ -859,8 +1052,12 @@ const server = Bun.serve({
         return json(await repoStatus(cwd, url.searchParams.get("force") === "1"));
       }
 
+      if (action === "worktrees") {
+        return json(await gitWorktrees(cwd));
+      }
+
       if (action === "diff") {
-        const scope = url.searchParams.get("scope") === "branch" ? "branch" : "worktree";
+        const scope = url.searchParams.get("scope") === "branch" ? "branch" : "uncommitted";
         return json(
           await gitDiff({
             cwd,

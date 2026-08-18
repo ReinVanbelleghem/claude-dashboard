@@ -36,14 +36,17 @@ import { NewSessionModal } from "./components/NewSessionModal.tsx";
 import { Palette } from "./components/Palette.tsx";
 import { SessionDrawer } from "./components/SessionDrawer.tsx";
 import { SessionPage } from "./components/SessionPage.tsx";
+import { invalidateStatusCache } from "./components/useGitRepo.ts";
 import { SettingsView } from "./components/SettingsView.tsx";
 import { PageScrollJump } from "./components/scroll.tsx";
 import { UsageView } from "./components/UsageView.tsx";
+import { WorktreesView } from "./components/WorktreesView.tsx";
 
-type Tab = "live" | "history" | "usage" | "settings";
+type Tab = "live" | "history" | "worktrees" | "usage" | "settings";
 const TAB_LABEL: Record<Tab, string> = {
   live: "Live",
   history: "History",
+  worktrees: "Worktrees",
   usage: "Usage",
   settings: "Settings",
 };
@@ -65,6 +68,12 @@ export default function App() {
   const [restorable, setRestorable] = useState<Restorable[]>([]);
   const [projects, setProjects] = useState<Overview["projects"]>([]);
   const [showNew, setShowNew] = useState(false);
+  /**
+   * Directory the new-session dialog should open on, set when something else picked
+   * it for you — opening a worktree that already holds the branch you wanted, say.
+   * Null means the dialog falls back to its own shortlist.
+   */
+  const [newIn, setNewIn] = useState<string | null>(null);
   const [showFolders, setShowFolders] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showFind, setShowFind] = useState(false);
@@ -191,6 +200,16 @@ export default function App() {
       };
     });
     es.addEventListener("index", () => refreshRecent());
+
+    /**
+     * Something wrote to a repository, possibly in another tab or another worktree of it.
+     * Dropping the shared status cache is what makes every branch badge on the page — and
+     * the worktree list, which watches the same signal — re-read instead of showing a
+     * branch that has since moved.
+     */
+    const wrote = () => invalidateStatusCache();
+    es.addEventListener("git", wrote);
+    es.addEventListener("worktrees", wrote);
     // Owned-session traffic: the roster lives here, the rest goes to the bus for
     // whichever chat pane is open.
     es.addEventListener("agents", (e) => {
@@ -333,7 +352,7 @@ export default function App() {
         </span>
         <span className="spacer" />
         <nav className="tabs">
-          {(["live", "history", "usage", "settings"] as Tab[]).map((t) => (
+          {(["live", "history", "worktrees", "usage", "settings"] as Tab[]).map((t) => (
             <button
               key={t}
               aria-selected={tab === t && !pageId}
@@ -373,10 +392,19 @@ export default function App() {
           onContinue={async (sessionId, cwd) => {
             await agentApi.start({ cwd, resume: sessionId });
           }}
+          // A branch checked out in another worktree cannot be switched to here, so
+          // the offer is to start a session in the checkout that does hold it.
+          onOpenWorktree={(path) => {
+            setNewIn(path);
+            setShowNew(true);
+          }}
         />
       )}
 
-      {!pageId && usage && (
+      {/* Budget tiles answer "how much have I spent", which is a question the Live and
+          Usage tabs are about. On Worktrees and Settings they are a header you scroll
+          past to reach the thing you came for. */}
+      {!pageId && usage && tab !== "worktrees" && tab !== "settings" && (
         <div className="kpis">
           {/* Tokens here are fresh tokens: cache reads are excluded and shown
               separately, since they are ~97% of raw volume at a tenth the rate. */}
@@ -432,6 +460,17 @@ export default function App() {
         />
       )}
       {!pageId && tab === "history" && <HistoryView onOpen={openSession} />}
+      {!pageId && tab === "worktrees" && (
+        <WorktreesView
+          settings={settings}
+          // The same offer the session page makes: a checkout is only useful with a
+          // session in it, and the new-session dialog is where a session is configured.
+          onOpenWorktree={(path) => {
+            setNewIn(path);
+            setShowNew(true);
+          }}
+        />
+      )}
       {!pageId && tab === "usage" && <UsageView usage={usage} />}
       {!pageId && tab === "settings" && (
         <SettingsView
@@ -478,9 +517,14 @@ export default function App() {
       {showNew && (
         <NewSessionModal
           projects={projects}
-          onClose={() => setShowNew(false)}
+          initialCwd={newIn}
+          onClose={() => {
+            setShowNew(false);
+            setNewIn(null);
+          }}
           onStarted={(key) => {
             setShowNew(false);
+            setNewIn(null);
             setTab("live");
             window.location.hash = "";
             setOpenId(key);

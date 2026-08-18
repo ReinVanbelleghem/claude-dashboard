@@ -2,6 +2,43 @@ import { useEffect, useState } from "react";
 import { api, fmtTokens, fmtUsd, type Overview, type UsagePayload } from "../api.ts";
 import { HBars, Sparkline } from "./Charts.tsx";
 
+/**
+ * One bar per codebase, not per directory.
+ *
+ * A worktree has its own cwd, so without this a repository worked on across three
+ * checkouts contributes three bars that each look like a separate project — and none of
+ * them shows the real total. `repos` carries the grouping, so its members collapse into
+ * one row and everything else is passed through untouched.
+ */
+function projectRows(overview: Overview) {
+  const tilde = (p: string) => p.replace(/^\/Users\/[^/]+\//, "~/");
+  /**
+   * A project is already covered when its checkout is one of a grouped repository's.
+   * Matched on worktree_root rather than path, since several cwds share one checkout.
+   */
+  const grouped = new Set(overview.repos.flatMap((r) => r.checkouts.map((c) => c.path)));
+
+  const rows = overview.projects
+    .filter((p) => !p.worktree_root || !grouped.has(p.worktree_root))
+    .map((p) => ({
+      label: tilde(p.path),
+      value: p.sessions,
+      hint: `${p.path}: ${p.sessions} sessions`,
+    }));
+
+  for (const r of overview.repos) {
+    rows.push({
+      label: `${r.name} (${r.checkouts.length} checkouts)`,
+      value: r.sessions,
+      hint: r.checkouts
+        .map((c) => `${tilde(c.path)}: ${c.sessions}`)
+        .join("\n"),
+    });
+  }
+
+  return rows.sort((a, b) => b.value - a.value);
+}
+
 export function UsageView({ usage }: { usage: UsagePayload | null }) {
   const [overview, setOverview] = useState<Overview | null>(null);
 
@@ -119,15 +156,12 @@ export function UsageView({ usage }: { usage: UsagePayload | null }) {
         <div className="grid-2">
           <div className="panel">
             <h2>Projects</h2>
-            <p className="hint">{overview.totals.sessions} sessions indexed in total.</p>
-            <HBars
-              rows={overview.projects.map((p) => ({
-                label: p.path.replace(/^\/Users\/[^/]+\//, "~/"),
-                value: p.sessions,
-                hint: `${p.path}: ${p.sessions} sessions`,
-              }))}
-              format={(n) => `${n}`}
-            />
+            <p className="hint">
+              {overview.totals.sessions} sessions indexed in total.
+              {overview.repos.length > 0 &&
+                ` Worktrees are counted under the repository they belong to.`}
+            </p>
+            <HBars rows={projectRows(overview)} format={(n) => `${n}`} />
           </div>
           <div className="panel">
             <h2>Most-used tools</h2>

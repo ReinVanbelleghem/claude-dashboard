@@ -12,6 +12,7 @@ import { LiveConversation } from "./Conversation.tsx";
 import { GitControls } from "./GitControls.tsx";
 import { GitBadge, GitPanel } from "./GitPanel.tsx";
 import { useGitRepo } from "./useGitRepo.ts";
+import { hasWorktreeSupport, WorktreesPanel } from "./WorktreesPanel.tsx";
 import { ExternalNotice, turnsOf } from "./SessionDrawer.tsx";
 import { Transcript } from "./Transcript.tsx";
 
@@ -28,6 +29,7 @@ export function SessionPage({
   onSettings,
   onBack,
   onContinue,
+  onOpenWorktree,
 }: {
   id: string;
   /** Set when the dashboard owns this session, which is what makes it writable. */
@@ -38,6 +40,8 @@ export function SessionPage({
   onSettings: (s: Settings) => void;
   onBack: () => void;
   onContinue?: (sessionId: string, cwd: string) => Promise<void>;
+  /** Start work in another checkout of this repository — see BranchSwitcher. */
+  onOpenWorktree?: (path: string) => void;
 }) {
   const [data, setData] = useState<SessionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -191,7 +195,19 @@ export function SessionPage({
         <div className="page-side">
           {/* First in the sidebar: it is the part you act on, and it should not move
               down the page as the session accumulates statistics. */}
-          {cwd && <GitControls repo={repo} agentKey={agent?.key} />}
+          {cwd && (
+            <GitControls repo={repo} agentKey={agent?.key} onOpenWorktree={onOpenWorktree} />
+          )}
+          {/* Below the git controls: acting on this checkout comes first, choosing a
+              different one second. */}
+          {cwd && hasWorktreeSupport(repo.status) && repo.status && (
+            <WorktreesPanel
+              cwd={cwd}
+              status={repo.status}
+              worktreeRoot={settings?.ui.worktreeRoot}
+              onOpenWorktree={onOpenWorktree}
+            />
+          )}
 
           {data && s && (
             <div className="panel">

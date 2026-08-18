@@ -40,13 +40,13 @@ const EVENTS: { kind: NotifyEventKind; label: string; help: string }[] = [
  * scrolling: notifications alone is longer than a screen, and the three short
  * panels were disappearing under it.
  */
-type SectionKey = "appearance" | "notifications" | "sessions" | "diffs";
+type SectionKey = "appearance" | "notifications" | "sessions" | "git";
 
 const SECTIONS: { key: SectionKey; label: string; help: string }[] = [
   { key: "appearance", label: "Appearance", help: "Theme, accent, tab icon" },
   { key: "notifications", label: "Notifications", help: "What interrupts you" },
   { key: "sessions", label: "Sessions", help: "Where a card opens" },
-  { key: "diffs", label: "Diffs", help: "Defaults for the git views" },
+  { key: "git", label: "Git", help: "Diffs and worktrees" },
 ];
 
 const SECTION_KEY = "settings-section";
@@ -90,6 +90,9 @@ export function SettingsView({
   // Remembered, because settings is a place you come back to for one thing.
   const [section, setSection] = useState<SectionKey>(() => {
     const saved = localStorage.getItem(SECTION_KEY);
+    // "diffs" grew into "git" when the worktree settings moved into it, so anyone whose
+    // last visit was that panel lands on it rather than back at the top of the rail.
+    if (saved === "diffs") return "git";
     return SECTIONS.some((s) => s.key === saved) ? (saved as SectionKey) : "appearance";
   });
 
@@ -419,7 +422,7 @@ export function SettingsView({
           </div>
         )}
 
-        {section === "diffs" && (
+        {section === "git" && (
           <div className="panel">
             <h2>Diffs</h2>
             <p className="hint">Defaults for the git views. Changing them here or there is the same thing.</p>
@@ -449,6 +452,60 @@ export function SettingsView({
                 </span>
               </label>
             </div>
+            <h2 style={{ marginTop: 22 }}>Worktrees</h2>
+            <p className="hint">
+              A worktree is a second checkout of one repository, on its own branch, so a session
+              can work a branch without moving the files under any other session. New ones are
+              created beside the repository unless you name a directory here.
+            </p>
+            <label className="field" style={{ maxWidth: 420 }}>
+              <span>Create worktrees in</span>
+              <input
+                className="search"
+                spellCheck={false}
+                placeholder="Beside the repository"
+                defaultValue={settings.ui.worktreeRoot ?? ""}
+                /* On blur rather than per keystroke: a half-typed path is not a setting. */
+                onBlur={(e) => {
+                  const v = e.target.value.trim();
+                  if (v !== (settings.ui.worktreeRoot ?? "")) save({ ui: { worktreeRoot: v } });
+                }}
+              />
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={settings.ui.worktreeExclude === true}
+                onChange={(e) => save({ ui: { worktreeExclude: e.target.checked } })}
+              />
+              <span>Let it add those paths to the repository's local exclude file</span>
+            </label>
+            <p className="hint">
+              A <code>node_modules</code> symlink is not ignored by the usual{" "}
+              <code>node_modules/</code> line, because a trailing slash means directory — so
+              without this the symlink would show as untracked and the worktree could not be
+              removed, and it is left behind instead. Turning this on writes the bare path to{" "}
+              <code>.git/info/exclude</code>, which git never commits and which changes nothing in
+              your main checkout.
+            </p>
+            <p className="hint">
+              {(settings.ui.worktreeProvision ?? []).length > 0 ? (
+                <>
+                  Carried into each new worktree, when git ignores it:{" "}
+                  {(settings.ui.worktreeProvision ?? [])
+                    .map((r) => `${r.path} (${r.mode})`)
+                    .join(", ")}
+                  . A path git does not ignore is left behind — copying it would show up as
+                  uncommitted work. Edit the list in <code>settings.json</code>.
+                </>
+              ) : (
+                <>
+                  Nothing is carried into a new worktree, so it will have no dependencies or env
+                  files. Set <code>ui.worktreeProvision</code> in <code>settings.json</code> to
+                  change that.
+                </>
+              )}
+            </p>
           </div>
         )}
       </div>

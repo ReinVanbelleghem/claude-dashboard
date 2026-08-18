@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./paths.ts";
+import { DEFAULT_PROVISION } from "./provision.ts";
 
 /**
  * User-editable preferences, as opposed to config.ts which holds the pricing and
@@ -95,6 +96,29 @@ export type Settings = {
      * already correct rather than flashing the default theme.
      */
     appearance?: Appearance;
+    /**
+     * Where new worktrees are created. Empty means beside the repository they belong
+     * to, which is almost always right: an editor, a terminal and a file browser all
+     * have to find them, and a checkout is your work rather than dashboard state.
+     */
+    worktreeRoot?: string;
+    /**
+     * Untracked paths carried into a new worktree, so a fresh checkout can actually run.
+     * `symlink` for big shared directories (node_modules), `copy` for small per-checkout
+     * secrets (.env). A path missing from the source is skipped, never an error.
+     */
+    worktreeProvision?: { path: string; mode: "symlink" | "copy" }[];
+    /**
+     * Let provisioning add paths to the repository's `.git/info/exclude` when git would
+     * otherwise show them as untracked — which is what happens to a `node_modules`
+     * symlink against the conventional `node_modules/` pattern, since a trailing slash
+     * matches directories only.
+     *
+     * Off by default because it writes to the repository's own git directory. That file
+     * is local and never committed, and in the main checkout the entry changes nothing,
+     * but it is still the user's repo and not ours to edit unasked.
+     */
+    worktreeExclude?: boolean;
     /** Named themes, newest first. Replaced wholesale like appearance is. */
     themes?: SavedTheme[];
   };
@@ -124,6 +148,9 @@ const DEFAULTS: Settings = {
     diffIgnoreWhitespace: false,
     hideToolCalls: false,
     openSessionsIn: "drawer",
+    worktreeRoot: "",
+    worktreeProvision: DEFAULT_PROVISION,
+    worktreeExclude: false,
   },
 };
 

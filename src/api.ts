@@ -79,7 +79,28 @@ export type SessionDetail = {
 
 export type Overview = {
   totals: { sessions: number; msgs: number; prompts: number; tools: number };
-  projects: { project_slug: string; path: string; sessions: number; last_ts: number | null }[];
+  projects: {
+    project_slug: string;
+    path: string;
+    sessions: number;
+    last_ts: number | null;
+    /** Shared `.git` of the repository this cwd belongs to. Empty when not in one. */
+    repo_key?: string | null;
+    worktree_root?: string | null;
+  }[];
+  /**
+   * Repositories with more than one checkout, so worktrees of one codebase read as one
+   * repository rather than as unrelated projects. Every entry also appears in
+   * `projects`; this only adds the grouping.
+   */
+  repos: {
+    repoKey: string;
+    name: string;
+    sessions: number;
+    last_ts: number | null;
+    /** One per real checkout — the worktree root, not each cwd a session used. */
+    checkouts: { path: string; sessions: number; last_ts: number | null }[];
+  }[];
   topTools: { name: string; count: number }[];
 };
 
@@ -220,6 +241,12 @@ export type Settings = {
     appearance?: Appearance;
     /** Named looks the user saved, newest first. Each covers both dark and light. */
     themes?: { name: string; look?: Partial<Appearance>; appearance?: Partial<Appearance> }[];
+    /** Where new worktrees go. Empty means beside the repository. */
+    worktreeRoot?: string;
+    /** Untracked paths carried into a new worktree, when git ignores them. */
+    worktreeProvision?: { path: string; mode: "symlink" | "copy" }[];
+    /** Allow provisioning to add those paths to .git/info/exclude. Off by default. */
+    worktreeExclude?: boolean;
 
   };
 };
@@ -295,12 +322,19 @@ export const commentApi = {
    * Comments for a repo, scoped to a branch unless `branch` is omitted. `offBranch`
    * counts the open ones this scope deliberately left out.
    */
-  list: (repo: string, branch?: string | null) =>
+  /**
+   * `repoKey` is the repository's shared `.git`. Passing it is what makes a review
+   * follow the branch across worktrees rather than being pinned to one checkout.
+   */
+  list: (repo: string, branch?: string | null, repoKey?: string | null) =>
     get<{ comments: ReviewComment[]; offBranch: number }>(
-      `/api/comments?repo=${encodeURIComponent(repo)}${branchParam(branch)}`,
+      `/api/comments?repo=${encodeURIComponent(repo)}${branchParam(branch)}${
+        repoKey ? `&repoKey=${encodeURIComponent(repoKey)}` : ""
+      }`,
     ),
   add: (input: {
     repo: string;
+    repoKey?: string | null;
     path?: string;
     line?: number | null;
     side?: "old" | "new";
@@ -337,7 +371,12 @@ export type ChangedFile = {
 
 export type RepoStatus = {
   isRepo: boolean;
+  /** This checkout. Differs from `commonDir`'s repo whenever it is a linked worktree. */
   root: string | null;
+  /** The shared `.git`, identifying the repository rather than the checkout. */
+  commonDir: string | null;
+  mainRoot: string | null;
+  isLinkedWorktree: boolean;
   name: string | null;
   branch: string | null;
   detached: boolean;
@@ -364,7 +403,7 @@ export type Commit = {
   files: number;
 };
 
-export type DiffScope = "worktree" | "branch";
+export type DiffScope = "uncommitted" | "branch";
 
 export type Branch = {
   /** "feat/x" for a local branch, "origin/feat/x" for a remote-tracking one. */
@@ -379,6 +418,42 @@ export type Branch = {
   subject: string;
   /** Remote branches only: a local branch of the same name already exists. */
   hasLocal: boolean;
+  /**
+   * The worktree holding this branch, if any. Git refuses to check a branch out
+   * twice, so a non-null value means "open that checkout", not "switch to it here".
+   */
+  worktreePath: string | null;
+};
+
+export type WorktreeWriteResult = GitWriteResult & {
+  /** The checkout created or removed, when it succeeded. */
+  path: string | null;
+  /** Every checkout of the repo after the attempt, successful or not. */
+  worktrees: Worktree[];
+};
+
+export type Worktree = {
+  path: string;
+  name: string;
+  branch: string | null;
+  head: string | null;
+  detached: boolean;
+  bare: boolean;
+  isMain: boolean;
+  /** git's lock reason; an empty string still means locked. */
+  locked: string | null;
+  /** Set when the directory is gone and only the admin record survives. */
+  prunable: string | null;
+};
+
+export type WorktreeRepo = {
+  /** The shared `.git`: two checkouts of one repository carry the same key. */
+  repoKey: string;
+  name: string;
+  /** A checkout that exists, to address this repository's reads and writes to. */
+  root: string;
+  mainRoot: string | null;
+  count: number;
 };
 
 export type BranchList = {
@@ -438,6 +513,23 @@ export const gitApi = {
         context: opts.context,
       })}`,
     ),
+  /** Every repository worth listing worktrees for, across all of session history. */
+  repos: () => get<{ repos: WorktreeRepo[] }>("/api/git/repos"),
+  worktrees: (cwd: string) =>
+    get<{ ok: boolean; worktrees: Worktree[]; error: string | null }>(
+      `/api/git/worktrees?${q({ cwd })}`,
+    ),
+  /**
+   * Adding and removing checkouts. Refusals are answers here, not exceptions — a
+   * dirty worktree or a branch already open elsewhere both come back as `ok: false`
+   * with git's own wording, so these go through postResult like the other writes.
+   */
+  worktreeAdd: (cwd: string, branch: string, opts: { create?: boolean; from?: string; path?: string } = {}) =>
+    postResult<WorktreeWriteResult>("/api/git/worktree-add", { cwd, branch, ...opts }),
+  worktreeRemove: (cwd: string, path: string) =>
+    postResult<WorktreeWriteResult>("/api/git/worktree-remove", { cwd, path }),
+  worktreePrune: (cwd: string) =>
+    postResult<WorktreeWriteResult>("/api/git/worktree-prune", { cwd }),
   log: (cwd: string, limit = 50) =>
     get<{ commits: Commit[]; range: string }>(`/api/git/log?${q({ cwd, limit })}`),
   branchFiles: (cwd: string) => get<{ files: ChangedFile[] }>(`/api/git/branch-files?${q({ cwd })}`),

@@ -35,6 +35,21 @@ export function GitIcon() {
   );
 }
 
+/**
+ * A worktree: one repository, a second checkout hanging off it. Deliberately a
+ * relative of GitIcon rather than a folder — what it marks is a branch that lives
+ * somewhere else, not a directory.
+ */
+export function WorktreeIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="5" cy="4.5" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M5 6.4v9.1h4.4M5 10.5h4.4" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="11.2" y="8.4" width="6" height="4.2" rx="1.1" fill="none" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
 export function StarIcon({ filled = false }: { filled?: boolean }) {
   return (
     <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">

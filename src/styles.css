@@ -869,6 +869,21 @@ a { color: var(--accent); }
 .modal-head .hint { margin: 0; max-width: 52ch; }
 .modal-head > .icon-btn { flex: 0 0 auto; margin-left: auto; }
 .modal.wide .field { padding-top: 16px; }
+/* A dialog whose body can outgrow the viewport — the branch list makes this one of
+   them — scrolls its content instead of running off the screen, with the title and the
+   actions pinned so "Start session" is never the thing you have to scroll to find. */
+.modal.wide.scroll { overflow-y: auto; }
+.modal.wide.scroll .modal-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-1);
+}
+.modal.wide.scroll .modal-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+}
 .modal.wide .modal-actions {
   margin: 0;
   padding: 12px 22px;
@@ -932,6 +947,11 @@ a { color: var(--accent); }
 .folder-tag { color: var(--text-muted); }
 .folder-saved { color: var(--good); }
 .folder-card.saved { border-color: color-mix(in srgb, var(--good) 45%, var(--border)); }
+/* A directory that was decided before the dialog opened: stated as the answer rather
+   than offered as one of nine tiles, with "Change" for the case where it is wrong. */
+.folder-card.locked { cursor: default; margin-bottom: 10px; }
+.folder-card.locked:hover { border-color: var(--border); background: var(--surface-2); }
+.folder-card.locked .folder-name { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 
 /* ── folder browser (inside the manage dialog) ─────────────────────────────── */
 .browser { display: flex; flex-direction: column; min-height: 0; }
@@ -1302,6 +1322,12 @@ a { color: var(--accent); }
 .branch-row:disabled { cursor: default; }
 .branch-row.current { background: var(--surface-2); border-color: var(--accent); }
 .branch-row.create { border-top: 1px solid var(--border); border-radius: 0 0 7px 7px; margin-top: 4px; padding-top: 9px; }
+/* A branch checked out in another worktree. Marked with the accent rather than a
+   warning colour: it is a place to go, not a problem to fix. */
+.branch-row.held .branch-row-mark { color: var(--accent); }
+.branch-row.held .branch-row-sub { color: var(--accent); opacity: 0.85; }
+.branch-row.held:disabled .branch-row-mark,
+.branch-row.held:disabled .branch-row-sub { color: var(--text-muted); opacity: 1; }
 .branch-row-mark { display: flex; justify-content: center; color: var(--good); }
 .branch-row-mark .icon { width: 13px; height: 13px; }
 .branch-row.create .branch-row-mark { color: var(--accent); }
@@ -1931,6 +1957,20 @@ a { color: var(--accent); }
 }
 .card-open:hover { color: var(--accent); background: var(--surface-2); }
 .review-elsewhere { color: var(--text-muted); font-weight: 500; }
+.branch-pick .branch-list { max-height: 220px; }
+.branch-picked {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--surface-2);
+}
+.branch-picked .branch-row-main { min-width: 0; }
+.branch-picked .link-btn { flex: 0 0 auto; margin-top: 0; }
+
 .branch-foot {
   margin-top: 8px;
   padding-top: 7px;
@@ -2926,3 +2966,157 @@ a { color: var(--accent); }
 .ask-option-label { font-size: 13px; color: var(--text-primary); font-weight: 500; }
 .ask-option-desc { font-size: 12px; color: var(--text-secondary); }
 .ask-other { margin-bottom: 0; }
+
+/* ── worktrees ─────────────────────────────────────────────────────────────── */
+/* One row per checkout of the repository. Laid out like the branch rows it sits
+   below, so the two read as one family. */
+.wt-add { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.wt-add .hint { margin: 0; }
+
+.wt-repos { display: flex; flex-direction: column; gap: 12px; }
+.wt-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.wt-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wt-list { display: flex; flex-direction: column; gap: 6px; }
+
+.wt-row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: start;
+  gap: 9px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-1);
+}
+.wt-row.current { background: var(--surface-2); border-color: var(--accent); }
+
+.wt-mark { display: flex; justify-content: center; padding-top: 2px; color: var(--text-muted); }
+.wt-mark .icon { width: 13px; height: 13px; }
+.wt-row.current .wt-mark { color: var(--good); }
+
+.wt-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wt-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wt-detached { font-weight: 500; color: var(--text-muted); font-family: var(--mono); }
+.wt-path {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Uncommitted work is the one fact that decides whether a row can be removed, so
+   it is stated rather than left to the remove button's refusal. */
+.wt-dirty { font-size: 11px; color: var(--warning); }
+
+.wt-actions { display: flex; align-items: center; gap: 5px; }
+
+/* ── worktrees, as tiles ───────────────────────────────────────────────────── */
+/* The Worktrees tab is one decision — which checkout do I work in — so it uses the
+   same cards the new-session dialog uses for that decision, rather than a second
+   row-with-buttons idiom of its own. */
+.wt-grid {
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  /* The repository name is a heading for these tiles, not a label stuck to the first
+     one, so it keeps its distance. */
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+.wt-tile { position: relative; display: flex; flex-direction: column; }
+.wt-tile > .folder-card {
+  flex: 1;
+  /* Room for the remove button, so a long branch name never runs under it. */
+  padding-right: 34px;
+}
+/* Not a pick: the checkout you are already in, and one whose directory is gone. */
+.wt-tile > div.folder-card { cursor: default; }
+.wt-tile.current > .folder-card { border-color: var(--accent); background: var(--surface-2); }
+.wt-tile.missing > .folder-card { opacity: 0.6; border-style: dashed; }
+
+.wt-tile-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.wt-tile .wt-dirty { margin-top: 3px; }
+
+/* The open affordance, spelled out once the pointer is on the card that carries it —
+   present enough to find, quiet enough not to be read as a second button. */
+.wt-tile-cta {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 560;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.wt-tile > .folder-card:hover .wt-tile-cta,
+.wt-tile > .folder-card:focus-visible .wt-tile-cta { opacity: 1; }
+
+.wt-tile-x {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  padding: 4px;
+  line-height: 0;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.wt-tile-x .icon { width: 12px; height: 12px; }
+/* Destructive and one click from the open action, so it stays out of the way until
+   the pointer is on this tile — and always present for keyboard focus. */
+.wt-tile:hover .wt-tile-x,
+.wt-tile-x:focus-visible { opacity: 1; }
+.wt-tile-x:hover { color: var(--critical); }
+
+/* In the tiles layout the create form is a dialog: the branch list is long, and
+   opening it in place pushes every tile below it off the screen. */
+.modal .wt-add { margin-bottom: 0; }
+.modal.wt-new { width: min(620px, 94vw); }
+
+.wt-tile-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 2px 0;
+}
+
+/* The repository a worktree belongs to, named on the badge because the directory
+   name is the worktree's own and would otherwise never mention it. */
+.git-badge-repo { color: var(--text-secondary); font-weight: 600; }
+.git-badge-repo::after { content: "▸"; margin: 0 1px 0 4px; color: var(--text-muted); font-weight: 400; }
+
+/* The new-worktree option in the session dialog. Indented under the directory
+   picker because it modifies that choice rather than standing beside it. */
+.new-wt {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-1);
+}
+.new-wt.probing { opacity: 0.5; pointer-events: none; }
+.new-wt > .field-head { margin-bottom: 2px; font-size: 12px; color: var(--text-muted); }
+.new-wt .folder-grid { margin-bottom: 2px; }
+.new-wt .hint { margin: 0; }
