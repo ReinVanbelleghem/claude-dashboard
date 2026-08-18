@@ -22,6 +22,7 @@ export type Appearance = {
   accent: string;
   favicon: string;
   faviconColor: string;
+  motion?: boolean;
 };
 
 export type Settings = {

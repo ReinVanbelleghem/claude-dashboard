@@ -66,7 +66,9 @@ export function LiveView({
   const attention = live?.sessions.filter(needsInput) ?? [];
   const active = live?.sessions.filter((s) => s.alive && !needsInput(s)) ?? [];
   const stale = live?.sessions.filter((s) => !s.alive) ?? [];
-  const open = agents.filter((a) => a.status !== "ended" && a.status !== "error");
+  const open = agents
+    .filter((a) => a.status !== "ended" && a.status !== "error")
+    .sort((a, b) => a.createdAt - b.createdAt);
   const closed = agents.filter((a) => a.status === "ended" || a.status === "error");
 
   return (

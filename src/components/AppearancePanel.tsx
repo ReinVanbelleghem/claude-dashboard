@@ -5,10 +5,12 @@ import {
   accentHex,
   faviconDataUrl,
   iconPng,
+  prefersReducedMotion,
   type AccentName,
   type Appearance,
   type FaviconName,
 } from "../appearance.ts";
+import { useIconPhase } from "../useIconPhase.ts";
 
 /**
  * Appearance, applied live as you click rather than on save — the point of a
@@ -22,6 +24,11 @@ export function AppearancePanel({
   onChange: (patch: Partial<Appearance>) => void;
 }) {
   const a = appearance;
+  // The picker previews motion unconditionally: it is the only place you can see
+  // what you are choosing, and waiting for a session to start working to find out
+  // what "Orbit" does is not a choice anyone can make.
+  const reduced = prefersReducedMotion();
+  const phase = useIconPhase(a.motion);
 
   /**
    * Render the chosen icon to a file. Revoking the object URL is deferred rather
@@ -117,6 +124,10 @@ export function AppearancePanel({
         </div>
 
         <h3 className="set-h">Tab icon</h3>
+        <p className="set-help">
+          Every glyph has a motion, shown here on the one you have picked. It only runs
+          while a session is actually working.
+        </p>
         <div className="swatch-row">
           {FAVICONS.map((f) => (
             <button
@@ -126,11 +137,42 @@ export function AppearancePanel({
               aria-pressed={a.favicon === f.name}
               onClick={() => onChange({ favicon: f.name as FaviconName })}
             >
-              <img src={faviconDataUrl(f.name, a.faviconColor, a.theme)} alt={f.label} width={28} height={28} />
+              {/* Only the selected tile moves. Twelve glyphs animating at once is a
+                  fidget spinner, and it makes the one that matters harder to judge. */}
+              <img
+                src={faviconDataUrl(
+                  f.name,
+                  a.faviconColor,
+                  a.theme,
+                  false,
+                  a.favicon === f.name ? phase : undefined,
+                )}
+                alt={f.label}
+                width={28}
+                height={28}
+              />
               <span>{f.label}</span>
             </button>
           ))}
         </div>
+
+        {/* Wrapped for the same reason the Dock button below is: .check is inline-flex,
+            and bare it leaves the help text wrapping around it instead of under it. */}
+        <div className="swatch-row">
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={a.motion}
+              onChange={(e) => onChange({ motion: e.target.checked })}
+            />
+            <span>Animate the icon while a session is working</span>
+          </label>
+        </div>
+        <span className="set-help">
+          {reduced
+            ? "Your system asks for reduced motion, so this stays still regardless."
+            : "The tab icon, and the mark in the header, move while Claude is thinking. They stop the moment it needs you — a waiting session gets the dot, not the motion."}
+        </span>
 
         <div className="sub-label">Icon colour</div>
         <div className="swatch-row">
@@ -150,7 +192,7 @@ export function AppearancePanel({
         <div className="tab-preview-row">
           <div className="tab-preview">
             <img
-              src={faviconDataUrl(a.favicon, a.faviconColor, a.theme)}
+              src={faviconDataUrl(a.favicon, a.faviconColor, a.theme, false, phase)}
               alt=""
               width={16}
               height={16}

@@ -18,11 +18,14 @@ import {
 import {
   applyAppearance,
   currentIconUrl,
+  DEFAULT_APPEARANCE,
   faviconDataUrl,
   readStored,
   setAttention,
+  setBusy,
   type Appearance,
 } from "./appearance.ts";
+import { useIconPhase } from "./useIconPhase.ts";
 import { Tile } from "./components/Charts.tsx";
 import { HistoryView } from "./components/HistoryView.tsx";
 import { LiveView } from "./components/LiveView.tsx";
@@ -127,7 +130,11 @@ export default function App() {
         setSettings(r.settings);
         // The daemon's copy wins on load, so a choice made in one browser shows up
         // in the next one you open. Local storage only covers the pre-paint gap.
-        if (r.settings.ui.appearance) setAppearance(r.settings.ui.appearance);
+        // Layered over the defaults rather than replacing them: a copy written before
+        // a key existed would otherwise arrive as undefined and read as "off".
+        if (r.settings.ui.appearance) {
+          setAppearance({ ...DEFAULT_APPEARANCE, ...r.settings.ui.appearance });
+        }
       })
       .catch(() => {});
   }, []);
@@ -195,6 +202,10 @@ export default function App() {
   // as a terminal session waiting for input, so it shares the badge.
   const awaiting = agents.filter((a) => a.status === "awaiting-permission").length;
   const blocked = needsInput + awaiting;
+  // The other half of the pair: blocked is "you are the blocker", thinking is
+  // "Claude is". The icon animates for the second and badges for the first, so the
+  // two states stay distinguishable at a glance instead of both meaning "activity".
+  const thinking = agents.filter((a) => a.status === "thinking").length;
 
   /**
    * A session can be addressed by its transcript id or, before that exists, by the
@@ -260,6 +271,16 @@ export default function App() {
     setAttention(blocked);
   }, [blocked]);
 
+  // A tab icon cannot animate on its own — a favicon is rendered as one static frame,
+  // so SMIL and CSS inside it never run. This hands the driver the on/off signal and
+  // it swaps the <link> href frame by frame.
+  useEffect(() => {
+    setBusy(thinking > 0);
+    return () => setBusy(false);
+  }, [thinking]);
+
+  const brandPhase = useIconPhase(thinking > 0 && appearance.motion);
+
   return (
     <div className="shell">
       <header className="topbar">
@@ -278,6 +299,7 @@ export default function App() {
                 appearance.faviconColor,
                 appearance.theme,
                 blocked > 0,
+                brandPhase,
               )}
               alt=""
               width={22}
