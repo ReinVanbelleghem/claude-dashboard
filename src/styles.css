@@ -13,12 +13,20 @@
   --text-secondary: #c3c2b7;
   --text-muted: #8b8a80;
 
-  /* UI accent: links, focus rings, active tabs, the speaker bar. Chosen in
-     Settings → Appearance, which overrides this on the root element. Kept apart
-     from the categorical slots so recolouring the chrome never recolours a chart. */
+  /* UI accent: links, focus rings, active tabs, the speaker bar, and any chart
+     drawing a single series (the usage sparkline, the magnitude bars). Chosen in
+     Settings → Appearance, which overrides this on the root element. Kept apart from
+     the categorical slots below: one series has nothing to collide with and should
+     match the chrome, but recolouring the chrome must never move colours that carry
+     meaning by being distinct from each other. */
   --accent: #4d94e8;
+  /* What sits on top of a fill of --accent: a primary button label, the current find
+     match, a favicon glyph. Recomputed on the root whenever the accent changes,
+     because a pale accent needs dark ink and a deep one needs light. */
+  --accent-ink: #ffffff;
 
-  /* Categorical slots 1–4, dark column (validated: worst adjacent CVD ΔE 8.4) */
+  /* Categorical slots 1–4 — file types, git status. Never the accent. (validated:
+     worst adjacent CVD ΔE 8.4) */
   --series-1: #3987e5;
   --series-2: #d95926;
   --series-3: #199e70;
@@ -56,6 +64,7 @@
   --text-secondary: #52514e;
   --text-muted: #77766f;
   --accent: #1a66bd;
+  --accent-ink: #ffffff;
   --series-1: #2a78d6;
   --series-2: #eb6834;
   --series-3: #1baf7a;
@@ -274,13 +283,25 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 
 /* ── session cards ─────────────────────────────────────────────────────────── */
+/* The minimum column width grows with the viewport rather than the column count
+   being pinned: at 1900px this yields four ~440px cards instead of six cramped ones,
+   and it degrades to one column on a phone without a separate rule. Capped, because
+   past ~500px the lines get long enough that scanning a grid gets worse, not better. */
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
   gap: 12px;
+}
+@media (min-width: 1400px) {
+  .cards { grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 14px; }
+}
+@media (min-width: 2400px) {
+  .cards { grid-template-columns: repeat(auto-fill, minmax(min(100%, 500px), 1fr)); gap: 16px; }
 }
 
 .card {
+  /* So .card-extra can respond to the card's own width. */
+  container-type: inline-size;
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-left: 3px solid var(--text-muted);
@@ -415,7 +436,9 @@ tr.click:hover td { background: var(--surface-2); }
 .hbar .hb-label { font-size: 12px; color: var(--text-secondary); }
 .hbar .hb-value { font: 600 12px/1 var(--mono); font-variant-numeric: tabular-nums; }
 .hbar .hb-track { grid-column: 1 / -1; height: 8px; background: var(--surface-2); border-radius: 4px; }
-.hbar .hb-fill { height: 100%; border-radius: 4px; background: var(--series-1); }
+/* display:block — the fill is a <span>, and an inline box ignores both the height and
+   the width driving it, so the bars have been drawing as empty tracks. */
+.hbar .hb-fill { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
 
 .empty { padding: 26px 0; text-align: center; color: var(--text-muted); font-size: 13px; }
 .modal .empty { padding: 34px 0; }
@@ -580,7 +603,7 @@ tr.click:hover td { background: var(--surface-2); }
 .icon-btn.primary {
   background: var(--accent);
   border-color: transparent;
-  color: #fff;
+  color: var(--accent-ink);
   font-weight: 560;
 }
 .icon-btn.primary:disabled { opacity: 0.45; }
@@ -793,6 +816,15 @@ tr.click:hover td { background: var(--surface-2); }
   cursor: pointer;
 }
 .link-btn:hover { text-decoration: underline; }
+/* A link-btn used as a toggle — the "Inherit accent" icon colour option. Boxed
+   rather than underlined, so "selected" does not read as "hovered". */
+.link-btn.on {
+  text-decoration: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-2));
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
 
 /* Two-state segmented control. */
 .seg { display: inline-flex; gap: 2px; padding: 2px; background: var(--surface-1); border-radius: 8px; }
@@ -2295,3 +2327,602 @@ a { color: var(--accent); }
 .palette-card-line { height: 5px; width: 62%; border-radius: 3px; background: currentColor; opacity: 0.4; }
 .palette-card-name { margin-top: 2px; font-size: 11px; font-weight: 600; }
 .palette-card.on { box-shadow: 0 0 0 2px var(--accent); }
+
+/* --- Find in page ------------------------------------------------------- */
+/* Non-modal and top-right, unlike the palette: it stays out of the way of the
+   text it is searching, and there is no scrim because the page behind it has to
+   remain readable and scrollable while you step through matches. Above the
+   drawer and the modals (⌘F works inside them), below the palette. */
+.find-bar {
+  position: fixed;
+  top: 14px;
+  right: 22px;
+  z-index: 31;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px 7px 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 14px 36px rgb(0 0 0 / 0.4);
+}
+.find-input {
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  width: 190px;
+  outline: none;
+}
+.find-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 52px;
+  text-align: right;
+}
+.find-count.none { color: var(--serious); }
+
+/* The match paint. Ranges are handed to the CSS Custom Highlight API rather than
+   wrapped in <mark>, so the diff's token spans and the transcript's markdown are
+   never rewritten — a highlight cannot break their layout or React's ownership. */
+::highlight(find-match) {
+  background: color-mix(in srgb, var(--warning) 40%, transparent);
+  color: var(--text-primary);
+}
+::highlight(find-current) {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* --- Saved themes ------------------------------------------------------- */
+/* Fixed width in a wrapping row (.search is width:100%, which would push the Save
+   button to its own line), but in the studio footer there is room to fill instead —
+   theme names are sentences like "warm near-black, low contrast". */
+/* .search carries margin-bottom for stacked forms; in a flex row that margin is
+   what knocks it out of line with the buttons beside it, so it goes here. Heights
+   are pinned to one value because .search and .icon-btn have different paddings. */
+.theme-name { width: 220px; flex: 0 0 auto; margin-bottom: 0; height: 36px; }
+.studio-foot .theme-name { flex: 1 1 auto; width: auto; min-width: 180px; }
+.studio-foot .icon-btn { height: 36px; }
+/* Square, so a glyph button and a text button in the same row are the same size. */
+.saved-theme .icon-btn.tiny {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+}
+.saved-themes { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.saved-theme { display: flex; align-items: center; gap: 6px; }
+.saved-theme-apply {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  padding: 7px 10px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+.saved-theme-apply:hover { border-color: var(--border-strong); }
+.saved-theme-chip {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 2px solid var(--accent);
+  flex: 0 0 auto;
+}
+.saved-theme-name { font-size: 13px; }
+.saved-theme-meta { margin-left: auto; font-size: 12px; color: var(--text-muted); }
+
+/* --- Colour picker ------------------------------------------------------- */
+/* overflow stays visible so the marker can sit on the very edge of the field —
+   at full chroma it lands there, and clipping it in half looked like a glitch. */
+.cp { display: flex; flex-direction: column; gap: 8px; }
+.cp-field {
+  position: relative;
+  width: 240px;
+  height: 150px;
+  cursor: crosshair;
+  touch-action: none;
+}
+.cp-field canvas {
+  display: block;
+  width: 240px;
+  height: 150px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.cp-field:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cp-dot {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.6), 0 1px 4px rgb(0 0 0 / 0.5);
+  pointer-events: none;
+}
+.cp-hue {
+  display: block;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.cp-hue input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 14px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.cp-hue input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: transparent;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.6);
+}
+.cp-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cp-preview { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--border-strong); }
+.cp-hex {
+  width: 92px;
+  padding: 5px 8px;
+  font: 12px/1 var(--mono);
+  color: var(--text-primary);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+}
+.cp-hex:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.cp-presets { display: flex; gap: 4px; flex-wrap: wrap; }
+.cp-preset {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgb(0 0 0 / 0.25);
+  padding: 0;
+  cursor: pointer;
+}
+
+/* The well, and the pip that marks it as the free choice. Without the pip a custom
+   swatch is just another dot in the row, which is exactly how it read before. */
+.cp-well-wrap { position: relative; display: inline-flex; }
+.cp-well { position: relative; overflow: visible; }
+.cp-well::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, #f87171, #fbbf24, #34d399, #38bdf8, #a78bfa, #f472b6, #f87171);
+  box-shadow: 0 0 0 1.5px var(--surface-1);
+}
+.cp-pop {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 33;
+  padding: 10px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 18px 44px rgb(0 0 0 / 0.45);
+}
+
+/* --- Theme studio ------------------------------------------------------- */
+.studio-scrim { z-index: 23; background: rgb(0 0 0 / 0.55); }
+.studio {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 24;
+  width: min(1480px, 96vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  box-shadow: 0 28px 70px rgb(0 0 0 / 0.55);
+  overflow: hidden;
+}
+.studio-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.studio-head h2 { margin: 0; font-size: 15px; }
+.studio-head .seg { margin-left: auto; }
+/* Three columns — surfaces, accent and icon, preview. Two columns put every control
+   in one ribbon taller than the viewport, so the tab icon sat below the fold while
+   half the modal stood empty next to a short preview. */
+.studio-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) 264px minmax(0, 0.85fr) minmax(0, 1.15fr);
+  align-items: start;
+  gap: 14px;
+  padding: 14px;
+  overflow-y: auto;
+}
+.studio-span { grid-column: 1 / -1; }
+.studio-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* Sections as panels rather than headings in a stream: four flat captions gave the
+   eye nothing to land on, and the accent block runs long enough to need an edge. */
+.studio-group {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-0);
+}
+/* Columns are placed explicitly so a narrower viewport folds them in a chosen order
+   rather than whatever auto-flow lands on: the preview keeps its own column longest,
+   and the tab icon — the smallest block — is the first to go share one. */
+@media (max-width: 1400px) {
+  .studio-body { grid-template-columns: minmax(0, 1.2fr) 264px minmax(0, 1.1fr); }
+  .studio-body > div:nth-of-type(3),
+  .studio-body > div:nth-of-type(4) { grid-column: 3; }
+}
+@media (max-width: 1080px) {
+  .studio-body { grid-template-columns: minmax(0, 1fr) 264px; }
+  .studio-body > div:nth-of-type(3) { grid-column: 1; }
+  .studio-body > div:nth-of-type(4) { grid-column: 2; }
+}
+@media (max-width: 780px) {
+  .studio-body { grid-template-columns: minmax(0, 1fr); }
+  .studio-body > div:nth-of-type(3),
+  .studio-body > div:nth-of-type(4) { grid-column: 1; }
+  .studio-preview { position: static; }
+}
+.studio-h {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+/* A section's own caption sits flush with the panel it titles. */
+.studio-group > .studio-h { margin-bottom: 10px; }
+/* Which mode the values below belong to, said once on the heading instead of in a
+   sentence under the picker. */
+.studio-h-tag {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+}
+.studio-sub {
+  margin: 14px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.studio-preview .studio-sub:first-of-type { margin-top: 4px; }
+/* Sits on the section heading, so "which mode am I editing" and "send it to the
+   other one" read as one thought rather than as a stray control. */
+.studio-h { display: flex; align-items: center; gap: 10px; }
+.studio-copy { margin: 0; text-transform: none; letter-spacing: 0; font-size: 11px; }
+.studio-slider {
+  display: grid;
+  grid-template-columns: 1fr 150px 46px;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+}
+.studio-slider-label { display: flex; flex-direction: column; font-size: 13px; color: var(--text-primary); }
+.studio-slider-help { font-size: 11px; color: var(--text-muted); }
+.studio-slider-value {
+  font: 12px/1 var(--mono);
+  color: var(--text-secondary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.studio-slider input[type="range"] { width: 100%; accent-color: var(--accent); }
+.studio-row { display: flex; align-items: center; gap: 12px; margin: 8px 0 2px; }
+.studio-note { display: block; margin-top: 8px; font-size: 12px; color: var(--text-muted); }
+/* A forced ink is allowed to fail — the override exists to be obeyed — so the note
+   says so in amber rather than the control refusing the value. */
+.studio-note.warn { color: var(--warning); }
+
+.studio-preview {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.studio-preview-bar { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.studio-preview-tab { width: 34px; height: 3px; border-radius: 2px; margin-left: auto; }
+.studio-preview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid;
+  border-radius: 10px;
+}
+.studio-preview-code {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font: 12px/1.5 var(--mono);
+  overflow-x: auto;
+}
+.studio-preview-chips { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+/* The accent-filled button, in the preview because it is the element the ink is for. */
+.studio-preview-btn {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 560;
+  cursor: pointer;
+}
+
+/* --- Ink on the accent --------------------------------------------------- */
+.ink-picks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+/* Each tile is one click: it selects the ink and, for the chosen one, opens the
+   picker. The sample is the button, so what you press is what you get. */
+.ink-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+  cursor: pointer;
+  text-align: left;
+}
+.ink-pick:hover { border-color: var(--border-strong); }
+.ink-pick.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.ink-picks .cp-well-wrap { display: flex; }
+/* Upward: the tiles sit low in a column that clips its overflow, and the accent field
+   directly above them is the one place with room for a 250px popover. */
+.ink-picks .cp-pop { top: auto; bottom: calc(100% + 10px); left: auto; right: 0; }
+.ink-sample {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 560;
+}
+.ink-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.ink-ratio { font: 11px/1 var(--mono); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ink-ratio.fail { color: var(--critical); }
+/* Directly under the preview card, not pushed to the bottom: the controls column is
+   taller than the viewport, and the ratios are the safety readout — they have to be
+   on screen while you drag a slider, not below the fold. */
+.studio-ratios { display: flex; flex-wrap: wrap; gap: 6px; }
+.studio-ratio {
+  font: 11px/1 var(--mono);
+  padding: 5px 8px;
+  border: 1px solid;
+  border-radius: 999px;
+}
+.studio-ratio.fail { color: var(--critical) !important; border-color: var(--critical) !important; }
+.studio-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+.studio-foot .icon-btn.primary { margin-left: auto; }
+.studio-saved { font-size: 12px; color: var(--good); }
+
+/* --- The mode toggle ----------------------------------------------------- */
+.mode-toggle {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--text-secondary);
+}
+.mode-toggle:hover { color: var(--accent); }
+.sun-moon { width: 19px; height: 19px; overflow: visible; }
+/* Both faces sit in the same box and swap by transform, so the switch reads as one
+   object turning over rather than two icons trading places. The overshoot in the
+   timing function is the whole effect — a linear swap of the same two shapes reads
+   as a glitch. */
+.sm-sun,
+.sm-moon {
+  transform-origin: 12px 12px;
+  transition:
+    transform 480ms cubic-bezier(0.34, 1.4, 0.64, 1),
+    opacity 240ms ease;
+}
+/* Dark mode offers light, and the other way round: the face shown is the destination. */
+[data-theme="dark"] .sm-moon { transform: rotate(-70deg) scale(0.2); opacity: 0; }
+[data-theme="dark"] .sm-sun { transform: none; opacity: 1; }
+[data-theme="light"] .sm-sun { transform: rotate(70deg) scale(0.2); opacity: 0; }
+[data-theme="light"] .sm-moon { transform: none; opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .sm-sun, .sm-moon { transition: none; }
+}
+
+/* --- Dark / light showcase ---------------------------------------------- */
+.mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid;
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.mode-card-top { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+.mode-card-now { margin-left: auto; font: 11px/1 var(--mono); }
+.mode-card-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid;
+  border-radius: 9px;
+}
+.mode-card-line { font-size: 12px; font-weight: 600; }
+.mode-card-sub { font-size: 11px; }
+.mode-card-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.mode-card-btn { padding: 5px 10px; border-radius: 7px; font-size: 11px; font-weight: 560; }
+.mode-card-chip { padding: 4px 8px; border: 1px solid; border-radius: 6px; font: 10px/1 var(--mono); }
+
+.custom-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.custom-summary-text { font-size: 12px; color: var(--text-secondary); }
+.custom-summary .icon-btn { margin-left: auto; }
+
+/* --- Appearance hero ----------------------------------------------------- */
+.theme-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.theme-hero-preview {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border: 2px solid;
+  border-radius: 10px;
+  flex: 0 0 auto;
+}
+.theme-hero-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.theme-hero-text strong { font-size: 14px; }
+.theme-hero-text .set-help { margin: 0; }
+.theme-hero-actions { margin-left: auto; display: flex; gap: 8px; flex: 0 0 auto; }
+.saved-theme-apply.on { border-color: var(--accent); }
+
+/* Seed buttons: the shipped palettes, demoted to starting points for the sliders. */
+.studio-seeds { display: flex; flex-wrap: wrap; gap: 6px; }
+.studio-seed {
+  padding: 4px 9px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.studio-seed:hover { border-color: var(--border-strong); color: var(--text-primary); }
+
+/* Four across, so twelve glyphs land as a tidy 4×3 block rather than a ragged wrap,
+   and big enough to judge a glyph by — these are picked by looking, and at 18px the
+   busier ones (the window, the bars) were guesswork. */
+.studio-glyphs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.studio-glyph {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  height: auto;
+  padding: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.studio-glyph.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* --- Card detail, on wide cards only ------------------------------------- */
+/* Hidden until the card has room. 330px is where a three-column laptop layout lands,
+   so that gets the detail too; below it this would only add wrapping. */
+.card-extra { display: none; }
+@container (min-width: 330px) {
+  .card-extra {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+}
+.chip.queued {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  color: var(--warning);
+}
+.card-error { margin-top: 6px; color: var(--critical); font-size: 12px; }
+
+/* --- AskUserQuestion picker ---------------------------------------------- */
+/* Framed like the permission card it replaces, but without the danger colouring:
+   answering a question is not granting anything. */
+.perm-ask .perm-title { margin-bottom: 4px; }
+.ask { display: flex; flex-direction: column; gap: 14px; }
+.ask-q { display: flex; flex-direction: column; gap: 6px; }
+.ask-head { display: flex; align-items: center; gap: 8px; }
+.ask-multi { font-size: 11px; color: var(--text-muted); }
+.ask-question { font-size: 14px; color: var(--text-primary); }
+.ask-options { display: grid; gap: 6px; }
+.ask-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: left;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.ask-option:hover { border-color: var(--border-strong); }
+.ask-option.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-1));
+}
+.ask-option-label { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+.ask-option-desc { font-size: 12px; color: var(--text-secondary); }
+.ask-other { margin-bottom: 0; }

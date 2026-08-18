@@ -156,7 +156,12 @@ export function SettingsView({
       {nav}
       <div className="settings-body">
         {section === "appearance" && (
-          <AppearancePanel appearance={appearance} onChange={onAppearance} />
+          <AppearancePanel
+            appearance={appearance}
+            onChange={onAppearance}
+            themes={settings.ui.themes ?? []}
+            onThemes={(themes) => save({ ui: { themes } })}
+          />
         )}
 
         {section === "notifications" && (

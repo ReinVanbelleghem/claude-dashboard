@@ -783,10 +783,20 @@ export function sendMessage(key: string, text: string, images: InboundImage[] = 
   return true;
 }
 
+/**
+ * Resolve a parked permission prompt.
+ *
+ * `answers` exists for AskUserQuestion, whose contract puts the host's UI inside the
+ * permission step: the tool reads the picked options back out of its own input, under
+ * `answers` keyed by question text. Allowing it without them runs the tool with
+ * nothing to report, which is why an unanswered question came back as "the user did
+ * not answer" seconds after being allowed.
+ */
 export function answerPermission(
   key: string,
   requestId: string,
   behavior: "allow" | "allowAlways" | "deny",
+  answers?: Record<string, string>,
 ): boolean {
   const a = agents.get(key);
   const p = a?.pending.get(requestId);
@@ -810,6 +820,10 @@ export function answerPermission(
           // "Allow always" is exactly the suggestion set the SDK handed us, which
           // is what stops it asking again for this tool this session.
           updatedPermissions: behavior === "allowAlways" ? p.suggestions : undefined,
+          // Merged over the original input rather than replacing it: the tool still
+          // needs its questions to echo them back alongside the answers.
+          updatedInput:
+            answers && item ? { ...(item.input as object), answers } : undefined,
         },
   );
   touch(a, a.pending.size > 0 ? "awaiting-permission" : "thinking");

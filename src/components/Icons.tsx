@@ -230,3 +230,38 @@ export function CheckIcon() {
     </svg>
   );
 }
+
+/**
+ * The mode toggle's face: a sun and a moon in one 24×24 box, both always present so
+ * CSS can swap them with a transition. Which one shows is decided by the theme on the
+ * root element, not by a prop — the swap has to animate, and a remount cannot.
+ *
+ * The rays are generated rather than written out: eight identical lines differing only
+ * by angle is a loop, and hand-rounded coordinates for each would be noise.
+ */
+export function SunMoonIcon() {
+  const rays = Array.from({ length: 8 }, (_, i) => {
+    const angle = (i * Math.PI) / 4;
+    const at = (r: number) => [12 + Math.cos(angle) * r, 12 + Math.sin(angle) * r] as const;
+    const [x1, y1] = at(7.4);
+    const [x2, y2] = at(10);
+    return { x1, y1, x2, y2 };
+  });
+  return (
+    <svg className="icon sun-moon" viewBox="0 0 24 24" aria-hidden="true">
+      <g className="sm-sun">
+        <circle cx="12" cy="12" r="4.2" fill="currentColor" />
+        <g stroke="currentColor" strokeWidth="1.9" strokeLinecap="round">
+          {rays.map((r, i) => (
+            <line key={i} x1={r.x1.toFixed(2)} y1={r.y1.toFixed(2)} x2={r.x2.toFixed(2)} y2={r.y2.toFixed(2)} />
+          ))}
+        </g>
+      </g>
+      <path
+        className="sm-moon"
+        d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}

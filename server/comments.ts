@@ -188,7 +188,28 @@ export function deleteComment(id: string): boolean {
 }
 
 /**
- * Clear the resolved ones; open comments are never bulk-deleted.
+ * Delete every comment on a branch, open ones included.
+ *
+ * The scoped-delete below refuses to touch open comments on the grounds that you
+ * might still want them. That reasoning fails for a comment whose code no longer
+ * exists: it cannot be shown, so it cannot be resolved or deleted individually, and
+ * it goes on padding the count and the drafted prompt forever. This is the way out,
+ * which is why the caller confirms first and why it stays branch-scoped.
+ */
+export function clearAll(repo: string, branch?: string | null): number {
+  return (
+    mutate((rows) => {
+      const kept = rows.filter(
+        (c) => !(c.repo === repo && (branch === undefined || onBranch(c, branch))),
+      );
+      return { rows: kept, result: rows.length - kept.length };
+    }) ?? 0
+  );
+}
+
+/**
+ * Clear the resolved ones; open comments are left alone — see clearAll for the
+ * deliberate exception.
  *
  * Scoped to a branch when one is given, because the button that calls this sits
  * next to a count of what is on screen. Clearing more than you were shown is a

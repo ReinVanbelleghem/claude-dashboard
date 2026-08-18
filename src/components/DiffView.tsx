@@ -4,6 +4,7 @@ import { CommentThread, NewComment, type CommentHandlers } from "./ReviewComment
 import { highlight } from "./highlight.tsx";
 import { EditorIcon, PencilIcon, TrashIcon } from "./Icons.tsx";
 import { FileEditor } from "./FileEditor.tsx";
+import { REVEAL_ALL } from "../find.ts";
 
 /** Everything the diff needs to host a review, or nothing to stay read-only. */
 export type ReviewProps = {
@@ -176,7 +177,15 @@ export function DiffView({
     );
   }, [patch, files]);
 
+  // A folded file renders no body at all, so unfold everything before a find runs.
+  useEffect(() => {
+    const onReveal = () => setClosed(new Set());
+    window.addEventListener(REVEAL_ALL, onReveal);
+    return () => window.removeEventListener(REVEAL_ALL, onReveal);
+  }, []);
+
   if (files.length === 0) return <div className="empty">{emptyLabel}</div>;
+
 
   const total = files.reduce(
     (acc, f) => ({ add: acc.add + f.insertions, del: acc.del + f.deletions }),

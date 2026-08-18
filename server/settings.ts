@@ -23,6 +23,25 @@ export type Appearance = {
   favicon: string;
   faviconColor: string;
   motion?: boolean;
+  customAccent?: { dark: string; light: string };
+  customIconColor?: { dark: string; light: string };
+  /** Per-mode slider sets. Older files hold a single flat set; the UI migrates it. */
+  customPalette?: Record<string, unknown>;
+  unsafeContrast?: boolean;
+};
+
+/**
+ * A named appearance the user saved. Stored here rather than in localStorage so a
+ * theme built on one machine is there when the dashboard is opened from another.
+ */
+/**
+ * A saved theme covers both modes, so it stores everything except which mode is on.
+ * `appearance` is the pre-look shape, still read so older files keep working.
+ */
+export type SavedTheme = {
+  name: string;
+  look?: Omit<Appearance, "theme"> & { theme?: never };
+  appearance?: Appearance;
 };
 
 export type Settings = {
@@ -76,6 +95,8 @@ export type Settings = {
      * already correct rather than flashing the default theme.
      */
     appearance?: Appearance;
+    /** Named themes, newest first. Replaced wholesale like appearance is. */
+    themes?: SavedTheme[];
   };
 };
 

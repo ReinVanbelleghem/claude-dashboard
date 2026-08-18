@@ -80,15 +80,15 @@ export function Sparkline({ points, height = 92 }: { points: Point[]; height?: n
       >
         <defs>
           <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--series-1)" stopOpacity="0.32" />
-            <stop offset="100%" stopColor="var(--series-1)" stopOpacity="0.02" />
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.32" />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
           </linearGradient>
         </defs>
         <path d={area} fill="url(#sparkFill)" />
         <path
           d={line}
           fill="none"
-          stroke="var(--series-1)"
+          stroke="var(--accent)"
           strokeWidth="2"
           vectorEffect="non-scaling-stroke"
           strokeLinejoin="round"
@@ -110,7 +110,7 @@ export function Sparkline({ points, height = 92 }: { points: Point[]; height?: n
               cx={x(hover)}
               cy={y(points[hover].value)}
               r="4.5"
-              fill="var(--series-1)"
+              fill="var(--accent)"
               stroke="var(--surface-1)"
               strokeWidth="2"
               vectorEffect="non-scaling-stroke"

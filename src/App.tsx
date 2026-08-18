@@ -18,15 +18,17 @@ import {
 import {
   applyAppearance,
   currentIconUrl,
-  DEFAULT_APPEARANCE,
-  faviconDataUrl,
+  normalizeAppearance,
+  faviconFor,
   readStored,
   setAttention,
   setBusy,
   type Appearance,
 } from "./appearance.ts";
 import { useIconPhase } from "./useIconPhase.ts";
+import { SunMoonIcon } from "./components/Icons.tsx";
 import { Tile } from "./components/Charts.tsx";
+import { FindBar } from "./components/FindBar.tsx";
 import { HistoryView } from "./components/HistoryView.tsx";
 import { LiveView } from "./components/LiveView.tsx";
 import { FoldersModal } from "./components/FoldersModal.tsx";
@@ -65,6 +67,7 @@ export default function App() {
   const [showNew, setShowNew] = useState(false);
   const [showFolders, setShowFolders] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
+  const [showFind, setShowFind] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   // Read from localStorage rather than settings.json so the first paint is
   // already in the right theme; the server copy syncs in a moment later.
@@ -95,12 +98,22 @@ export default function App() {
    * Escape is left to the palette itself: the drawer and the modals each have
    * their own Escape listener, and stacking another one here would close two
    * things with one press.
+   *
+   * ⌘F is taken over for the same reason ⌘K is: the native find cannot see a
+   * clamped transcript turn or a folded diff, so it reports "not found" for text
+   * the session really does contain. ⇧⌘F is deliberately left alone as the way
+   * back to the browser's own find.
    */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setShowPalette((v) => !v);
+      }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setShowFind(true);
+        document.querySelector<HTMLInputElement>(".find-input")?.select();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -130,10 +143,10 @@ export default function App() {
         setSettings(r.settings);
         // The daemon's copy wins on load, so a choice made in one browser shows up
         // in the next one you open. Local storage only covers the pre-paint gap.
-        // Layered over the defaults rather than replacing them: a copy written before
-        // a key existed would otherwise arrive as undefined and read as "off".
+        // Normalised rather than spread: the nested slider and colour objects need
+        // filling out too, or a copy written before a key existed arrives missing it.
         if (r.settings.ui.appearance) {
-          setAppearance({ ...DEFAULT_APPEARANCE, ...r.settings.ui.appearance });
+          setAppearance(normalizeAppearance(r.settings.ui.appearance));
         }
       })
       .catch(() => {});
@@ -206,6 +219,11 @@ export default function App() {
   // "Claude is". The icon animates for the second and badges for the first, so the
   // two states stay distinguishable at a glance instead of both meaning "activity".
   const thinking = agents.filter((a) => a.status === "thinking").length;
+
+  // "Live" means a process exists: started or working or waiting on you, but not one
+  // that has ended or died.
+  const liveHere = agents.filter((a) => a.status !== "ended" && a.status !== "error").length;
+  const liveExternal = live?.counts.alive ?? 0;
 
   /**
    * A session can be addressed by its transcript id or, before that exists, by the
@@ -294,20 +312,20 @@ export default function App() {
           >
             <img
               className="brand-icon"
-              src={faviconDataUrl(
-                appearance.favicon,
-                appearance.faviconColor,
-                appearance.theme,
-                blocked > 0,
-                brandPhase,
-              )}
+              src={faviconFor(appearance, blocked > 0, brandPhase)}
               alt=""
               width={22}
               height={22}
             />
           </span>
           Claude Sessions
-          <small>{live ? `${live.counts.alive} live` : "—"}</small>
+          {/* Both kinds, because the header is the one place that should answer "is
+              anything running". live.counts.alive is external sessions only — the
+              dashboard's own are deliberately excluded from that payload — so on its
+              own it read "0 live" with two sessions on screen, one of them thinking. */}
+          <small title={`${liveHere} started here · ${liveExternal} external`}>
+            {liveHere + liveExternal} live
+          </small>
         </div>
         <span className={`conn ${connected ? "" : "off"}`}>
           <i className="dot" />
@@ -330,12 +348,15 @@ export default function App() {
             </button>
           ))}
         </nav>
+        {/* The icon is the mode you are about to get, which is what the word here used
+            to say. Its label carries the same sentence for anything not looking. */}
         <button
-          className="icon-btn"
-          title="Full theme and icon options live in Settings → Appearance"
+          className="icon-btn mode-toggle"
+          title={`Switch to ${appearance.theme === "dark" ? "light" : "dark"} mode — full theme and icon options live in Settings → Appearance`}
+          aria-label={`Switch to ${appearance.theme === "dark" ? "light" : "dark"} mode`}
           onClick={() => changeAppearance({ theme: appearance.theme === "dark" ? "light" : "dark" })}
         >
-          {appearance.theme === "dark" ? "Light" : "Dark"}
+          <SunMoonIcon />
         </button>
       </header>
 
@@ -449,6 +470,8 @@ export default function App() {
           onAppearance={changeAppearance}
         />
       )}
+
+      {showFind && <FindBar onClose={() => setShowFind(false)} />}
 
       {showFolders && <FoldersModal onClose={() => setShowFolders(false)} />}
 

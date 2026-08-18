@@ -97,6 +97,7 @@ export const GitPanel = memo(function GitPanel({
   const [showOther, setShowOther] = useState(false);
   /** How many open comments this branch's scope is holding back. */
   const [offBranch, setOffBranch] = useState(0);
+  const [listStranded, setListStranded] = useState(false);
   /** Those comments themselves, fetched only when you ask to see them. */
   const [otherRows, setOtherRows] = useState<ReviewComment[] | null>(null);
   /**
@@ -368,6 +369,12 @@ export const GitPanel = memo(function GitPanel({
    * sends you looking for something that cannot appear.
    */
   const elsewhere = openComments.length - inView.length;
+  /**
+   * The ones the diff cannot show. Listed on request rather than only counted: a
+   * comment whose file is no longer in the tree has no row to sit under, so without
+   * this it can be counted but never read or deleted.
+   */
+  const stranded = openComments.filter((c) => !shown.has(c.path));
 
   return (
     <div className="panel git-panel">
@@ -534,6 +541,15 @@ export const GitPanel = memo(function GitPanel({
                       show all files
                     </button>
                   )}
+                  {elsewhere > 0 && (
+                    <button
+                      className="link-btn inline"
+                      title="Read and delete the comments this diff cannot show"
+                      onClick={() => setListStranded((v) => !v)}
+                    >
+                      {listStranded ? "hide list" : "list them"}
+                    </button>
+                  )}
                   {offBranch > 0 && (
                     <button className="link-btn inline" onClick={toggleOther}>
                       {showOther ? "hide those" : "review those"}
@@ -560,6 +576,22 @@ export const GitPanel = memo(function GitPanel({
                       Clear resolved
                     </button>
                   )}
+                  {comments.length > 0 && (
+                    <button
+                      className="icon-btn danger"
+                      title={`Deletes all ${comments.length} comment${comments.length === 1 ? "" : "s"} on this branch, open ones included — other branches are left alone`}
+                      onClick={() => {
+                        if (!repoRoot) return;
+                        const ok = window.confirm(
+                          `Delete all ${comments.length} comment${comments.length === 1 ? "" : "s"} on this branch? This cannot be undone.`,
+                        );
+                        if (!ok) return;
+                        commentApi.clearAll(repoRoot, branch).then(reload).catch(() => {});
+                      }}
+                    >
+                      Clear all
+                    </button>
+                  )}
                   <button
                     className="icon-btn primary"
                     disabled={openComments.length === 0}
@@ -575,6 +607,36 @@ export const GitPanel = memo(function GitPanel({
                 </div>
               )}
               {sent && <div className="review-sent">{sent}</div>}
+
+              {/* Same idea for this branch's own strays: the file is gone from the diff
+                  (deleted, committed away, or filtered out), so the comment has no row
+                  to render under. Shown here so it can be read and removed. */}
+              {listStranded && stranded.length > 0 && (
+                <div className="review-orphans">
+                  <div className="review-orphans-head">
+                    <span>
+                      On this branch but not in the diff on screen — widening the scope may
+                      bring some back; anything whose file is gone can only be dealt with here.
+                    </span>
+                  </div>
+                  {stranded.map((c) => (
+                    <div className="review-orphan" key={c.id}>
+                      <span className="review-orphan-where">
+                        {c.path || "(no file)"}
+                        {c.line ? `:${c.line}` : ""}
+                      </span>
+                      <span className="review-orphan-body">{c.body}</span>
+                      <button
+                        className="icon-btn tiny"
+                        onClick={() => handlers.remove(c.id)}
+                        title="Delete this comment"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* Off-branch comments, shown in full because there is nowhere else to
                   see them: their code isn't in this tree, so no diff will ever render

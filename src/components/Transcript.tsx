@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SessionDetail } from "../api.ts";
+import { REVEAL_ALL } from "../find.ts";
 import { Markdown } from "./Markdown.tsx";
 
 export type TurnRow = SessionDetail["turns"][number];
@@ -51,6 +52,14 @@ function CommandChip({ command }: { command: Command }) {
 
 export function Turn({ turn }: { turn: TurnRow }) {
   const [open, setOpen] = useState(false);
+
+  // A clamped turn hides most of its text from the DOM, so find would miss it.
+  useEffect(() => {
+    const onReveal = () => setOpen(true);
+    window.addEventListener(REVEAL_ALL, onReveal);
+    return () => window.removeEventListener(REVEAL_ALL, onReveal);
+  }, []);
+
   const { command, body } = turn.role === "user" ? parseCommand(turn.text) : { command: null, body: turn.text };
   const long = body.length > CLAMP_CHARS;
   const shown = long && !open ? `${body.slice(0, CLAMP_CHARS)}…` : body;

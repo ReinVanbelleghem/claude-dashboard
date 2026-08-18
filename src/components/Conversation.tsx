@@ -833,6 +833,124 @@ function Item({
   }
 }
 
+/** The shape AskUserQuestion puts in its input; only what the UI needs to render. */
+type AskQuestion = {
+  question: string;
+  header: string;
+  multiSelect?: boolean;
+  options: { label: string; description?: string }[];
+};
+
+function askQuestions(input: unknown): AskQuestion[] | null {
+  if (!input || typeof input !== "object") return null;
+  const qs = (input as { questions?: unknown }).questions;
+  if (!Array.isArray(qs) || qs.length === 0) return null;
+  const parsed = qs.filter(
+    (q): q is AskQuestion =>
+      !!q && typeof (q as AskQuestion).question === "string" && Array.isArray((q as AskQuestion).options),
+  );
+  return parsed.length > 0 ? parsed : null;
+}
+
+/**
+ * AskUserQuestion's picker.
+ *
+ * This tool is answered through the permission step rather than after it: the host
+ * collects the choices and hands them back as part of the tool's own input. Without
+ * a UI here the prompt could only be allowed — and allowing it with no answers is
+ * what produced "the user did not answer the questions" a few seconds later.
+ *
+ * "Other" is offered on every question because the tool's own description promises
+ * it, and a free-text answer is often the real one.
+ */
+function AskQuestions({
+  questions,
+  busy,
+  onSubmit,
+  onSkip,
+}: {
+  questions: AskQuestion[];
+  busy: boolean;
+  onSubmit: (answers: Record<string, string>) => void;
+  onSkip: () => void;
+}) {
+  const [picked, setPicked] = useState<Record<string, string[]>>({});
+  const [other, setOther] = useState<Record<string, string>>({});
+
+  const choose = (q: AskQuestion, label: string) =>
+    setPicked((prev) => {
+      const current = prev[q.question] ?? [];
+      if (!q.multiSelect) return { ...prev, [q.question]: [label] };
+      return {
+        ...prev,
+        [q.question]: current.includes(label)
+          ? current.filter((l) => l !== label)
+          : [...current, label],
+      };
+    });
+
+  /** Free text wins when present: typing it is a clearer signal than a stale chip. */
+  const answerFor = (q: AskQuestion): string => {
+    const typed = other[q.question]?.trim();
+    if (typed) return typed;
+    return (picked[q.question] ?? []).join(", ");
+  };
+
+  const ready = questions.every((q) => answerFor(q).length > 0);
+
+  return (
+    <div className="ask">
+      {questions.map((q) => (
+        <div className="ask-q" key={q.question}>
+          <div className="ask-head">
+            <span className="chip">{q.header}</span>
+            {q.multiSelect && <span className="ask-multi">pick any</span>}
+          </div>
+          <div className="ask-question">{q.question}</div>
+          <div className="ask-options">
+            {q.options.map((o) => {
+              const on = (picked[q.question] ?? []).includes(o.label);
+              return (
+                <button
+                  key={o.label}
+                  className={`ask-option ${on ? "on" : ""}`}
+                  disabled={busy}
+                  aria-pressed={on}
+                  onClick={() => choose(q, o.label)}
+                >
+                  <span className="ask-option-label">{o.label}</span>
+                  {o.description && <span className="ask-option-desc">{o.description}</span>}
+                </button>
+              );
+            })}
+          </div>
+          <input
+            className="search ask-other"
+            placeholder="Other — type your own answer…"
+            value={other[q.question] ?? ""}
+            disabled={busy}
+            onChange={(e) => setOther((prev) => ({ ...prev, [q.question]: e.target.value }))}
+          />
+        </div>
+      ))}
+      <div className="perm-actions">
+        <button
+          className="icon-btn primary"
+          disabled={busy || !ready}
+          onClick={() =>
+            onSubmit(Object.fromEntries(questions.map((q) => [q.question, answerFor(q)])))
+          }
+        >
+          {questions.length > 1 ? "Send answers" : "Send answer"}
+        </button>
+        <button className="icon-btn" disabled={busy} onClick={onSkip}>
+          Skip
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Permission({
   item,
   agentKey,
@@ -841,9 +959,12 @@ function Permission({
   agentKey: string;
 }) {
   const [busy, setBusy] = useState(false);
-  const answer = async (behavior: "allow" | "allowAlways" | "deny") => {
+  const answer = async (
+    behavior: "allow" | "allowAlways" | "deny",
+    answers?: Record<string, string>,
+  ) => {
     setBusy(true);
-    await agentApi.permission(agentKey, item.requestId, behavior).catch(() => {});
+    await agentApi.permission(agentKey, item.requestId, behavior, answers).catch(() => {});
     setBusy(false);
   };
 
@@ -857,6 +978,23 @@ function Permission({
             : "Allowed"}
         {" · "}
         {item.toolName}
+      </div>
+    );
+  }
+
+  // A question is not a permission request in any useful sense, so it does not get
+  // the allow/deny framing — it gets the picker and a Skip.
+  const questions = item.toolName === "AskUserQuestion" ? askQuestions(item.input) : null;
+  if (questions) {
+    return (
+      <div className="perm perm-ask">
+        <div className="perm-title">Claude is asking</div>
+        <AskQuestions
+          questions={questions}
+          busy={busy}
+          onSubmit={(answers) => void answer("allow", answers)}
+          onSkip={() => void answer("deny")}
+        />
       </div>
     );
   }

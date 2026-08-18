@@ -218,6 +218,8 @@ export type Settings = {
     openSessionsIn: "drawer" | "page";
     /** Theme, accent hue and tab icon. Mirrored in localStorage for first paint. */
     appearance?: Appearance;
+    /** Named looks the user saved, newest first. Each covers both dark and light. */
+    themes?: { name: string; look?: Partial<Appearance>; appearance?: Partial<Appearance> }[];
 
   };
 };
@@ -314,6 +316,9 @@ export const commentApi = {
       `/api/comments/prompt?repo=${encodeURIComponent(repo)}${branchParam(branch)}`,
     ),
   markSent: (ids: string[]) => post("/api/comments/sent", { ids }),
+  /** Deletes every comment on the branch, open included. The UI confirms first. */
+  clearAll: (repo: string, branch: string | null) =>
+    post<{ removed: number }>("/api/comments/clear-all", { repo, branch }),
   clearResolved: (repo: string, branch: string | null) =>
     post<{ removed: number }>("/api/comments/clear-resolved", { repo, branch }),
 };
@@ -588,8 +593,13 @@ export const agentApi = {
   }) => post<{ key: string }>("/api/agents", opts),
   message: (key: string, text: string, images: OutboundImage[] = []) =>
     post(`/api/agents/${key}/message`, { text, ...(images.length ? { images } : {}) }),
-  permission: (key: string, requestId: string, behavior: "allow" | "allowAlways" | "deny") =>
-    post(`/api/agents/${key}/permission`, { requestId, behavior }),
+  /** `answers` is only meaningful for AskUserQuestion — see answerPermission. */
+  permission: (
+    key: string,
+    requestId: string,
+    behavior: "allow" | "allowAlways" | "deny",
+    answers?: Record<string, string>,
+  ) => post(`/api/agents/${key}/permission`, { requestId, behavior, answers }),
   interrupt: (key: string) => post(`/api/agents/${key}/interrupt`),
   model: (key: string, model: string) => post(`/api/agents/${key}/model`, { model }),
   mode: (key: string, permissionMode: PermissionMode) => post(`/api/agents/${key}/mode`, { permissionMode }),

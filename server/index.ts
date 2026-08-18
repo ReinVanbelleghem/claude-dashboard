@@ -31,6 +31,7 @@ import {
 import {
   addComment,
   buildPrompt,
+  clearAll,
   clearResolved,
   countOffBranch,
   deleteComment,
@@ -626,7 +627,12 @@ const server = Bun.serve({
           }
           case "permission":
             return json({
-              ok: answerPermission(id, String(body.requestId ?? ""), body.behavior as never),
+              ok: answerPermission(
+                id,
+                String(body.requestId ?? ""),
+                body.behavior as never,
+                body.answers as Record<string, string> | undefined,
+              ),
             });
           case "interrupt":
             return json({ ok: await interruptAgent(id) });
@@ -729,6 +735,12 @@ const server = Bun.serve({
       const b = (await req.json().catch(() => ({}))) as { ids?: string[] };
       markSent(b.ids ?? []);
       return json({ ok: true });
+    }
+
+    if (p === "/api/comments/clear-all" && req.method === "POST") {
+      const b = (await req.json().catch(() => ({}))) as { repo?: string; branch?: string | null };
+      const branch = "branch" in b ? (b.branch ?? null) : undefined;
+      return json({ removed: b.repo ? clearAll(b.repo, branch) : 0 });
     }
 
     if (p === "/api/comments/clear-resolved" && req.method === "POST") {

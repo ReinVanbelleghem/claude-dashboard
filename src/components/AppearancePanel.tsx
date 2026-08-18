@@ -1,52 +1,55 @@
+import { useState } from "react";
 import {
-  ACCENTS,
-  FAVICONS,
-  PALETTES,
-  accentHex,
-  faviconDataUrl,
-  iconPng,
+  accentColor,
+  accentInkColor,
+  chipSurface,
+  faviconFor,
+  lookOf,
+  surfacesFor,
+  toSavedTheme,
   prefersReducedMotion,
-  type AccentName,
   type Appearance,
-  type FaviconName,
+  type StoredTheme,
+  type ThemeLook,
+  type ThemeName,
 } from "../appearance.ts";
+import { ThemeStudio } from "./ThemeStudio.tsx";
+import { PencilIcon } from "./Icons.tsx";
 import { useIconPhase } from "../useIconPhase.ts";
 
+export type { StoredTheme } from "../appearance.ts";
+
 /**
- * Appearance, applied live as you click rather than on save — the point of a
- * theme picker is seeing it, and every option here is reversible.
+ * Appearance, reduced to two things: which saved theme is on, and the button that
+ * opens the builder.
+ *
+ * It used to be five stacked grids — palette cards, accent dots, glyphs, icon
+ * colours — which meant every colour decision was made in a different row with no
+ * preview of the result. All of that now lives in the studio, where the choices sit
+ * next to what they do; this panel is the shelf you pick a finished theme off.
  */
 export function AppearancePanel({
   appearance,
   onChange,
+  themes = [],
+  onThemes,
 }: {
   appearance: Appearance;
   onChange: (patch: Partial<Appearance>) => void;
+  /** Saved themes, newest first. Absent while settings.json is still loading. */
+  themes?: StoredTheme[];
+  onThemes?: (next: StoredTheme[]) => void;
 }) {
   const a = appearance;
-  // The picker previews motion unconditionally: it is the only place you can see
-  // what you are choosing, and waiting for a session to start working to find out
-  // what "Orbit" does is not a choice anyone can make.
+  const [studio, setStudio] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
   const reduced = prefersReducedMotion();
   const phase = useIconPhase(a.motion);
 
-  /**
-   * Render the chosen icon to a file. Revoking the object URL is deferred rather
-   * than done on the next line: the click is handled asynchronously, and pulling
-   * the URL out from under it cancels the download in some browsers.
-   */
-  const downloadIcon = () => {
-    iconPng(a)
-      .then((blob) => {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `claude-sessions-${a.favicon}-${a.faviconColor}.png`;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(url), 30_000);
-      })
-      .catch(() => {});
-  };
+  // Read once per render, so legacy entries and current ones behave identically.
+  const saved = themes.map(toSavedTheme);
+  /** Active when every colour-bearing field matches — the mode is not one of them. */
+  const activeName = saved.find((t) => sameLook(t.look, lookOf(a)))?.name ?? null;
 
   return (
     <div className="panel">
@@ -56,184 +59,213 @@ export function AppearancePanel({
       </p>
 
       <div className="set-group">
-        <h3 className="set-h">Theme</h3>
-        <div className="swatch-row">
-          {(["dark", "light"] as const).map((t) => (
+        <div className="theme-hero">
+          <div
+            className="theme-hero-preview"
+            style={{ background: chipSurface(a), borderColor: accentColor(a) }}
+          >
+            <img src={faviconFor(a, false, phase)} alt="" width={20} height={20} />
+          </div>
+          <div className="theme-hero-text">
+            <strong>{activeName ?? "Unsaved look"}</strong>
+            <span className="set-help">
+              {a.theme === "dark" ? "Dark" : "Light"} · hue {Math.round(a.customPalette[a.theme].hue)}° ·{" "}
+              {a.accent === "custom" ? "custom accent" : `${a.accent} accent`}
+              {reduced ? " · reduced motion" : ""}
+            </span>
+          </div>
+          <div className="theme-hero-actions">
+            {/* Both doors stay open: New starts from the current look with an empty
+                name so saving adds an entry, Edit updates the one that is on. */}
             <button
-              key={t}
-              className={`theme-card ${a.theme === t ? "on" : ""}`}
-              data-theme-preview={t}
-              onClick={() => onChange({ theme: t })}
+              className="icon-btn primary"
+              onClick={() => {
+                setEditing(null);
+                setStudio(true);
+              }}
             >
-              <span className="theme-card-bar" style={{ background: accentHex(a.accent, t) }} />
-              <span className="theme-card-line" />
-              <span className="theme-card-line short" />
-              <span className="theme-card-name">{t === "dark" ? "Dark" : "Light"}</span>
+              New theme
             </button>
-          ))}
-        </div>
-
-        <h3 className="set-h">Palette</h3>
-        <p className="set-help">
-          Surfaces, borders and text. Chart colours and the accent sit on top and do not move.
-        </p>
-        <div className="swatch-row">
-          {PALETTES.map((p) => {
-            const s = p[a.theme];
-            return (
+            {activeName && (
               <button
-                key={p.name}
-                className={`palette-card ${a.palette === p.name ? "on" : ""}`}
-                title={p.help}
-                aria-pressed={a.palette === p.name}
-                onClick={() => onChange({ palette: p.name })}
-                style={
-                  s
-                    ? { background: s["surface-1"], borderColor: s.border, color: s["text-secondary"] }
-                    : undefined
-                }
+                className="icon-btn"
+                onClick={() => {
+                  setEditing(activeName);
+                  setStudio(true);
+                }}
               >
-                <span
-                  className="palette-card-bar"
-                  style={{ background: accentHex(a.accent, a.theme) }}
-                />
-                <span className="palette-card-line" />
-                <span className="palette-card-name">{p.label}</span>
+                Edit “{activeName}”
               </button>
-            );
-          })}
-        </div>
-
-        <h3 className="set-h">Accent</h3>
-        <p className="set-help">
-          Drives links, focus rings, active tabs and the speaker bar. Chart colours are
-          deliberately left alone.
-        </p>
-        <div className="swatch-row">
-          {ACCENTS.map((c) => (
-            <button
-              key={c.name}
-              className={`swatch ${a.accent === c.name ? "on" : ""}`}
-              title={c.label}
-              aria-label={c.label}
-              aria-pressed={a.accent === c.name}
-              style={{ background: accentHex(c.name, a.theme) }}
-              onClick={() => onChange({ accent: c.name })}
-            />
-          ))}
-        </div>
-
-        <h3 className="set-h">Tab icon</h3>
-        <p className="set-help">
-          Every glyph has a motion, shown here on the one you have picked. It only runs
-          while a session is actually working.
-        </p>
-        <div className="swatch-row">
-          {FAVICONS.map((f) => (
-            <button
-              key={f.name}
-              className={`fav-pick ${a.favicon === f.name ? "on" : ""}`}
-              title={f.label}
-              aria-pressed={a.favicon === f.name}
-              onClick={() => onChange({ favicon: f.name as FaviconName })}
-            >
-              {/* Only the selected tile moves. Twelve glyphs animating at once is a
-                  fidget spinner, and it makes the one that matters harder to judge. */}
-              <img
-                src={faviconDataUrl(
-                  f.name,
-                  a.faviconColor,
-                  a.theme,
-                  false,
-                  a.favicon === f.name ? phase : undefined,
-                )}
-                alt={f.label}
-                width={28}
-                height={28}
-              />
-              <span>{f.label}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* Wrapped for the same reason the Dock button below is: .check is inline-flex,
-            and bare it leaves the help text wrapping around it instead of under it. */}
-        <div className="swatch-row">
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={a.motion}
-              onChange={(e) => onChange({ motion: e.target.checked })}
-            />
-            <span>Animate the icon while a session is working</span>
-          </label>
-        </div>
-        <span className="set-help">
-          {reduced
-            ? "Your system asks for reduced motion, so this stays still regardless."
-            : "The tab icon, and the mark in the header, move while Claude is thinking. They stop the moment it needs you — a waiting session gets the dot, not the motion."}
-        </span>
-
-        <div className="sub-label">Icon colour</div>
-        <div className="swatch-row">
-          {ACCENTS.map((c) => (
-            <button
-              key={c.name}
-              className={`swatch sm ${a.faviconColor === c.name ? "on" : ""}`}
-              title={`Icon in ${c.label.toLowerCase()}`}
-              aria-label={`Icon in ${c.label.toLowerCase()}`}
-              aria-pressed={a.faviconColor === c.name}
-              style={{ background: accentHex(c.name, a.theme) }}
-              onClick={() => onChange({ faviconColor: c.name as AccentName })}
-            />
-          ))}
-        </div>
-
-        <div className="tab-preview-row">
-          <div className="tab-preview">
-            <img
-              src={faviconDataUrl(a.favicon, a.faviconColor, a.theme, false, phase)}
-              alt=""
-              width={16}
-              height={16}
-            />
-            <span>Claude Sessions</span>
-            <span className="tab-preview-x">×</span>
-          </div>
-          {/* The badged state is the whole point of the icon, so show it here
-              rather than making you wait for a session to block. */}
-          <div className="tab-preview">
-            <img
-              src={faviconDataUrl(a.favicon, a.faviconColor, a.theme, true)}
-              alt=""
-              width={16}
-              height={16}
-            />
-            <span>(1) Claude Sessions</span>
-            <span className="tab-preview-x">×</span>
+            )}
           </div>
         </div>
-        <span className="set-help">
-          The dot and the count appear whenever a session is waiting on you. Browsers cache
-          favicons hard — a hard reload (⌘⇧R) settles it if the tab lags behind. Installed to
-          the Dock, the same count becomes a badge on the app icon.
-        </span>
 
-        <div className="sub-label">Dock icon</div>
-        {/* The row wrapper is load-bearing: a bare inline-flex button leaves the
-            help text below flowing around it instead of under it. */}
-        <div className="swatch-row">
-          <button className="icon-btn" onClick={downloadIcon}>
-            Download as PNG
-          </button>
+        {/* Two cards rather than a two-word toggle: a theme carries both columns, and
+            the only way to judge the one you are not in is to see it. Each card paints
+            itself in its own mode, so this is the switch and the showcase at once. */}
+        <div className="mode-cards" role="group" aria-label="Dark or light">
+          {(["dark", "light"] as const).map((mode) => (
+            <ModeCard
+              key={mode}
+              appearance={a}
+              mode={mode}
+              on={a.theme === mode}
+              phase={phase}
+              onPick={() => onChange({ theme: mode })}
+            />
+          ))}
         </div>
-        <span className="set-help">
-          A Dock app keeps whichever icon it was installed with, so the choice above cannot
-          reach it while it is running. Download the icon, then set it in the web app's own
-          settings (File → Settings → General → the icon well) — or remove it from the Dock
-          and add it again to pick up the current one.
-        </span>
       </div>
+
+      <div className="set-group">
+        <h3 className="set-h">Saved themes</h3>
+        <p className="set-help">
+          Each theme covers both modes, so applying one keeps whichever of Dark or Light you
+          are in. Stored in settings.json, so a look survives a reload and is there in any
+          browser that opens this dashboard.
+        </p>
+        {themes.length === 0 ? (
+          <div className="empty">Nothing saved yet — open the studio and name a look.</div>
+        ) : (
+          <div className="saved-themes">
+            {saved.map((t) => (
+              <div key={t.name} className="saved-theme">
+                <button
+                  className={`saved-theme-apply ${t.name === activeName ? "on" : ""}`}
+                  title={`Apply ${t.name}`}
+                  aria-pressed={t.name === activeName}
+                  // The look only — applying a theme must not flip dark/light.
+                  onClick={() => onChange(t.look)}
+                >
+                  <span
+                    className="saved-theme-chip"
+                    style={{
+                      background: chipSurface({ ...t.look, theme: a.theme }),
+                      borderColor: accentColor({ ...t.look, theme: a.theme }),
+                    }}
+                  />
+                  <span className="saved-theme-name">{t.name}</span>
+                  <span className="saved-theme-meta">
+                    hue {Math.round(t.look.customPalette[a.theme].hue)}° ·{" "}
+                    {t.look.accent === "custom" ? "custom accent" : `${t.look.accent} accent`}
+                  </span>
+                </button>
+                <button
+                  className="icon-btn tiny"
+                  title={`Edit ${t.name}`}
+                  aria-label={`Edit ${t.name}`}
+                  onClick={() => {
+                    onChange(t.look);
+                    setEditing(t.name);
+                    setStudio(true);
+                  }}
+                >
+                  <PencilIcon />
+                </button>
+                <button
+                  className="icon-btn tiny danger"
+                  title={`Delete ${t.name}`}
+                  aria-label={`Delete ${t.name}`}
+                  disabled={!onThemes}
+                  onClick={() => onThemes?.(saved.filter((x) => x.name !== t.name))}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {studio && (
+        <ThemeStudio
+          appearance={a}
+          onChange={onChange}
+          themes={themes}
+          onThemes={onThemes}
+          editing={editing}
+          onClose={() => {
+            setStudio(false);
+            setEditing(null);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * One mode of the current theme, drawn in that mode's own colours: the tile, a panel
+ * with both text steps, and the accent carrying a label. Clicking it switches.
+ */
+function ModeCard({
+  appearance,
+  mode,
+  on,
+  phase,
+  onPick,
+}: {
+  appearance: Appearance;
+  mode: ThemeName;
+  on: boolean;
+  phase?: number;
+  onPick: () => void;
+}) {
+  const m: Appearance = { ...appearance, theme: mode };
+  const s = surfacesFor(appearance, mode);
+  const accent = accentColor(m);
+  const ink = accentInkColor(m);
+  return (
+    <button
+      className={`mode-card ${on ? "on" : ""}`}
+      aria-pressed={on}
+      onClick={onPick}
+      style={{ background: s["surface-0"], borderColor: on ? accent : s.border }}
+    >
+      <span className="mode-card-top">
+        <img src={faviconFor(m, false, phase)} alt="" width={18} height={18} />
+        <span style={{ color: s["text-primary"] }}>{mode === "dark" ? "Dark" : "Light"}</span>
+        {on && <span className="mode-card-now" style={{ color: accent }}>current</span>}
+      </span>
+      <span
+        className="mode-card-panel"
+        style={{ background: s["surface-1"], borderColor: s.border }}
+      >
+        <span className="mode-card-line" style={{ color: s["text-primary"] }}>
+          Session on main
+        </span>
+        <span className="mode-card-sub" style={{ color: s["text-muted"] }}>
+          11:04 · 3.2k tokens
+        </span>
+        <span className="mode-card-row">
+          <span className="mode-card-btn" style={{ background: accent, color: ink }}>
+            Approve
+          </span>
+          <span
+            className="mode-card-chip"
+            style={{ background: s["surface-2"], color: s["text-secondary"], borderColor: s["border-strong"] }}
+          >
+            chip
+          </span>
+        </span>
+      </span>
+    </button>
+  );
+}
+
+/** Compares only what a theme actually carries, so unrelated state cannot unmatch it. */
+function sameLook(x: ThemeLook, y: ThemeLook): boolean {
+  const keys = [
+    "palette",
+    "accent",
+    "accentInk",
+    "favicon",
+    "faviconColor",
+    "unsafeContrast",
+  ] as const;
+  if (keys.some((k) => x[k] !== y[k])) return false;
+  return (
+    JSON.stringify([x.customPalette, x.customAccent, x.customIconColor, x.customAccentInk]) ===
+    JSON.stringify([y.customPalette, y.customAccent, y.customIconColor, y.customAccentInk])
   );
 }

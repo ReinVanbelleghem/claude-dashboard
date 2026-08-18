@@ -10,6 +10,7 @@ import {
   type SessionRow,
 } from "../api.ts";
 import { GitBadge } from "./GitPanel.tsx";
+import { MODE_LABEL } from "./Conversation.tsx";
 import { FolderIcon, PlusIcon } from "./Icons.tsx";
 
 /** Always opens the full page, whatever the click preference is set to. */
@@ -111,18 +112,17 @@ export function LiveView({
         </div>
       )}
 
-      {live && (
+      {/* Hidden entirely when nothing is running externally, like every other panel
+          here: an empty panel explaining a registry you are not using is a paragraph
+          of chrome between you and your own sessions. */}
+      {active.length > 0 && (
         <div className="panel">
           <h2>Running externally ({active.length})</h2>
           <p className="hint">
             Started outside the dashboard, read from the session registry on disk. Read-only here —
             their input belongs to whatever launched them.
           </p>
-          {active.length === 0 ? (
-            <div className="empty">No external sessions running.</div>
-          ) : (
-            <Cards sessions={active} titles={titles} onOpen={onOpen} />
-          )}
+          <Cards sessions={active} titles={titles} onOpen={onOpen} />
         </div>
       )}
 
@@ -195,6 +195,16 @@ export function LiveView({
 }
 
 /** Cards for sessions the dashboard drives. */
+/** Aliases and full model ids both land here; the family is the useful part. */
+function modelLabel(model: string | null): string {
+  if (!model || model === "default") return "default model";
+  const m = model.toLowerCase();
+  for (const family of ["opus", "sonnet", "haiku"]) {
+    if (m.includes(family)) return family[0].toUpperCase() + family.slice(1);
+  }
+  return model;
+}
+
 function AgentCards({
   agents,
   onOpen,
@@ -230,12 +240,28 @@ function AgentCards({
               <GitBadge cwd={a.cwd} compact />
             </div>
             <div className="card-meta">
-              <span className="chip">{ended ? "ended" : "interactive"}</span>
+              {/* The real permission mode. This chip used to read "interactive" for
+                  every live session, which meant a card in plan mode and one applying
+                  edits unasked looked identical. */}
+              <span className="chip">
+                {ended ? "ended" : (MODE_LABEL[a.permissionMode] ?? a.permissionMode)}
+              </span>
               <span>
                 {a.turns} turn{a.turns === 1 ? "" : "s"}
               </span>
               <span>{fmtAgo(a.updatedAt)}</span>
+              {a.pending > 0 && <span className="chip queued">{a.pending} queued</span>}
             </div>
+            {/* Revealed by a container query once the card is wide enough to hold it,
+                so this is keyed to the card rather than the viewport — the same card
+                renders narrow in the drawer and wide on a big Live grid. */}
+            <div className="card-extra">
+              <span>{modelLabel(a.model)}</span>
+              <span>started {fmtAgo(a.createdAt)}</span>
+            </div>
+            {/* Outside the collapsible row on purpose: why a session died is the one
+                thing that must not disappear because the card got narrow. */}
+            {a.error && <div className="card-why card-error">{a.error}</div>}
             {/* An ended session is only a transcript; resuming starts a fresh
                 process on the same conversation. */}
             {ended && a.sessionId && (
