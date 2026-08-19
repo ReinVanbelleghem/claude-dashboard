@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, fmtTokens, fmtUsd, type Overview, type UsagePayload } from "../api.ts";
+import { api, fmtResets, fmtTokens, fmtUsd, type Overview, type UsagePayload } from "../api.ts";
 import { HBars, Sparkline } from "./Charts.tsx";
 
 /**
@@ -80,16 +80,19 @@ export function UsageView({ usage }: { usage: UsagePayload | null }) {
       </div>
 
       <div className="panel">
-        <h2>This window</h2>
+        <h2>Your usage limits</h2>
         <p className="hint">
-          Fresh tokens against your locally configured budget, with the cache traffic behind them.
-          Cost is what this traffic would have cost at pay-as-you-go list prices — not what your
-          subscription charges, which is flat.
+          Named to match <code>claude /usage</code>. The current session is a fixed five-hour
+          window anchored on its first message, and the weekly limits run on their own seven-day
+          cycle — neither is a rolling sum, so both drop to zero at their reset. Fable is metered
+          against a separate weekly limit. Cost is what the traffic would have cost at
+          pay-as-you-go list prices, not what your subscription charges, which is flat.
         </p>
         <table>
           <thead>
             <tr>
-              <th>Window</th>
+              <th>Limit</th>
+              <th>Resets</th>
               <th className="num">Fresh</th>
               <th className="num">Cache read</th>
               <th className="num">All tokens</th>
@@ -99,14 +102,18 @@ export function UsageView({ usage }: { usage: UsagePayload | null }) {
           <tbody>
             {(
               [
-                ["Last 5 hours", usage.fiveHour],
-                ["Today", usage.day],
-                ["Last 7 days", usage.week],
-                ["All time", usage.allTime],
+                ["Current session", usage.session, usage.sessionWindow.resetsInMs],
+                ["Weekly · all models", usage.week, usage.weeklyWindow.resetsInMs],
+                ["Weekly · Fable", usage.weekFable, usage.weeklyWindow.resetsInMs],
+                ["Today", usage.day, null],
+                ["All time", usage.allTime, null],
               ] as const
-            ).map(([label, b]) => (
+            ).map(([label, b, resetsInMs]) => (
               <tr key={label}>
                 <td>{label}</td>
+                <td style={{ color: "var(--text-muted)" }}>
+                  {resetsInMs === null ? "—" : fmtResets(resetsInMs)}
+                </td>
                 <td className="num">{fmtTokens(b.fresh)}</td>
                 <td className="num" style={{ color: "var(--text-muted)" }}>
                   {fmtTokens(b.cacheRead)}

@@ -1,7 +1,12 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import {
+  compressRules,
+  covers,
   excludeLocally,
+  expandRules,
+  mergeRules,
   provision,
+  scanCandidates,
   summarise,
   unprovision,
   type ProvisionOutcome,
@@ -1771,8 +1776,20 @@ export async function worktreeAdd(
     /**
      * Untracked paths to carry into the new checkout — dependencies, env files. Omitted
      * means carry nothing; an empty array means the same, explicitly.
+     *
+     * Paths may be patterns (`projects/*` and the like); they are expanded against the
+     * main checkout here, once the repository is known.
      */
     provision?: ProvisionRule[];
+    /**
+     * Per-repository additions to that list, keyed by the shared `.git`.
+     *
+     * Resolved here rather than by the caller for one reason: which repository this is
+     * takes a `git rev-parse`, and the callers are HTTP handlers holding a working
+     * directory. Handing the whole map down keeps that lookup where the repository is
+     * already known.
+     */
+    provisionByRepo?: Record<string, ProvisionRule[]>;
     /**
      * Add provisioned paths to the repository's local exclude file when git would
      * otherwise treat them as untracked. Off unless the caller asks — it writes to the
@@ -1888,7 +1905,16 @@ export async function worktreeAdd(
      * undoing the create over it would throw away the part that worked.
      */
     let carried: ProvisionOutcome[] = [];
-    if (opts.provision && opts.provision.length > 0) {
+    /**
+     * The repository's own rules layered onto the global ones, then patterns resolved
+     * against the source tree. Both steps happen here because both need the answer to
+     * "which repository is this" that only status has.
+     */
+    const rules = expandRules(
+      status.mainRoot!,
+      mergeRules(opts.provision ?? [], opts.provisionByRepo?.[status.commonDir ?? ""] ?? []),
+    );
+    if (rules.length > 0) {
       /**
        * Two passes, and the second is the one that matters.
        *
@@ -1901,8 +1927,8 @@ export async function worktreeAdd(
        * work behind — visible in the diff, caught by `stage all`, and enough to make the
        * worktree undeletable, since a dirty one is refused.
        */
-      const wanted = opts.provision.map((r) => r.path.trim()).filter(Boolean);
-      carried = provision(status.mainRoot!, target, opts.provision, await ignoredIn(status.mainRoot!, wanted));
+      const wanted = rules.map((r) => r.path.trim()).filter(Boolean);
+      carried = provision(status.mainRoot!, target, rules, await ignoredIn(status.mainRoot!, wanted));
 
       const placed = carried.filter((o) => o.result === "linked" || o.result === "copied");
       if (placed.length > 0) {
@@ -1946,6 +1972,134 @@ async function ignoredIn(root: string, paths: string[]): Promise<Set<string>> {
     paths.map((x) => `${x}\0`).join(""),
   );
   return new Set(r.out.split("\0").filter(Boolean));
+}
+
+// ── provisioning, as a question you can ask before creating anything ──────────
+
+export type ProvisionPath = {
+  path: string;
+  mode: ProvisionRule["mode"];
+  /** Which list this came from, so the UI can show what a repo override is doing. */
+  source: "global" | "repo";
+  /** The rule that produced it, which differs from `path` when the rule is a pattern. */
+  rule: string;
+  /**
+   * git ignores it in the main checkout. False means it would be left behind rather than
+   * carried, which is the one outcome worth warning about before the fact.
+   */
+  ignored: boolean;
+};
+
+export type ProvisionPlan = {
+  ok: boolean;
+  error: string | null;
+  /** The shared `.git`: the key a per-repository rule list is stored under. */
+  repoKey: string | null;
+  mainRoot: string | null;
+  name: string | null;
+  /** The two input lists, unmerged, so the editor can show which is which. */
+  global: ProvisionRule[];
+  repo: ProvisionRule[];
+  /** What the next `worktree add` here would actually carry over. */
+  paths: ProvisionPath[];
+};
+
+/**
+ * Answer "what would a new worktree of this repository get" without creating one.
+ *
+ * Worth its own endpoint because every part of the answer is repository-specific and
+ * none of it is guessable from the rule list alone: a pattern has to be expanded against
+ * this checkout, and whether a path is carried or left behind is git's call, not the
+ * configuration's. Showing that before the create is the difference between the rule
+ * list being editable and it being verifiable.
+ */
+export async function provisionPlan(
+  cwd: string,
+  global: ProvisionRule[],
+  byRepo: Record<string, ProvisionRule[]> = {},
+): Promise<ProvisionPlan> {
+  const status = await repoStatus(cwd);
+  const empty = { global, repo: [], paths: [] };
+  if (!status.isRepo || !status.root)
+    return { ok: false, error: "not a git repository", repoKey: null, mainRoot: null, name: null, ...empty };
+  if (!status.mainRoot)
+    return {
+      ok: false,
+      error: "this repository has no main working tree",
+      repoKey: status.commonDir,
+      mainRoot: null,
+      name: null,
+      ...empty,
+    };
+
+  const repoKey = status.commonDir ?? "";
+  const repo = byRepo[repoKey] ?? [];
+  const merged = mergeRules(global, repo);
+  const from = status.mainRoot;
+
+  // Which list each rule ended up coming from. The repo's own list wins on a shared
+  // path, so it is checked first.
+  const overridden = new Set(repo.map((r) => r.path.trim()));
+  const expanded = expandRules(from, merged);
+  const ignored = await ignoredIn(from, expanded.map((r) => r.path));
+
+  const ruleFor = (path: string): string => {
+    const exact = merged.find((r) => r.path.trim() === path);
+    if (exact) return exact.path.trim();
+    const pattern = merged.find((r) => covers([r], path, from));
+    return pattern ? pattern.path.trim() : path;
+  };
+
+  return {
+    ok: true,
+    error: null,
+    repoKey,
+    mainRoot: from,
+    name: basename(from),
+    global,
+    repo,
+    paths: expanded
+      // A rule naming something this repository does not have is configuration, not a
+      // path, and listing it as one would read as a failure.
+      .filter((r) => existsSync(join(from, r.path)))
+      .map((r) => {
+        const rule = ruleFor(r.path);
+        return {
+          path: r.path,
+          mode: r.mode,
+          source: overridden.has(rule) ? ("repo" as const) : ("global" as const),
+          rule,
+          ignored: ignored.has(r.path),
+        };
+      }),
+  };
+}
+
+/**
+ * What this repository has that the current rules would not carry over.
+ *
+ * Two filters, and both are necessary. A path git does not ignore is dropped, because
+ * carrying it would put untracked work in the new checkout and make it undeletable — the
+ * same rule provisioning itself enforces, applied early so it never reaches the UI as a
+ * suggestion that cannot work. A path an existing rule already covers is dropped too,
+ * pattern included, so re-running the scan after accepting its output suggests nothing.
+ */
+export async function provisionSuggest(
+  cwd: string,
+  global: ProvisionRule[],
+  byRepo: Record<string, ProvisionRule[]> = {},
+): Promise<{ ok: boolean; error: string | null; suggestions: ProvisionRule[] }> {
+  const status = await repoStatus(cwd);
+  if (!status.isRepo || !status.mainRoot)
+    return { ok: false, error: "not a git repository with a main working tree", suggestions: [] };
+
+  const from = status.mainRoot;
+  const merged = mergeRules(global, byRepo[status.commonDir ?? ""] ?? []);
+  const found = scanCandidates(from);
+  const ignored = await ignoredIn(from, found.map((r) => r.path));
+
+  const fresh = found.filter((r) => ignored.has(r.path) && !covers(merged, r.path, from));
+  return { ok: true, error: null, suggestions: compressRules(fresh) };
 }
 
 function worktreeAddHint(err: string): string | null {

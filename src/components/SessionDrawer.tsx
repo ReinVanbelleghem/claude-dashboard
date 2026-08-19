@@ -9,6 +9,7 @@ import {
 import { HBars } from "./Charts.tsx";
 import { LiveConversation } from "./Conversation.tsx";
 import { GitBadge } from "./GitPanel.tsx";
+import { MuteMenu } from "./MuteMenu.tsx";
 import { ScrollJump, useJumpToEnd, useScrollEdges } from "./scroll.tsx";
 import { Transcript, type TurnRow } from "./Transcript.tsx";
 
@@ -92,6 +93,13 @@ export function SessionDrawer({
       <div className="scrim" onClick={onClose} />
       <aside className={`drawer ${agent ? "drawer-live" : ""}`} ref={aside}>
         <div className="drawer-actions">
+          <MuteMenu
+            id={agent?.sessionId ?? agent?.key ?? id}
+            label={title}
+            settings={settings}
+            onSettings={onSettings}
+          />
+          <span style={{ flex: 1 }} />
           <a className="icon-btn" href={`#/session/${encodeURIComponent(id)}`}>
             Open full page
           </a>

@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useState } from "react";
 import { gitApi, shortPath, type RepoStatus, type Worktree } from "../api.ts";
 import { BranchPicker, type BranchChoice } from "./BranchPicker.tsx";
 import { CheckIcon, FolderIcon, PlusIcon, TrashIcon, WorktreeIcon } from "./Icons.tsx";
+import { ProvisionEditor } from "./ProvisionEditor.tsx";
 import { cachedStatus, invalidateStatusCache, watchStatus } from "./useGitRepo.ts";
 
 /**
@@ -278,6 +279,14 @@ export const WorktreesPanel = memo(function WorktreesPanel({
           </div>
         </>
       )}
+
+      {/*
+        Only in tiles, which is the Worktrees page. In a session the panel is one of
+        several things in a narrow column and the question there is "which checkout", not
+        "what does a new one get" — and the editor would push the list of checkouts off
+        the screen to answer a question nobody asked mid-session.
+      */}
+      {layout === "tiles" && <ProvisionEditor cwd={cwd} />}
 
       {stale > 0 && (
         <button

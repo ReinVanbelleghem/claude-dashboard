@@ -94,8 +94,25 @@ function replyText(rec: any): string | null {
 }
 
 /** Top-level session transcripts only — subdirectories hold tool-result overflow. */
-function listTranscripts(): { path: string; slug: string; sessionId: string }[] {
-  const out: { path: string; slug: string; sessionId: string }[] = [];
+type Transcript = {
+  path: string;
+  slug: string;
+  sessionId: string;
+  /**
+   * True for a subagent transcript. Its assistant turns are real spend and must be
+   * counted, but its prompts are Claude-authored task briefs rather than anything
+   * the user typed, so they stay out of the conversation and prompt search.
+   */
+  usageOnly: boolean;
+};
+
+/**
+ * Every transcript under a project slug. Subagent transcripts live a further two
+ * levels down, as `<slug>/<parent-session-id>/subagents/agent-*.jsonl`, and are
+ * attributed to the parent session that spawned them.
+ */
+function listTranscripts(): Transcript[] {
+  const out: Transcript[] = [];
   let slugs: string[];
   try {
     slugs = readdirSync(PROJECTS_DIR);
@@ -104,19 +121,38 @@ function listTranscripts(): { path: string; slug: string; sessionId: string }[] 
   }
   for (const slug of slugs) {
     const dir = join(PROJECTS_DIR, slug);
-    let entries: string[];
     try {
       if (!statSync(dir).isDirectory()) continue;
-      entries = readdirSync(dir);
     } catch {
       continue;
     }
-    for (const name of entries) {
-      if (!name.endsWith(".jsonl")) continue;
-      out.push({ path: join(dir, name), slug, sessionId: basename(name, ".jsonl") });
+    for (const name of safeReaddir(dir)) {
+      const p = join(dir, name);
+      if (name.endsWith(".jsonl")) {
+        out.push({ path: p, slug, sessionId: basename(name, ".jsonl"), usageOnly: false });
+        continue;
+      }
+      const subDir = join(p, "subagents");
+      try {
+        if (!statSync(subDir).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      for (const agentFile of safeReaddir(subDir)) {
+        if (!agentFile.endsWith(".jsonl")) continue;
+        out.push({ path: join(subDir, agentFile), slug, sessionId: name, usageOnly: true });
+      }
     }
   }
   return out;
+}
+
+function safeReaddir(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -135,7 +171,7 @@ export async function indexOnce(db: Database): Promise<number> {
 
   let changed = 0;
 
-  for (const { path, slug, sessionId } of listTranscripts()) {
+  for (const { path, slug, sessionId, usageOnly } of listTranscripts()) {
     let st: ReturnType<typeof statSync>;
     try {
       st = statSync(path);
@@ -161,7 +197,7 @@ export async function indexOnce(db: Database): Promise<number> {
     const consumedBytes = start + Buffer.byteLength(consumable, "utf8");
 
     if (consumable.length > 0) {
-      applyLines(db, consumable, sessionId, slug, path, fullReread);
+      applyLines(db, consumable, sessionId, slug, path, fullReread, usageOnly);
       changed++;
     }
     upsertFile.run(path, consumedBytes, st.size, mtime);
@@ -176,6 +212,7 @@ function applyLines(
   slug: string,
   path: string,
   fullReread: boolean,
+  usageOnly: boolean,
 ) {
   const existing = fullReread
     ? null
@@ -188,10 +225,16 @@ function applyLines(
     : emptyAgg(sessionId, slug, path);
 
   if (fullReread) {
-    for (const t of ["prompts", "replies", "tools", "pr_links", "usage_events"]) {
-      db.query(`DELETE FROM ${t} WHERE session_id = ?`).run(sessionId);
+    // Usage events are cleared per FILE, not per session: a session's spend is
+    // spread over its own transcript and one file per subagent, so keying the
+    // delete on session_id would wipe siblings this pass is not re-reading.
+    db.query("DELETE FROM usage_events WHERE src_path = ?").run(path);
+    if (!usageOnly) {
+      for (const t of ["prompts", "replies", "tools", "pr_links"]) {
+        db.query(`DELETE FROM ${t} WHERE session_id = ?`).run(sessionId);
+      }
+      db.query("DELETE FROM prompts_fts WHERE session_id = ?").run(sessionId);
     }
-    db.query("DELETE FROM prompts_fts WHERE session_id = ?").run(sessionId);
   }
 
   const toolCounts = new Map<string, number>();
@@ -203,10 +246,24 @@ function applyLines(
   const insertFts = db.query(
     "INSERT INTO prompts_fts (text, uuid, session_id, ts) VALUES (?, ?, ?, ?)",
   );
+  // One API request can appear as several records — streaming continuations share
+  // a requestId while each carries its own uuid. Keying on requestId collapses
+  // them, and MAX keeps the most complete copy rather than whichever landed last,
+  // since a later partial can report fewer output tokens than an earlier one.
+  // Records with no requestId fall through to per-uuid keying.
   const insertUsage = db.query(
-    `INSERT OR REPLACE INTO usage_events
-       (uuid, session_id, ts, model, input_tokens, output_tokens, cache_read, cache_write)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO usage_events
+       (uuid, session_id, ts, request_id, model, input_tokens, output_tokens,
+        cache_read, cache_write, cache_write_5m, cache_write_1h, src_path)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(request_id) DO UPDATE SET
+       input_tokens   = MAX(usage_events.input_tokens,   excluded.input_tokens),
+       output_tokens  = MAX(usage_events.output_tokens,  excluded.output_tokens),
+       cache_read     = MAX(usage_events.cache_read,     excluded.cache_read),
+       cache_write    = MAX(usage_events.cache_write,    excluded.cache_write),
+       cache_write_5m = MAX(usage_events.cache_write_5m, excluded.cache_write_5m),
+       cache_write_1h = MAX(usage_events.cache_write_1h, excluded.cache_write_1h)
+     ON CONFLICT(uuid) DO NOTHING`,
   );
   const insertReply = db.query(
     `INSERT OR REPLACE INTO replies (uuid, session_id, ts, text, model, is_sidechain)
@@ -225,6 +282,8 @@ function applyLines(
       } catch {
         continue;
       }
+
+      if (usageOnly && rec.type !== "assistant") continue;
 
       const t = ts(rec.timestamp);
       if (t !== null) {
@@ -271,32 +330,35 @@ function applyLines(
         }
 
         case "assistant": {
-          agg.msg_count++;
+          if (!usageOnly) agg.msg_count++;
           const msg = rec.message ?? {};
-          if (msg.model) agg.model = msg.model;
+          if (msg.model && !usageOnly) agg.model = msg.model;
           const u = msg.usage ?? {};
           const inTok = u.input_tokens ?? 0;
           const outTok = u.output_tokens ?? 0;
           const cRead = u.cache_read_input_tokens ?? 0;
           const cWrite = u.cache_creation_input_tokens ?? 0;
-          agg.input_tokens += inTok;
-          agg.output_tokens += outTok;
-          agg.cache_read += cRead;
-          agg.cache_write += cWrite;
+          const cc = u.cache_creation ?? {};
+          const cw5m = cc.ephemeral_5m_input_tokens ?? 0;
+          const cw1h = cc.ephemeral_1h_input_tokens ?? 0;
 
           if (t !== null && (inTok || outTok || cRead || cWrite)) {
             insertUsage.run(
               rec.uuid ?? `${sessionId}:${t}`,
               sessionId,
               t,
+              rec.requestId ?? msg.id ?? null,
               msg.model ?? null,
               inTok,
               outTok,
               cRead,
               cWrite,
+              cw5m,
+              cw1h,
+              path,
             );
           }
-          const reply = replyText(rec);
+          const reply = usageOnly ? null : replyText(rec);
           if (reply) {
             replySeq++;
             insertReply.run(
@@ -308,7 +370,7 @@ function applyLines(
               rec.isSidechain ? 1 : 0,
             );
           }
-          for (const b of Array.isArray(msg.content) ? msg.content : []) {
+          for (const b of usageOnly || !Array.isArray(msg.content) ? [] : msg.content) {
             if (b?.type === "tool_use" && b.name) {
               agg.tool_count++;
               toolCounts.set(b.name, (toolCounts.get(b.name) ?? 0) + 1);
@@ -317,6 +379,38 @@ function applyLines(
           break;
         }
       }
+    }
+
+    // Read the session's token totals back out of usage_events rather than
+    // accumulating them while parsing: the table is de-duplicated per API request
+    // and survives incremental reads, so a request split across two parsed chunks
+    // still counts once.
+    const totals = db
+      .query<
+        { input: number; output: number; read: number; write: number },
+        [string]
+      >(
+        `SELECT COALESCE(SUM(input_tokens), 0)  AS input,
+                COALESCE(SUM(output_tokens), 0) AS output,
+                COALESCE(SUM(cache_read), 0)    AS read,
+                COALESCE(SUM(cache_write), 0)   AS write
+           FROM usage_events WHERE session_id = ?`,
+      )
+      .get(sessionId);
+    agg.input_tokens = totals?.input ?? 0;
+    agg.output_tokens = totals?.output ?? 0;
+    agg.cache_read = totals?.read ?? 0;
+    agg.cache_write = totals?.write ?? 0;
+
+    // A subagent transcript has no session row of its own — it only moves the
+    // parent's token totals. Everything else on that row belongs to the parent's
+    // own transcript and must survive untouched.
+    if (usageOnly) {
+      db.query(
+        `UPDATE sessions SET input_tokens = ?, output_tokens = ?, cache_read = ?, cache_write = ?
+           WHERE id = ?`,
+      ).run(agg.input_tokens, agg.output_tokens, agg.cache_read, agg.cache_write, sessionId);
+      return;
     }
 
     db.query(

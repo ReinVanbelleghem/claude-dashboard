@@ -65,8 +65,11 @@ import {
   worktreeRemove as gitWorktreeRemove,
   worktrees as gitWorktrees,
   worktreeRepos as gitWorktreeRepos,
+  provisionPlan as gitProvisionPlan,
+  provisionSuggest as gitProvisionSuggest,
 } from "./git.ts";
 import { indexOnce } from "./indexer.ts";
+import { validRule as validProvisionRule, type ProvisionRule } from "./provision.ts";
 import { invalidateRepoKeys, resolveRepoKeys } from "./repoKeys.ts";
 import {
   reconcile,
@@ -77,7 +80,21 @@ import {
 } from "./notify.ts";
 import { PORT, PROJECTS_DIR, SESSIONS_DIR, slugToPath } from "./paths.ts";
 import { needsInput, readRegistry } from "./registry.ts";
-import { getSettings, loadSettings, updateSettings } from "./settings.ts";
+import {
+  getSettings,
+  loadSettings,
+  setSessionMute,
+  updateSettings,
+  type NotifyEventKind,
+} from "./settings.ts";
+
+/** The kinds a mute request may name, so a typo cannot write a key nothing reads. */
+const NOTIFY_KINDS: NotifyEventKind[] = [
+  "needsInput",
+  "awaitingPermission",
+  "turnComplete",
+  "sessionError",
+];
 import { usageSummary } from "./usage.ts";
 
 const cfg = loadConfig();
@@ -87,8 +104,9 @@ const db = openDb();
 // Budgets are read once at startup; printing them makes a stale config obvious
 // instead of leaving you wondering why a gauge disagrees with the file on disk.
 console.log(
-  `[claude-dashboard] budgets: ${(cfg.budgets.fiveHourTokens / 1e6).toFixed(0)}M per 5h, ` +
-    `${(cfg.budgets.weeklyTokens / 1e6).toFixed(0)}M per week, ` +
+  `[claude-dashboard] budgets: ${(cfg.budgets.sessionTokens / 1e6).toFixed(1)}M per session, ` +
+    `${(cfg.budgets.weeklyTokens / 1e6).toFixed(0)}M per week` +
+    `${cfg.weeklyBoost ? ` x${cfg.weeklyBoost.multiplier} until ${cfg.weeklyBoost.until}` : ""}, ` +
     `$${cfg.budgets.dailyCostUsd}/day (fresh tokens; edit config.json to tune)`,
 );
 {
@@ -342,6 +360,7 @@ function notifySubjects(): NotifySubject[] {
       kind: "needsInput",
       key: `needsInput:${s.sessionId}`,
       sessionId: s.sessionId,
+      muteIds: [s.sessionId],
       label: labelOf(s.name ?? row?.title, s.cwd, s.sessionId),
       context: contextOf(s.cwd, row?.git_branch ?? null),
       detail: s.waitingFor ? clamp(`Waiting on you: ${s.waitingFor}`, 90) : "Waiting for your reply",
@@ -352,7 +371,12 @@ function notifySubjects(): NotifySubject[] {
     const row = a.sessionId ? labelQuery.get(a.sessionId) : null;
     const label = labelOf(a.title ?? row?.title, a.cwd, a.key);
     const context = contextOf(a.cwd, row?.git_branch ?? null);
-    const base = { sessionId: a.sessionId, label, context };
+    const base = {
+      sessionId: a.sessionId,
+      muteIds: a.sessionId ? [a.sessionId, a.key] : [a.key],
+      label,
+      context,
+    };
 
     if (a.status === "awaiting-permission") {
       out.push({
@@ -754,6 +778,25 @@ const server = Bun.serve({
       }
     }
 
+    /**
+     * Silence one session, per kind. Its own endpoint rather than a settings patch —
+     * see setSessionMute for why the map cannot travel through one.
+     */
+    if (p === "/api/settings/mute" && req.method === "POST") {
+      const b = (await req.json().catch(() => ({}))) as {
+        id?: string;
+        kinds?: string[];
+        label?: string;
+      };
+      if (!b.id) return json({ error: "id is required" }, 400);
+      const kinds = (Array.isArray(b.kinds) ? b.kinds : []).filter((k): k is NotifyEventKind =>
+        NOTIFY_KINDS.includes(k as NotifyEventKind),
+      );
+      const next = setSessionMute(b.id, kinds, b.label?.trim() || b.id);
+      broadcast("settings", next);
+      return json({ settings: next });
+    }
+
     if (p === "/api/settings/test" && req.method === "POST") {
       return json(await sendTestNotification());
     }
@@ -876,6 +919,7 @@ const server = Bun.serve({
           paths?: unknown;
           path?: string;
           provision?: boolean;
+          rules?: unknown[];
           all?: boolean;
           message?: string;
           noVerify?: boolean;
@@ -901,6 +945,12 @@ const server = Bun.serve({
              * while the dialog's normal path gets a tree it can actually run in.
              */
             provision: b.provision === false ? [] : (ui.worktreeProvision ?? []),
+            /**
+             * Which repository this is takes a rev-parse, so the whole map goes down and
+             * git.ts picks its own entry. The opt-out drops both lists, or a repository
+             * override would quietly survive a request that asked for a bare checkout.
+             */
+            provisionByRepo: b.provision === false ? {} : (ui.worktreeProvisionByRepo ?? {}),
             excludeProvisioned: ui.worktreeExclude === true,
           });
           if (r.ok) {
@@ -999,6 +1049,47 @@ const server = Bun.serve({
           return json(r, r.ok ? 200 : 409);
         }
 
+        /**
+         * One repository's provisioning rules.
+         *
+         * Its own endpoint rather than a settings patch, for two reasons. The key is the
+         * shared `.git`, which the browser would have to be told and would then have to
+         * keep straight. And `ui` is merged one level deep, so a patch carrying the map
+         * would replace every other repository's entry with whatever that tab last read —
+         * editing one repo's rules from two tabs would lose one of them.
+         */
+        if (action === "provision-rules") {
+          const rules = Array.isArray(b.rules)
+            ? b.rules.filter(
+                (r): r is ProvisionRule =>
+                  !!r &&
+                  typeof r === "object" &&
+                  typeof (r as ProvisionRule).path === "string" &&
+                  ["symlink", "copy", "off"].includes((r as ProvisionRule).mode),
+              )
+            : [];
+          const status = await repoStatus(root);
+          if (!status.isRepo || !status.commonDir)
+            return json({ ok: false, error: "not a git repository" }, 400);
+
+          const ui = getSettings().ui;
+          const next = { ...(ui.worktreeProvisionByRepo ?? {}) };
+          const clean = rules
+            .map((r) => ({ path: r.path.trim(), mode: r.mode }))
+            .filter((r) => r.path && validProvisionRule(r.path));
+          // An empty list is an absence, not a value: leaving the key behind would mean
+          // "this repo has an override" forever, and read as one in settings.json.
+          if (clean.length > 0) next[status.commonDir] = clean;
+          else delete next[status.commonDir];
+
+          const saved = updateSettings({ ui: { worktreeProvisionByRepo: next } });
+          broadcast("settings", saved);
+          return json({
+            ok: true,
+            plan: await gitProvisionPlan(root, saved.ui.worktreeProvision ?? [], next),
+          });
+        }
+
         return json({ error: "not found" }, 404);
       }
 
@@ -1054,6 +1145,26 @@ const server = Bun.serve({
 
       if (action === "worktrees") {
         return json(await gitWorktrees(cwd));
+      }
+
+      /**
+       * What a new worktree of this repository would be given, expanded and checked
+       * against git — so the rule list can be verified before a checkout is created
+       * rather than read back out of the note afterwards.
+       */
+      if (action === "provision") {
+        const ui = getSettings().ui;
+        return json(
+          await gitProvisionPlan(cwd, ui.worktreeProvision ?? [], ui.worktreeProvisionByRepo ?? {}),
+        );
+      }
+
+      /** What this repository has that the current rules would miss. */
+      if (action === "provision-scan") {
+        const ui = getSettings().ui;
+        return json(
+          await gitProvisionSuggest(cwd, ui.worktreeProvision ?? [], ui.worktreeProvisionByRepo ?? {}),
+        );
       }
 
       if (action === "diff") {

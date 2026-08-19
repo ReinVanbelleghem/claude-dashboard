@@ -1,5 +1,17 @@
 import type { Database } from "bun:sqlite";
-import { costOf, normalizeModel, type Config } from "./config.ts";
+import {
+  costOf,
+  effectiveBudgets,
+  isFableModel,
+  normalizeModel,
+  type Config,
+} from "./config.ts";
+
+const HOUR = 3_600_000;
+const SESSION_MS = 5 * HOUR;
+const WEEK_MS = 7 * 24 * HOUR;
+
+export type Window = { start: number; end: number; resetsInMs: number };
 
 export type Bucket = {
   input: number;
@@ -34,7 +46,12 @@ type Row = {
   output_tokens: number;
   cache_read: number;
   cache_write: number;
+  cache_write_5m: number;
+  cache_write_1h: number;
 };
+
+const COLS = `model, input_tokens, output_tokens, cache_read, cache_write,
+              cache_write_5m, cache_write_1h`;
 
 function fold(rows: Row[], cfg: Config): Bucket {
   const b = EMPTY();
@@ -48,6 +65,8 @@ function fold(rows: Row[], cfg: Config): Bucket {
       output: r.output_tokens,
       cacheRead: r.cache_read,
       cacheWrite: r.cache_write,
+      cacheWrite5m: r.cache_write_5m,
+      cacheWrite1h: r.cache_write_1h,
     }, cfg);
   }
   b.total = b.input + b.output + b.cacheRead + b.cacheWrite;
@@ -55,27 +74,92 @@ function fold(rows: Row[], cfg: Config): Bucket {
   return b;
 }
 
+/**
+ * The window Claude labels "current session". It is a fixed 5 hours anchored on the
+ * first message after an idle gap, not a rolling sum of the last 5 hours — the two
+ * differ sharply, because an anchored window drops its whole total at the reset
+ * while a rolling one keeps bleeding old traffic in.
+ *
+ * Anchors are found by walking events forward: the first one opens a window, and the
+ * first event at or after that window closes opens the next. Starting the walk mid
+ * history could pick the wrong phase, so it starts a month back — any idle gap of 5
+ * hours in that span resynchronises it, and a month without one is not a real
+ * usage pattern.
+ */
+export function sessionWindow(db: Database, now: number): Window {
+  // Bounded at both ends: an event later than `now` cannot have opened the window
+  // `now` falls in, and leaving it out keeps the answer reproducible for any past
+  // instant rather than only the present one.
+  const rows = db
+    .query<{ ts: number }, [number, number]>(
+      "SELECT ts FROM usage_events WHERE ts >= ? AND ts <= ? ORDER BY ts",
+    )
+    .all(now - 30 * 24 * HOUR, now);
+  let anchor = rows.length > 0 ? rows[0]!.ts : now;
+  for (const r of rows) if (r.ts - anchor >= SESSION_MS) anchor = r.ts;
+  // An anchor older than the window length means the last session already expired
+  // and the next message will start a fresh one.
+  if (now - anchor >= SESSION_MS) anchor = now;
+  return { start: anchor, end: anchor + SESSION_MS, resetsInMs: anchor + SESSION_MS - now };
+}
+
+/**
+ * The weekly window, derived from a known past reset by stepping forward in 7-day
+ * strides. Without a configured anchor there is nothing to phase-align to, so this
+ * degrades to a rolling week and says so via `resetsInMs: -1`.
+ */
+export function weeklyWindow(cfg: Config, now: number): Window {
+  const anchorIso = cfg.weeklyResetAnchor;
+  const anchor = anchorIso ? Date.parse(anchorIso) : Number.NaN;
+  if (Number.isNaN(anchor)) {
+    return { start: now - WEEK_MS, end: now, resetsInMs: -1 };
+  }
+  const elapsed = now - anchor;
+  const start = anchor + Math.floor(elapsed / WEEK_MS) * WEEK_MS;
+  return { start, end: start + WEEK_MS, resetsInMs: start + WEEK_MS - now };
+}
+
 function since(db: Database, fromMs: number): Row[] {
   return db
     .query<Row, [number]>(
-      `SELECT model, input_tokens, output_tokens, cache_read, cache_write
-         FROM usage_events WHERE ts >= ?`,
+      `SELECT ${COLS} FROM usage_events WHERE ts >= ?`,
     )
     .all(fromMs);
 }
 
+/**
+ * Usage booked in a window so far. The upper bound is clamped to `now` because a
+ * window extends into the future — the question is always how much of the limit is
+ * spent at this instant, not how much the window will eventually hold.
+ */
+function usedInWindow(db: Database, w: Window, now: number): Row[] {
+  return db
+    .query<Row, [number, number]>(
+      `SELECT ${COLS} FROM usage_events WHERE ts >= ? AND ts < ?`,
+    )
+    .all(w.start, Math.min(w.end, now));
+}
+
 export function usageSummary(db: Database, cfg: Config, now: number) {
-  const hour = 3_600_000;
+  const hour = HOUR;
   const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
 
-  const fiveHour = fold(since(db, now - 5 * hour), cfg);
+  const budgets = effectiveBudgets(cfg, now);
+  const sessionWin = sessionWindow(db, now);
+  const weeklyWin = weeklyWindow(cfg, now);
+
+  const session = fold(usedInWindow(db, sessionWin, now), cfg);
   const day = fold(since(db, startOfToday.getTime()), cfg);
-  const week = fold(since(db, now - 7 * 24 * hour), cfg);
+  // Claude meters Fable against its own weekly limit, so it is both counted in the
+  // all-models total and reported separately.
+  const weeklyRows = usedInWindow(db, weeklyWin, now);
+  const week = fold(weeklyRows, cfg);
+  const weekFable = fold(weeklyRows.filter((r) => isFableModel(r.model)), cfg);
   const allTime = fold(
     db
       .query<Row, []>(
-        "SELECT model, input_tokens, output_tokens, cache_read, cache_write FROM usage_events",
+        `SELECT ${COLS} FROM usage_events`,
       )
       .all(),
     cfg,
@@ -85,7 +169,8 @@ export function usageSummary(db: Database, cfg: Config, now: number) {
   const byModelRows = db
     .query<Row & { model: string | null }, [number]>(
       `SELECT model, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
-              SUM(cache_read) AS cache_read, SUM(cache_write) AS cache_write
+              SUM(cache_read) AS cache_read, SUM(cache_write) AS cache_write,
+              SUM(cache_write_5m) AS cache_write_5m, SUM(cache_write_1h) AS cache_write_1h
          FROM usage_events WHERE ts >= ? GROUP BY model`,
     )
     .all(now - 7 * 24 * hour);
@@ -114,20 +199,26 @@ export function usageSummary(db: Database, cfg: Config, now: number) {
 
   return {
     now,
-    budgets: cfg.budgets,
-    fiveHour,
+    budgets,
+    boostActive: budgets.weeklyTokens !== cfg.budgets.weeklyTokens,
+    session,
+    sessionWindow: sessionWin,
+    weeklyWindow: weeklyWin,
     day,
     week,
+    weekFable,
     allTime,
     byModel,
     hourly,
     daily,
-    // Fractions of the configured budget — see README on why these are local,
-    // user-set numbers rather than your real subscription quota.
+    // Fractions of the configured budget. Anthropic does not publish the real
+    // quotas, so these are calibrated locally against what `claude /usage` reports
+    // for the same windows — see config.ts.
     remaining: {
-      fiveHourPct: pct(fiveHour.fresh, cfg.budgets.fiveHourTokens),
-      weeklyPct: pct(week.fresh, cfg.budgets.weeklyTokens),
-      dailyCostPct: pct(day.costUsd, cfg.budgets.dailyCostUsd),
+      sessionPct: pct(session.fresh, budgets.sessionTokens),
+      weeklyPct: pct(week.fresh, budgets.weeklyTokens),
+      weeklyFablePct: pct(weekFable.fresh, budgets.weeklyFableTokens),
+      dailyCostPct: pct(day.costUsd, budgets.dailyCostUsd),
     },
   };
 }

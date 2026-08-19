@@ -280,3 +280,26 @@ export function SunMoonIcon() {
     </svg>
   );
 }
+
+/**
+ * Notification state for one session. The struck-through bell is the muted face:
+ * a bell alone cannot say whether it means "notifying" or "click to notify", and
+ * the slash is the one convention everyone already reads correctly.
+ */
+export function BellIcon({ muted = false }: { muted?: boolean }) {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <path
+        d="M10 3.2a4 4 0 014 4v2.4l1.2 2.2H4.8L6 9.6V7.2a4 4 0 014-4zM8.4 14.2a1.7 1.7 0 003.2 0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {muted && (
+        <path d="M4.4 4.4l11.2 11.2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      )}
+    </svg>
+  );
+}

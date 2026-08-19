@@ -32,17 +32,35 @@ export type Bucket = {
   costUsd: number;
 };
 
+/** `resetsInMs` is -1 when no reset is known and the window is a rolling one. */
+export type UsageWindow = { start: number; end: number; resetsInMs: number };
+
 export type UsagePayload = {
   now: number;
-  budgets: { fiveHourTokens: number; weeklyTokens: number; dailyCostUsd: number };
-  fiveHour: Bucket;
+  budgets: {
+    sessionTokens: number;
+    weeklyTokens: number;
+    weeklyFableTokens: number;
+    dailyCostUsd: number;
+  };
+  /** True while a promotional uplift is inflating the weekly budgets. */
+  boostActive: boolean;
+  session: Bucket;
+  sessionWindow: UsageWindow;
+  weeklyWindow: UsageWindow;
   day: Bucket;
   week: Bucket;
+  weekFable: Bucket;
   allTime: Bucket;
   byModel: (Bucket & { model: string })[];
   hourly: { bucket: number; tokens: number }[];
   daily: { day: string; tokens: number; turns: number }[];
-  remaining: { fiveHourPct: number; weeklyPct: number; dailyCostPct: number };
+  remaining: {
+    sessionPct: number;
+    weeklyPct: number;
+    weeklyFablePct: number;
+    dailyCostPct: number;
+  };
 };
 
 export type SessionRow = {
@@ -218,6 +236,9 @@ export type NotifyEventKind =
   | "turnComplete"
   | "sessionError";
 
+/** What one session has been silenced about, and what to call it in Settings. */
+export type SessionMute = { kinds: NotifyEventKind[]; label: string };
+
 export type Settings = {
   notifications: {
     enabled: boolean;
@@ -227,6 +248,8 @@ export type Settings = {
     delaySeconds: number;
     cooldownSeconds: number;
     suppressWhenFocused: boolean;
+    /** Per-session silence, keyed by session id or agent key. */
+    mutes: Record<string, SessionMute>;
     quietHours: { enabled: boolean; from: string; to: string };
     dashboardUrl: string;
   };
@@ -244,7 +267,13 @@ export type Settings = {
     /** Where new worktrees go. Empty means beside the repository. */
     worktreeRoot?: string;
     /** Untracked paths carried into a new worktree, when git ignores them. */
-    worktreeProvision?: { path: string; mode: "symlink" | "copy" }[];
+    worktreeProvision?: ProvisionRule[];
+    /**
+     * Per-repository additions to that list, keyed by the shared `.git`. Edited through
+     * /api/git/provision-rules rather than a settings patch, so two tabs editing two
+     * repositories cannot overwrite each other's entry.
+     */
+    worktreeProvisionByRepo?: Record<string, ProvisionRule[]>;
     /** Allow provisioning to add those paths to .git/info/exclude. Off by default. */
     worktreeExclude?: boolean;
 
@@ -253,7 +282,9 @@ export type Settings = {
 
 /** A patch is merged server-side, so callers send only what changed. */
 export type SettingsPatch = {
-  notifications?: Partial<Omit<Settings["notifications"], "events" | "channels" | "quietHours">> & {
+  notifications?: Partial<
+    Omit<Settings["notifications"], "events" | "channels" | "quietHours" | "mutes">
+  > & {
     events?: Partial<Settings["notifications"]["events"]>;
     channels?: Partial<Settings["notifications"]["channels"]>;
     quietHours?: Partial<Settings["notifications"]["quietHours"]>;
@@ -278,6 +309,13 @@ export type NotifyPayload = {
 export const settingsApi = {
   get: () => get<{ settings: Settings }>("/api/settings"),
   save: (patch: SettingsPatch) => post<{ settings: Settings }>("/api/settings", patch),
+  /**
+   * Silence one session, per kind. An empty `kinds` clears it. Its own endpoint
+   * because the map is keyed by session and a patch carrying it whole would let two
+   * tabs overwrite each other's mutes.
+   */
+  mute: (id: string, kinds: NotifyEventKind[], label: string) =>
+    post<{ settings: Settings }>("/api/settings/mute", { id, kinds, label }),
   test: () =>
     post<{
       ok: boolean;
@@ -446,6 +484,38 @@ export type Worktree = {
   prunable: string | null;
 };
 
+/**
+ * A provisioning rule. `path` may be a pattern — `projects/*` and the like — expanded
+ * against the main checkout when a worktree is created. `off` only ever appears in a
+ * repository's own list, where it switches a global rule off for that repository.
+ */
+export type ProvisionMode = "symlink" | "copy" | "off";
+export type ProvisionRule = { path: string; mode: ProvisionMode };
+
+/** One literal path the rules resolve to, with git's verdict on it. */
+export type ProvisionPath = {
+  path: string;
+  mode: ProvisionMode;
+  /** Which list it came from, so an override is visible as one. */
+  source: "global" | "repo";
+  /** The rule that produced it — differs from `path` when the rule is a pattern. */
+  rule: string;
+  /** git ignores it. False means it would be left behind rather than carried over. */
+  ignored: boolean;
+};
+
+/** What a new worktree of one repository would be given, before creating one. */
+export type ProvisionPlan = {
+  ok: boolean;
+  error: string | null;
+  repoKey: string | null;
+  mainRoot: string | null;
+  name: string | null;
+  global: ProvisionRule[];
+  repo: ProvisionRule[];
+  paths: ProvisionPath[];
+};
+
 export type WorktreeRepo = {
   /** The shared `.git`: two checkouts of one repository carry the same key. */
   repoKey: string;
@@ -530,6 +600,17 @@ export const gitApi = {
     postResult<WorktreeWriteResult>("/api/git/worktree-remove", { cwd, path }),
   worktreePrune: (cwd: string) =>
     postResult<WorktreeWriteResult>("/api/git/worktree-prune", { cwd }),
+  /**
+   * Provisioning, as three questions about one repository: what would a new worktree
+   * get, what is this repo carrying that the rules miss, and here is the new list.
+   */
+  provision: (cwd: string) => get<ProvisionPlan>(`/api/git/provision?${q({ cwd })}`),
+  provisionScan: (cwd: string) =>
+    get<{ ok: boolean; error: string | null; suggestions: ProvisionRule[] }>(
+      `/api/git/provision-scan?${q({ cwd })}`,
+    ),
+  provisionSave: (cwd: string, rules: ProvisionRule[]) =>
+    post<{ ok: boolean; plan: ProvisionPlan }>("/api/git/provision-rules", { cwd, rules }),
   log: (cwd: string, limit = 50) =>
     get<{ commits: Commit[]; range: string }>(`/api/git/log?${q({ cwd, limit })}`),
   branchFiles: (cwd: string) => get<{ files: ChangedFile[] }>(`/api/git/branch-files?${q({ cwd })}`),
@@ -782,6 +863,15 @@ export function fmtDuration(ms: number): string {
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
   return h < 24 ? `${h}h ${m % 60}m` : `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+/**
+ * Countdown to a window reset, worded the way `claude /usage` words it. A negative
+ * input means the window is rolling and has no known reset.
+ */
+export function fmtResets(ms: number): string {
+  if (ms < 0) return "rolling window";
+  return `Resets in ${fmtDuration(Math.max(0, ms))}`;
 }
 
 /** Trim a long absolute path to its trailing segments, for card subtitles. */

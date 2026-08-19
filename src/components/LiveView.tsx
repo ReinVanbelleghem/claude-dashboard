@@ -8,10 +8,12 @@ import {
   type LiveSession,
   type Restorable,
   type SessionRow,
+  type Settings,
 } from "../api.ts";
 import { GitBadge } from "./GitPanel.tsx";
 import { MODE_LABEL } from "./Conversation.tsx";
 import { FolderIcon, PlusIcon } from "./Icons.tsx";
+import { MuteMenu } from "./MuteMenu.tsx";
 
 /** Always opens the full page, whatever the click preference is set to. */
 function PageLink({ id }: { id: string }) {
@@ -54,6 +56,8 @@ export function LiveView({
   onOpenAgent,
   onNew,
   onManageFolders,
+  settings,
+  onSettings,
 }: {
   live: LivePayload | null;
   agents: AgentSummary[];
@@ -63,6 +67,8 @@ export function LiveView({
   onOpenAgent: (a: AgentSummary) => void;
   onNew: () => void;
   onManageFolders: () => void;
+  settings: Settings | null;
+  onSettings: (s: Settings) => void;
 }) {
   const attention = live?.sessions.filter(needsInput) ?? [];
   const active = live?.sessions.filter((s) => s.alive && !needsInput(s)) ?? [];
@@ -95,7 +101,7 @@ export function LiveView({
             None yet — <button className="link-btn inline" onClick={onNew}>start one</button> to chat here.
           </div>
         ) : (
-          <AgentCards agents={open} onOpen={onOpenAgent} />
+          <AgentCards agents={open} onOpen={onOpenAgent} settings={settings} onSettings={onSettings} />
         )}
       </div>
 
@@ -130,7 +136,7 @@ export function LiveView({
         <div className="panel">
           <h2>Finished here ({closed.length})</h2>
           <p className="hint">Ended dashboard sessions. Their transcripts stay searchable.</p>
-          <AgentCards agents={closed} onOpen={onOpenAgent} />
+          <AgentCards agents={closed} onOpen={onOpenAgent} settings={settings} onSettings={onSettings} />
         </div>
       )}
 
@@ -208,9 +214,13 @@ function modelLabel(model: string | null): string {
 function AgentCards({
   agents,
   onOpen,
+  settings,
+  onSettings,
 }: {
   agents: AgentSummary[];
   onOpen: (a: AgentSummary) => void;
+  settings: Settings | null;
+  onSettings: (s: Settings) => void;
 }) {
   return (
     <div className="cards">
@@ -229,6 +239,16 @@ function AgentCards({
             <div className="card-head">
               <span className="card-name">{a.title ?? shortPath(a.cwd, 1)}</span>
               <span className="spacer" style={{ flex: 1 }} />
+              {/* Icon only here: the card head is already carrying a title, a link
+                  and a status, and the word "Notify" on every card would read as an
+                  action you are meant to take. */}
+              <MuteMenu
+                id={a.sessionId ?? a.key}
+                label={a.title ?? shortPath(a.cwd, 1)}
+                settings={settings}
+                onSettings={onSettings}
+                compact
+              />
               <PageLink id={a.sessionId ?? a.key} />
               <span className={`pill ${cls}`}>
                 <i className="dot" />

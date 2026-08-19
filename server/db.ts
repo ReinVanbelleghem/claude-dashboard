@@ -29,6 +29,17 @@ function migrate(db: Database) {
     .get();
   const needsBackfill = (hadReplies?.n ?? 0) === 0;
 
+  // Usage events used to be keyed on `uuid` alone. A single API request can emit
+  // several transcript records (streaming continuations), all with distinct uuids
+  // but one shared requestId, so every such call was counted once per record —
+  // roughly doubling every token and cost figure. Keying on requestId fixes it,
+  // but only for rows written after the column exists, so an existing database
+  // has to be re-read from scratch.
+  const usageCols = db
+    .query<{ name: string }, []>("PRAGMA table_info(usage_events)")
+    .all();
+  const needsUsageBackfill = usageCols.length > 0 && !usageCols.some((c) => c.name === "request_id");
+
   db.exec(`
     -- Incremental-read bookkeeping: how far into each JSONL we've already parsed.
     CREATE TABLE IF NOT EXISTS files (
@@ -111,7 +122,19 @@ function migrate(db: Database) {
       input_tokens  INTEGER NOT NULL DEFAULT 0,
       output_tokens INTEGER NOT NULL DEFAULT 0,
       cache_read    INTEGER NOT NULL DEFAULT 0,
-      cache_write   INTEGER NOT NULL DEFAULT 0
+      cache_write   INTEGER NOT NULL DEFAULT 0,
+      -- The API request this record belongs to. Several records can share one,
+      -- so it — not uuid — is the unit we bill. Null on records that predate the
+      -- field, which then fall back to per-uuid keying.
+      request_id    TEXT,
+      -- Cache writes split by TTL, since the two bill at different multiples of
+      -- the input rate. Both zero when the transcript only gave us a lump sum.
+      cache_write_5m INTEGER NOT NULL DEFAULT 0,
+      cache_write_1h INTEGER NOT NULL DEFAULT 0,
+      -- Which transcript the row came from. A session's events can span its own
+      -- transcript plus one file per subagent it spawned, so re-reading any single
+      -- file must only clear that file's rows.
+      src_path      TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_events(ts DESC);
   `);
@@ -136,13 +159,29 @@ function migrate(db: Database) {
   ensureColumn(db, "sessions", "worktree_root", "TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_repo ON sessions(repo_key)");
 
-  if (needsBackfill) {
+  // These three must be added before the unique index below, which references
+  // request_id and would fail on a database created before the column existed.
+  ensureColumn(db, "usage_events", "request_id", "TEXT");
+  ensureColumn(db, "usage_events", "cache_write_5m", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "usage_events", "cache_write_1h", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "usage_events", "src_path", "TEXT");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_request ON usage_events(request_id)");
+
+  if (needsBackfill || needsUsageBackfill) {
     // A missing offset makes the next pass a full re-read, which clears and
     // rebuilds each session's rows — so this is a re-index, not a duplication.
     const files = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM files").get();
     if ((files?.n ?? 0) > 0) {
-      console.log(`[claude-dashboard] re-indexing ${files?.n} transcript(s) for assistant replies…`);
+      const why = needsBackfill ? "assistant replies" : "de-duplicated usage";
+      console.log(`[claude-dashboard] re-indexing ${files?.n} transcript(s) for ${why}…`);
       db.exec("DELETE FROM files");
+    }
+    if (needsUsageBackfill) {
+      // Pre-migration rows carry no request_id and no src_path, so neither the
+      // de-duplicating upsert nor the per-file delete can see them: left in place
+      // they would survive the re-read and be counted a second time. The re-read
+      // rebuilds every one of them.
+      db.exec("DELETE FROM usage_events");
     }
   }
 }

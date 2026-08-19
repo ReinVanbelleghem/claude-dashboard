@@ -25,6 +25,12 @@ export type NotifySubject = {
   key: string;
   /** Deep-link target. Null for a session with no transcript id yet. */
   sessionId: string | null;
+  /**
+   * Every id this session could have been muted under — its transcript id and its
+   * agent key. Both, because a session is muted from the UI by whichever of the two
+   * that view has, and a fresh session acquires its transcript id part-way through.
+   */
+  muteIds: string[];
   /** Session title, or the folder name when it has none. */
   label: string;
   /** Where it is: "org/repo · feat/points". */
@@ -122,6 +128,10 @@ async function fire(entry: Tracked) {
   if (!n.enabled) return;
   if (!n.events[subject.kind]) return;
   if (inQuietHours(s, new Date())) return;
+  // Muted for this session specifically. Checked per kind, so a session can go quiet
+  // about finishing its turns and still shout when it breaks — which is the whole
+  // point for something running on a loop.
+  if (subject.muteIds.some((id) => n.mutes[id]?.kinds.includes(subject.kind))) return;
 
   // You are already looking at it, so an alert would only tell you what is on
   // your screen. Matches on the agent key too, since a fresh session has no id.

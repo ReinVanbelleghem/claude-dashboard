@@ -4,6 +4,7 @@ import {
   agentBus,
   api,
   settingsApi,
+  fmtResets,
   fmtTokens,
   fmtUsd,
   type AgentSummary,
@@ -325,19 +326,29 @@ export default function App() {
           {/* Same glyph as the tab icon, badge included, so the window and the
               tab strip read as one thing. The rings are the in-page equivalent
               of the tab badge: they only run while a session is waiting. */}
-          <span
-            className={`brand-mark ${blocked > 0 ? "waiting" : ""}`}
-            title={blocked > 0 ? `${blocked} session${blocked > 1 ? "s" : ""} waiting on you` : undefined}
+          <button
+            className="brand-home"
+            title="Back to Live"
+            aria-label="Back to Live"
+            onClick={() => {
+              setTab("live");
+              if (pageId) closePage();
+            }}
           >
-            <img
-              className="brand-icon"
-              src={faviconFor(appearance, blocked > 0, brandPhase)}
-              alt=""
-              width={22}
-              height={22}
-            />
-          </span>
-          Claude Sessions
+            <span
+              className={`brand-mark ${blocked > 0 ? "waiting" : ""}`}
+              title={blocked > 0 ? `${blocked} session${blocked > 1 ? "s" : ""} waiting on you` : undefined}
+            >
+              <img
+                className="brand-icon"
+                src={faviconFor(appearance, blocked > 0, brandPhase)}
+                alt=""
+                width={22}
+                height={22}
+              />
+            </span>
+            Claude Sessions
+          </button>
           {/* Both kinds, because the header is the one place that should answer "is
               anything running". live.counts.alive is external sessions only — the
               dashboard's own are deliberately excluded from that payload — so on its
@@ -409,13 +420,13 @@ export default function App() {
           {/* Tokens here are fresh tokens: cache reads are excluded and shown
               separately, since they are ~97% of raw volume at a tenth the rate. */}
           <Tile
-            label="Last 5 hours"
-            value={fmtTokens(usage.fiveHour.fresh)}
-            sub={`${fmtUsd(usage.fiveHour.costUsd)} · ${fmtTokens(usage.fiveHour.cacheRead)} cached`}
-            pct={usage.remaining.fiveHourPct}
+            label="Current session"
+            value={fmtTokens(usage.session.fresh)}
+            sub={fmtResets(usage.sessionWindow.resetsInMs)}
+            pct={usage.remaining.sessionPct}
             note={[
-              `${Math.round(usage.remaining.fiveHourPct)}% of budget`,
-              fmtTokens(usage.budgets.fiveHourTokens),
+              `${Math.round(usage.remaining.sessionPct)}% used`,
+              fmtTokens(usage.budgets.sessionTokens),
             ]}
           />
           <Tile
@@ -429,13 +440,13 @@ export default function App() {
             ]}
           />
           <Tile
-            label="Last 7 days"
+            label="Weekly · all models"
             value={fmtTokens(usage.week.fresh)}
-            sub={`${fmtUsd(usage.week.costUsd)} · ${fmtTokens(usage.week.cacheRead)} cached`}
+            sub={fmtResets(usage.weeklyWindow.resetsInMs)}
             pct={usage.remaining.weeklyPct}
             note={[
-              `${Math.round(usage.remaining.weeklyPct)}% of budget`,
-              fmtTokens(usage.budgets.weeklyTokens),
+              `${Math.round(usage.remaining.weeklyPct)}% used`,
+              `${fmtTokens(usage.budgets.weeklyTokens)}${usage.boostActive ? " boosted" : ""}`,
             ]}
           />
           <Tile
@@ -457,6 +468,8 @@ export default function App() {
           onOpenAgent={(a) => openSession(a.sessionId ?? a.key)}
           onNew={() => setShowNew(true)}
           onManageFolders={() => setShowFolders(true)}
+          settings={settings}
+          onSettings={setSettings}
         />
       )}
       {!pageId && tab === "history" && <HistoryView onOpen={openSession} />}

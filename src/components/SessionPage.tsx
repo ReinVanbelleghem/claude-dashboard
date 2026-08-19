@@ -11,6 +11,7 @@ import { HBars } from "./Charts.tsx";
 import { LiveConversation } from "./Conversation.tsx";
 import { GitControls } from "./GitControls.tsx";
 import { GitBadge, GitPanel } from "./GitPanel.tsx";
+import { MuteMenu } from "./MuteMenu.tsx";
 import { useGitRepo } from "./useGitRepo.ts";
 import { hasWorktreeSupport, WorktreesPanel } from "./WorktreesPanel.tsx";
 import { ExternalNotice, turnsOf } from "./SessionDrawer.tsx";
@@ -104,6 +105,12 @@ export function SessionPage({
           {cwd && <GitBadge cwd={cwd} />}
         </div>
         <span style={{ flex: 1 }} />
+        <MuteMenu
+          id={agent?.sessionId ?? agent?.key ?? id}
+          label={s?.title ?? agent?.title ?? id}
+          settings={settings}
+          onSettings={onSettings}
+        />
         {/* Adopting a session that is still running in a terminal would put two
             processes on one transcript, so it is offered only once that one is done. */}
         {onContinue && s?.cwd && !agent && !live && (

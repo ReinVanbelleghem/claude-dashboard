@@ -133,6 +133,24 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font-weight: 620;
   letter-spacing: -0.01em;
 }
+/* The mark and the title are one target back to Live, so the whole thing looks
+   and behaves like a home link rather than the header text happening to be clickable. */
+.brand-home {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  border-radius: 8px;
+}
+.brand-home:hover { opacity: 0.82; }
+.brand-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+
 /* Nudged off the baseline the rest of the row sits on, so the tile centres on
    the cap height of the title instead of hanging below it. */
 .brand-mark {
@@ -2967,6 +2985,323 @@ a { color: var(--accent); }
 .ask-option-desc { font-size: 12px; color: var(--text-secondary); }
 .ask-other { margin-bottom: 0; }
 
+/* ── per-session mute ──────────────────────────────────────────────────────── */
+/* The bell sits on the session, not in Settings, because "too loud" is something
+   you notice while looking at the session that is being loud. */
+.mute { position: relative; display: inline-flex; }
+.mute-btn { padding: 3px 7px; color: var(--text-muted); }
+.mute-btn.on { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
+.mute-btn .icon { width: 14px; height: 14px; }
+
+.mute-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: 300px;
+  padding: 8px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.35);
+  cursor: default;
+}
+.mute-head {
+  margin: 2px 4px 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.mute-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: 7px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mute-row:hover { background: var(--surface-2); }
+.mute-row input { margin: 0; align-self: center; }
+.mute-label { color: var(--text-primary); }
+/* Kept to one line: a wrapping hint makes the rows different heights and the list
+   stops reading as a set of equal choices. */
+.mute-row small {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mute-foot { display: flex; gap: 6px; margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--border); }
+.mute-note { margin: 7px 2px 0; font-size: 10.5px; line-height: 1.5; color: var(--text-muted); }
+
+/* Settings' index of every mute set from a session view. */
+.mute-list { display: flex; flex-direction: column; gap: 4px; }
+.mute-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+.mute-item-label { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mute-item-kinds { font-size: 11px; color: var(--warning); }
+
+/* ── worktree provisioning ─────────────────────────────────────────────────── */
+/* On the card this is one summary line: it answers "what does a new checkout get",
+   which matters when you are about to create one and is noise the rest of the time.
+
+   The editor itself is a dialog, because a rule is a short path and three controls
+   and its natural measure is a column. Unfolded into a card as wide as the display
+   it read as a half-empty panel, and it pushed the checkouts it sits under off the
+   screen to answer a question nobody had asked yet. */
+.pv { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.pv-head {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-primary);
+}
+.pv-head:hover .pv-head-label { color: var(--accent); }
+.pv-head-label { font-size: 12px; font-weight: 600; }
+/* Trails the summary rather than being pushed to the card's right edge — the card is
+   as wide as the display, and an "Edit" a metre from the thing it edits is furniture. */
+.pv-open {
+  margin-left: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-bottom: 1px solid transparent;
+}
+.pv-head:hover .pv-open { color: var(--accent); border-bottom-color: currentcolor; }
+/* The two numbers are different in kind — one is what works, one is what silently
+   will not — so they are two chips rather than one sentence. */
+.pv-counts { display: flex; align-items: baseline; gap: 6px; }
+.pv-count {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.pv-count.warn {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
+/* Wide enough for a path column that does not ellipsize the interesting end of
+   `projects/cloud-functions/render-template/node_modules` next to its three controls. */
+.modal.pv-modal { width: min(760px, 95vw); }
+.pv-modal .modal-head h3 { display: flex; align-items: baseline; gap: 8px; }
+.pv-modal .modal-head h3 small { font: 11.5px var(--mono); color: var(--text-muted); }
+
+.pv-body { display: flex; flex-direction: column; gap: 14px; padding-top: 16px; padding-bottom: 18px; }
+
+.pv-note code, .modal-head .hint code { font: 11px var(--mono); color: var(--text-primary); }
+.pv-note { margin: 0; font-size: 11.5px; line-height: 1.6; color: var(--text-muted); }
+.pv-error { margin: 0; font-size: 11.5px; color: var(--critical); }
+
+/* The mode vocabulary, defined once here instead of in a paragraph above ten rows
+   that each repeat one of its words. */
+.pv-legend { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.pv-legend > div { display: flex; align-items: baseline; gap: 8px; }
+.pv-legend dt {
+  flex: 0 0 62px;
+  font: 10.5px/1.7 var(--mono);
+  text-align: right;
+}
+.pv-legend dd { margin: 0; font-size: 11.5px; line-height: 1.7; color: var(--text-muted); }
+
+/* One colour per mode, used by the legend, the row edge, the select and the chips,
+   so the same fact is the same colour everywhere it appears. */
+.pv [data-mode="symlink"], .pv-modal [data-mode="symlink"] { --pv-mode: var(--series-1); }
+.pv [data-mode="copy"], .pv-modal [data-mode="copy"] { --pv-mode: var(--series-4); }
+.pv [data-mode="off"], .pv-modal [data-mode="off"] { --pv-mode: var(--text-muted); }
+.pv-legend dt, .pv-chip small, .pv-path-list small { color: var(--pv-mode, var(--text-muted)); }
+
+.pv-rules { display: flex; flex-direction: column; gap: 12px; }
+/* Scope is the one property a whole run of rules shares, so it is a heading rather
+   than a tag repeated on every line. */
+.pv-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0 0 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.pv-group-head small { font-size: 10.5px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+/* One bordered container with hairlines, not ten bordered cards: the rules are a
+   list, and ten boxes make ten things. */
+.pv-list {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-1);
+}
+.pv-rule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 32px 104px 26px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 0;
+  border-top: 1px solid var(--border);
+  /* The mode as a colour on the edge — the list is scannable before it is read. */
+  border-left: 3px solid var(--pv-mode);
+  padding-left: 9px;
+}
+.pv-rule:first-child { border-top: 0; }
+.pv-rule:hover { background: var(--surface-2); }
+/* A rule switched off for this repository stays listed — one you cannot see is one
+   you cannot turn back on — so it is dimmed rather than removed. */
+.pv-rule[data-mode="off"] .pv-path { color: var(--text-muted); text-decoration: line-through; }
+
+.pv-path {
+  font: 11.5px var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* How many paths a pattern resolves to. The whole value of a pattern is this number,
+   so it gets a column of its own and lines up down the list. */
+.pv-hits {
+  font: 10.5px var(--mono);
+  color: var(--text-secondary);
+  text-align: right;
+}
+.pv-flag { display: flex; justify-content: flex-end; }
+.pv-tag {
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.pv-mode { position: relative; display: block; }
+.pv-mode select {
+  appearance: none;
+  width: 100%;
+  padding: 3px 18px 3px 7px;
+  font: 11px/1.5 inherit;
+  color: var(--pv-mode);
+  background: color-mix(in srgb, var(--pv-mode) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pv-mode) 40%, transparent);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.pv-mode select:disabled { opacity: 0.5; cursor: default; }
+.pv-mode::after {
+  content: "▾";
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 9.5px;
+  color: var(--pv-mode);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+/* Visible only on the row it belongs to: ten always-on trash icons read as a column
+   of hazards. */
+.pv-drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-muted);
+  opacity: 0;
+}
+.pv-rule:hover .pv-drop, .pv-drop:focus-visible { opacity: 1; }
+.pv-drop:hover { color: var(--critical); background: color-mix(in srgb, var(--critical) 14%, transparent); }
+
+/* One control height for the whole row: four controls from four different families —
+   a text input, a select, and two buttons — otherwise land on four different heights
+   and read as a row that was assembled rather than designed. */
+.pv-add { display: flex; align-items: stretch; gap: 6px; flex-wrap: wrap; --pv-h: 30px; }
+.pv-add > *, .pv-add .pv-mode select { height: var(--pv-h); }
+.pv-add-path {
+  flex: 1 1 200px;
+  min-width: 0;
+  margin: 0;
+  padding: 0 10px;
+  font: 11.5px var(--mono);
+}
+.pv-add .pv-mode { flex: 0 0 104px; }
+.pv-add .icon-btn { padding-top: 0; padding-bottom: 0; }
+/* Adding a path and asking what is here are different questions; the second is not
+   a third step of the first. */
+.pv-scan { margin-left: auto; }
+
+.pv-sugg { display: flex; flex-direction: column; gap: 7px; }
+.pv-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.pv-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  background: none;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+.pv-chip:hover { border-color: var(--accent); border-style: solid; background: var(--surface-2); }
+.pv-chip code { font: 11px var(--mono); }
+.pv-chip small { font-size: 10px; }
+
+/* The paths git tracks. Loud enough to be seen, listed rather than run together as
+   a paragraph of fourteen commas, and folded away once read. */
+.pv-stranded {
+  border-left: 3px solid var(--warning);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  padding: 8px 10px;
+}
+.pv-stranded > summary {
+  font-size: 11.5px;
+  font-weight: 560;
+  color: var(--warning);
+  cursor: pointer;
+}
+.pv-stranded-count { font-variant-numeric: tabular-nums; font-weight: 700; }
+.pv-stranded .pv-note { margin: 6px 0 0; }
+
+.pv-resolved > summary { font-size: 11.5px; color: var(--text-muted); cursor: pointer; }
+.pv-resolved > summary b { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* Paths are short and there are dozens: columns beat one long ladder. */
+.pv-path-list {
+  columns: 2;
+  column-gap: 20px;
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.pv-path-list li { break-inside: avoid; font: 11px/1.85 var(--mono); color: var(--text-secondary); }
+.pv-path-list small { font-size: 9.5px; font-family: inherit; }
+@media (max-width: 700px) { .pv-path-list { columns: 1; } }
 /* ── worktrees ─────────────────────────────────────────────────────────────── */
 /* One row per checkout of the repository. Laid out like the branch rows it sits
    below, so the two read as one family. */

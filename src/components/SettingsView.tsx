@@ -12,6 +12,14 @@ import { CheckIcon } from "./Icons.tsx";
  * to the daemon's settings.json, so a reload or another tab sees the same state.
  */
 
+/** Short names for the muted-sessions list, where the full EVENTS wording is a paragraph. */
+const MUTE_KIND_LABEL: Record<NotifyEventKind, string> = {
+  needsInput: "Needs you",
+  awaitingPermission: "Permission needed",
+  turnComplete: "Done",
+  sessionError: "Error",
+};
+
 const EVENTS: { kind: NotifyEventKind; label: string; help: string }[] = [
   {
     kind: "needsInput",
@@ -355,6 +363,41 @@ export function SettingsView({
               </div>
             )}
 
+            {/*
+              Mutes are set on the session, not here — but a mute you cannot find is a
+              mute you cannot undo, and months later the loop that needed silencing is
+              closed and forgotten. This is the list of everything currently silenced,
+              with the way out next to it.
+            */}
+            <h3 className="set-h">Muted sessions</h3>
+            {Object.keys(n.mutes ?? {}).length === 0 ? (
+              <p className="set-help">
+                None. Mute a session from its card or its page — the bell beside the title —
+                to silence some kinds of notification for that session alone.
+              </p>
+            ) : (
+              <div className="mute-list">
+                {Object.entries(n.mutes ?? {}).map(([id, m]) => (
+                  <div className="mute-item" key={id}>
+                    <span className="mute-item-label" title={id}>
+                      {m.label}
+                    </span>
+                    <span className="mute-item-kinds">
+                      {m.kinds.map((k) => MUTE_KIND_LABEL[k] ?? k).join(", ")}
+                    </span>
+                    <button
+                      className="icon-btn tiny"
+                      onClick={() =>
+                        settingsApi.mute(id, [], m.label).then((r) => onSettings(r.settings))
+                      }
+                    >
+                      Unmute
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <h3 className="set-h">Where a notification opens</h3>
             <label className="field">
               <span>Dashboard URL</span>
@@ -491,20 +534,37 @@ export function SettingsView({
             <p className="hint">
               {(settings.ui.worktreeProvision ?? []).length > 0 ? (
                 <>
-                  Carried into each new worktree, when git ignores it:{" "}
+                  Carried into every new worktree, in every repository, when git ignores it:{" "}
                   {(settings.ui.worktreeProvision ?? [])
                     .map((r) => `${r.path} (${r.mode})`)
                     .join(", ")}
                   . A path git does not ignore is left behind — copying it would show up as
-                  uncommitted work. Edit the list in <code>settings.json</code>.
+                  uncommitted work. Edit this baseline in <code>settings.json</code>.
                 </>
               ) : (
                 <>
-                  Nothing is carried into a new worktree, so it will have no dependencies or env
-                  files. Set <code>ui.worktreeProvision</code> in <code>settings.json</code> to
-                  change that.
+                  Nothing is carried into a new worktree by default, so a fresh checkout will
+                  have no dependencies or env files. Set <code>ui.worktreeProvision</code> in{" "}
+                  <code>settings.json</code> to change that everywhere, or add rules per
+                  repository under Worktrees.
                 </>
               )}
+            </p>
+            <p className="hint">
+              {/*
+                The per-repository list is the one that gets edited in practice, because the
+                interesting cases are repository-specific: one venv per project in a Python
+                monorepo, and nothing a global default could have guessed. It lives on the
+                Worktrees tab, next to the repository it concerns.
+              */}
+              Per-repository rules — a venv for each project, patterns like{" "}
+              <code>projects/*/venv</code>, or a global rule switched off for one repo — are
+              edited under <b>Worktrees</b>, on the repository itself, where the list can be
+              checked against what that checkout actually has.
+              {Object.keys(settings.ui.worktreeProvisionByRepo ?? {}).length > 0 &&
+                ` ${Object.keys(settings.ui.worktreeProvisionByRepo ?? {}).length} repositor${
+                  Object.keys(settings.ui.worktreeProvisionByRepo ?? {}).length === 1 ? "y has" : "ies have"
+                } their own rules.`}
             </p>
           </div>
         )}

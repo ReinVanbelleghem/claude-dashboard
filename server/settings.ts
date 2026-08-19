@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./paths.ts";
-import { DEFAULT_PROVISION } from "./provision.ts";
+import { DEFAULT_PROVISION, type ProvisionRule } from "./provision.ts";
 
 /**
  * User-editable preferences, as opposed to config.ts which holds the pricing and
@@ -13,6 +13,20 @@ export type NotifyEventKind =
   | "awaitingPermission"
   | "turnComplete"
   | "sessionError";
+
+/**
+ * One session's silence, keyed by its transcript id — or by the agent key while it
+ * has no id yet, which is why the notifier checks both.
+ *
+ * Per session rather than per kind alone because the loudness of a kind depends on
+ * what the session is: a /loop finishing its turn every ten minutes is the same
+ * `turnComplete` as the refactor you are waiting on, and switching the kind off
+ * globally to silence the loop takes the one you wanted with it.
+ *
+ * The label is stored with the kinds so Settings can list what is muted in words.
+ * A mute you cannot find is a mute you cannot undo, and the id alone is unreadable.
+ */
+export type SessionMute = { kinds: NotifyEventKind[]; label: string };
 
 /**
  * Mirrors src/appearance.ts. The daemon stores it and hands it back; it has no
@@ -68,6 +82,8 @@ export type Settings = {
     cooldownSeconds: number;
     /** Skip notifications for the session currently open in a visible tab. */
     suppressWhenFocused: boolean;
+    /** Per-session silence, on top of the global `events` flags. Keyed by session. */
+    mutes: Record<string, SessionMute>;
     /** Local-time window to stay silent. from may be later than to (crosses midnight). */
     quietHours: { enabled: boolean; from: string; to: string };
     /**
@@ -107,7 +123,18 @@ export type Settings = {
      * `symlink` for big shared directories (node_modules), `copy` for small per-checkout
      * secrets (.env). A path missing from the source is skipped, never an error.
      */
-    worktreeProvision?: { path: string; mode: "symlink" | "copy" }[];
+    worktreeProvision?: ProvisionRule[];
+    /**
+     * The same, per repository, keyed by the shared `.git`. Layered *onto* the global
+     * list rather than replacing it, so a repo that only needs its venvs does not have to
+     * restate `.env` — and a rule set to `off` here switches a global one off for this
+     * repository alone.
+     *
+     * Per repository because the global list cannot be right for all of them: a JS repo
+     * wants `node_modules`, a Python monorepo wants a venv per project, and the default
+     * list guessing wrong is silent until a session tries to run something.
+     */
+    worktreeProvisionByRepo?: Record<string, ProvisionRule[]>;
     /**
      * Let provisioning add paths to the repository's `.git/info/exclude` when git would
      * otherwise show them as untracked — which is what happens to a `node_modules`
@@ -140,6 +167,7 @@ const DEFAULTS: Settings = {
     delaySeconds: 10,
     cooldownSeconds: 120,
     suppressWhenFocused: true,
+    mutes: {},
     quietHours: { enabled: false, from: "23:00", to: "08:00" },
     dashboardUrl: "http://localhost:5758",
   },
@@ -150,6 +178,7 @@ const DEFAULTS: Settings = {
     openSessionsIn: "drawer",
     worktreeRoot: "",
     worktreeProvision: DEFAULT_PROVISION,
+    worktreeProvisionByRepo: {},
     worktreeExclude: false,
   },
 };
@@ -170,6 +199,12 @@ function merge(base: Settings, patch: DeepPartial<Settings>): Settings {
       events: { ...base.notifications.events, ...(n.events ?? {}) },
       channels: { ...base.notifications.channels, ...(n.channels ?? {}) },
       quietHours: { ...base.notifications.quietHours, ...(n.quietHours ?? {}) },
+      // Merged per session, so a Settings-page patch that carries no mutes cannot
+      // silently drop the ones another tab set.
+      mutes: {
+        ...base.notifications.mutes,
+        ...((n.mutes ?? {}) as Settings["notifications"]["mutes"]),
+      },
     },
     // Appearance is replaced wholesale rather than merged: the UI always sends the
     // complete object, and half-applied themes are worse than none.
@@ -202,6 +237,25 @@ export function getSettings(): Settings {
 
 export function updateSettings(patch: DeepPartial<Settings>): Settings {
   current = merge(current, patch);
+  persist();
+  for (const fn of listeners) fn(current);
+  return current;
+}
+
+/**
+ * Silence some kinds for one session, or clear it.
+ *
+ * Its own writer rather than a settings patch: the map is keyed by session id, and a
+ * patch carrying the whole map would replace every other session's entry with
+ * whatever that tab last read. An empty list of kinds is an absence rather than a
+ * value — leaving the key behind would mean "this session is muted" forever, and read
+ * as one in settings.json.
+ */
+export function setSessionMute(id: string, kinds: NotifyEventKind[], label: string): Settings {
+  const mutes = { ...current.notifications.mutes };
+  if (kinds.length > 0) mutes[id] = { kinds, label };
+  else delete mutes[id];
+  current = { ...current, notifications: { ...current.notifications, mutes } };
   persist();
   for (const fn of listeners) fn(current);
   return current;
