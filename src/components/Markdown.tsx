@@ -1,5 +1,6 @@
-import { type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { highlight } from "./highlight.tsx";
+import { CheckIcon, CopyIcon } from "./Icons.tsx";
 
 /**
  * A small, dependency-free Markdown renderer for transcript text.
@@ -9,6 +10,47 @@ import { highlight } from "./highlight.tsx";
  * The supported subset is what Claude actually writes: headings, fenced code,
  * lists, tables, blockquotes, rules, and inline code/bold/italic/links.
  */
+
+/**
+ * A fenced code block. The language tag and the copy button live on the wrapper
+ * rather than inside the <pre>, so they stay pinned to the top-right corner
+ * instead of scrolling away with long lines.
+ */
+function CodeBlock({ source, lang }: { source: string; lang: string }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(source);
+    } catch {
+      return;
+    }
+    setCopied(true);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1400);
+  }, [source]);
+
+  return (
+    <div className="md-code-wrap">
+      <div className="md-code-tools">
+        {lang && <span className="md-lang">{lang}</span>}
+        <button
+          type="button"
+          className={`md-copy${copied ? " copied" : ""}`}
+          onClick={copy}
+          aria-label={copied ? "Copied" : "Copy code"}
+          title={copied ? "Copied" : "Copy code"}
+        >
+          {copied ? <CheckIcon /> : <CopyIcon />}
+        </button>
+      </div>
+      <pre className="md-code">
+        <code>{highlight(source, lang)}</code>
+      </pre>
+    </div>
+  );
+}
 
 // ── inline ────────────────────────────────────────────────────────────────────
 // One alternation pass keeps precedence explicit: code spans win over emphasis,
@@ -84,12 +126,7 @@ export function Markdown({ text }: { text: string }) {
       i++;
       while (i < lines.length && !lines[i].trimStart().startsWith(marker)) body.push(lines[i++]);
       i++;
-      blocks.push(
-        <pre className="md-code" key={k()}>
-          {lang && <span className="md-lang">{lang}</span>}
-          <code>{highlight(body.join("\n"), lang)}</code>
-        </pre>,
-      );
+      blocks.push(<CodeBlock key={k()} source={body.join("\n")} lang={lang} />);
       continue;
     }
 

@@ -565,9 +565,9 @@ tr.click:hover td { background: var(--surface-2); }
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
+.md-code-wrap { position: relative; margin: 0 0 12px; }
 .md-code {
-  position: relative;
-  margin: 0 0 12px;
+  margin: 0;
   padding: 11px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -575,14 +575,42 @@ tr.click:hover td { background: var(--surface-2); }
   overflow-x: auto;
 }
 .md-code code { padding: 0; background: none; font-size: 12px; white-space: pre; }
-.md-lang {
+.md-code-tools {
   position: absolute;
-  top: 0; right: 8px;
+  top: 3px; right: 5px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+.md-code-tools > * { pointer-events: auto; }
+.md-lang {
   font: 600 10px/1.9 var(--mono);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
+.md-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.md-copy .icon { width: 14px; height: 14px; }
+.md-code-wrap:hover .md-copy,
+.md-copy:focus-visible,
+.md-copy.copied { opacity: 1; }
+.md-copy:hover { color: var(--text-primary); background: var(--surface-1); border-color: var(--border); }
+.md-copy.copied { color: var(--syn-add); }
 .md-list { margin: 0 0 10px; padding-left: 20px; }
 .md-list li { margin-bottom: 5px; white-space: pre-wrap; }
 .md-list li::marker { color: var(--text-muted); }

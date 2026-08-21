@@ -303,3 +303,12 @@ export function BellIcon({ muted = false }: { muted?: boolean }) {
     </svg>
   );
 }
+
+export function CopyIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <rect x="7.2" y="7.2" width="8.6" height="8.6" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M12.8 4.2H5.8a1.6 1.6 0 00-1.6 1.6v7" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
