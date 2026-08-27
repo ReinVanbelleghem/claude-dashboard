@@ -36,6 +36,19 @@ export function GitIcon() {
 }
 
 /**
+ * A session with no project: a magnifier, not a folder, because what it marks is a
+ * question rather than a place on disk.
+ */
+export function SearchIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="8.8" cy="8.8" r="5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M12.5 12.5L17 17" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/**
  * A worktree: one repository, a second checkout hanging off it. Deliberately a
  * relative of GitIcon rather than a folder — what it marks is a branch that lives
  * somewhere else, not a directory.

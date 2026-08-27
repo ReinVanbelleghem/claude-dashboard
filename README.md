@@ -134,6 +134,21 @@ metadata sidebar.
   outside a terminal
 - **`↵` sends, `⇧↵` newlines.** A message sent mid-turn is queued and marked as such
 
+### Research sessions
+
+The **Research** tile in the new-session dialog starts a session that cannot reach this
+machine at all. It runs in an empty scratch folder (`~/.claude-dashboard/scratch`) with
+no project CLAUDE.md, no skills, and no Bash, Read, Write, Glob or Grep — so there is no
+route to a codebase, and a general question cannot quietly become about whatever happens
+to be checked out here.
+
+**MCP connectors and web search still work**, which is the point: no local context, full
+research tools. Those connectors are account-side rather than configured locally, so
+keeping them means keeping the `user` setting source — and your global
+`~/.claude/CLAUDE.md` rides on that same source. It is the one thing that cannot be
+dropped without taking Slack, Notion and Gmail with it. It still *names* directories,
+but nothing in the session can open one.
+
 ### Git and review
 
 Git for the session's repository. Reading is unrestricted. Writing is deliberately

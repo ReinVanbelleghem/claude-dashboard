@@ -13,7 +13,7 @@ import {
 import { MODES, MODE_HELP, MODE_LABEL, STARTER_MODELS } from "./Conversation.tsx";
 import { BranchPicker, type BranchChoice } from "./BranchPicker.tsx";
 import { FoldersModal } from "./FoldersModal.tsx";
-import { FolderIcon, GitIcon, PlusIcon, WorktreeIcon } from "./Icons.tsx";
+import { FolderIcon, GitIcon, PlusIcon, SearchIcon, WorktreeIcon } from "./Icons.tsx";
 
 /**
  * Start a session the dashboard owns: directory, model, permissions, title.
@@ -74,6 +74,12 @@ export function NewSessionModal({
   const [title, setTitle] = useState("");
   const [mode, setMode] = useState<PermissionMode>("auto");
   const [custom, setCustom] = useState(false);
+  /**
+   * Start with no project at all: an empty scratch directory, no CLAUDE.md and no
+   * skills. For a general question, the nearest checkout is not context but noise —
+   * it gives the model a codebase to answer from that nobody asked about.
+   */
+  const [research, setResearch] = useState(false);
   /**
    * Which checkout of the chosen repository to run in: "here" for the directory as
    * picked, "new" for a fresh worktree, or the path of one that already exists. A
@@ -143,7 +149,7 @@ export function NewSessionModal({
    * show a one-tile grid on the way to the real one.
    */
   useEffect(() => {
-    const dir = cwd.trim();
+    const dir = research ? "" : cwd.trim();
     if (!dir) {
       setRepo(null);
       setTrees([]);
@@ -178,14 +184,24 @@ export function NewSessionModal({
     return () => {
       alive = false;
     };
-  }, [cwd]);
+  }, [cwd, research]);
 
   const start = async () => {
-    if (!cwd.trim()) return;
+    if (!research && !cwd.trim()) return;
     setBusy(true);
     setError(null);
     try {
       let dir = cwd.trim();
+      if (research) {
+        const { key } = await agentApi.start({
+          research: true,
+          model: model === "default" ? undefined : model,
+          permissionMode: mode,
+          title: title.trim() || undefined,
+        });
+        onStarted(key);
+        return;
+      }
       if (wtSel !== "here" && wtSel !== "new") {
         dir = repo?.root ? sameSpotIn(repo.root, dir, wtSel) : wtSel;
       } else if (wtSel === "new") {
@@ -254,15 +270,16 @@ export function NewSessionModal({
           <div>
             <h3>New session</h3>
             <p className="hint">
-              Runs on this machine as a child of the dashboard, with your settings, CLAUDE.md, skills
-              and MCP servers — the same as a terminal session, but you drive it from here.
+              {research
+                ? "No repository, no files, no shell — nothing on this machine is reachable, so a general question is answered on its own terms. Your MCP connectors and web search still work."
+                : "Runs on this machine as a child of the dashboard, with your settings, CLAUDE.md, skills and MCP servers — the same as a terminal session, but you drive it from here."}
             </p>
           </div>
         </div>
 
         <div className="field">
           <span className="field-head">
-            Working directory
+            {research ? "No project" : "Working directory"}
             {picking ? (
               <button className="link-btn inline" onClick={() => setManage(true)}>
                 Manage folders
@@ -274,7 +291,17 @@ export function NewSessionModal({
             )}
           </span>
 
-          {!picking && (
+          {!picking && research && (
+            <div className="folder-card locked">
+              <span className="folder-ic">
+                <SearchIcon />
+              </span>
+              <span className="folder-name">Research</span>
+              <span className="folder-sub">connectors and web only</span>
+            </div>
+          )}
+
+          {!picking && !research && (
             <div className="folder-card locked" title={cwd}>
               <span className="folder-ic">
                 <FolderIcon open />
@@ -288,13 +315,30 @@ export function NewSessionModal({
           )}
 
           {picking && <div className="folder-grid">
+            {/* First, and separated from the folders, because it is not one: picking it
+                means there is nothing to point at. */}
+            <button
+              className={`folder-card pick dashed ${research ? "active" : ""}`}
+              onClick={() => {
+                setResearch(true);
+                setCustom(false);
+              }}
+              title="No file or shell access at all — connectors and web search only"
+            >
+              <span className="folder-ic">
+                <SearchIcon />
+              </span>
+              <span className="folder-name">Research</span>
+              <span className="folder-sub">connectors and web only</span>
+            </button>
             {cards.map((f) => (
               <button
                 key={f.path}
-                className={`folder-card pick ${cwd === f.path ? "active" : ""}`}
+                className={`folder-card pick ${!research && cwd === f.path ? "active" : ""}`}
                 onClick={() => {
                   setCwd(f.path);
                   setCustom(false);
+                  setResearch(false);
                 }}
                 title={f.path}
               >
@@ -310,6 +354,7 @@ export function NewSessionModal({
               onClick={() => {
                 setCustom(true);
                 setCwd("");
+                setResearch(false);
               }}
             >
               <span className="folder-ic">
@@ -320,7 +365,7 @@ export function NewSessionModal({
             </button>
           </div>}
 
-          {picking && custom && (
+          {picking && custom && !research && (
             <input
               className="search"
               autoFocus
@@ -336,7 +381,7 @@ export function NewSessionModal({
               sibling off. The box stays put while the next directory is read, showing
               the previous answer greyed out rather than collapsing and springing back;
               it only disappears once git has said "not a repository". */}
-          {picking && repo?.mainRoot && (
+          {picking && repo?.mainRoot && !research && (
             <div className={`new-wt ${probing ? "probing" : ""}`} aria-busy={probing}>
               <span className="field-head">
                 Worktree to work on
@@ -487,7 +532,11 @@ export function NewSessionModal({
           <button className="icon-btn" onClick={onClose}>
             Cancel
           </button>
-          <button className="icon-btn primary" disabled={busy || !cwd.trim()} onClick={start}>
+          <button
+            className="icon-btn primary"
+            disabled={busy || (!research && !cwd.trim())}
+            onClick={start}
+          >
             {busy ? "Starting…" : "Start session"}
           </button>
         </div>

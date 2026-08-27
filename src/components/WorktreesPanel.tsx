@@ -1,9 +1,9 @@
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { gitApi, shortPath, type RepoStatus, type Worktree } from "../api.ts";
 import { BranchPicker, type BranchChoice } from "./BranchPicker.tsx";
 import { CheckIcon, FolderIcon, PlusIcon, TrashIcon, WorktreeIcon } from "./Icons.tsx";
 import { ProvisionEditor } from "./ProvisionEditor.tsx";
-import { cachedStatus, invalidateStatusCache, watchStatus } from "./useGitRepo.ts";
+import { invalidateStatusCache, watchStatus } from "./useGitRepo.ts";
 
 /**
  * Every checkout of this repository, and the two things you do to that list.
@@ -21,6 +21,7 @@ import { cachedStatus, invalidateStatusCache, watchStatus } from "./useGitRepo.t
 export const WorktreesPanel = memo(function WorktreesPanel({
   cwd,
   status,
+  initialTrees = null,
   onOpenWorktree,
   title,
   subtitle,
@@ -29,7 +30,18 @@ export const WorktreesPanel = memo(function WorktreesPanel({
   layout = "rows",
 }: {
   cwd: string;
-  status: RepoStatus;
+  /**
+   * Null while the repository is still being read. The list itself does not need it —
+   * only creating a checkout does, since that has to know which commit to branch from —
+   * so a null status costs the create button and nothing else.
+   */
+  status: RepoStatus | null;
+  /**
+   * Checkouts already known to the caller, painted immediately instead of leaving the
+   * panel empty until this component's own read comes back. Refreshed by that read, and
+   * by every write after it, so a stale seed corrects itself rather than sticking.
+   */
+  initialTrees?: Worktree[] | null;
   /** Start work in one of these checkouts. */
   onOpenWorktree?: (path: string) => void;
   /** Heading, when this panel is one repository among several on screen. */
@@ -53,7 +65,7 @@ export const WorktreesPanel = memo(function WorktreesPanel({
    */
   layout?: "rows" | "tiles";
 }) {
-  const [trees, setTrees] = useState<Worktree[] | null>(null);
+  const [trees, setTrees] = useState<Worktree[] | null>(initialTrees);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ ok: boolean; text: string; hint: string | null } | null>(null);
@@ -62,6 +74,8 @@ export const WorktreesPanel = memo(function WorktreesPanel({
   const [branch, setBranch] = useState<BranchChoice | null>(null);
   /** Removal is confirmed in place: the path of the row currently asking. */
   const [confirming, setConfirming] = useState<string | null>(null);
+  /** Bumped by any write: a commit changes the counts without changing the checkouts. */
+  const [dirtyNonce, setDirtyNonce] = useState(0);
 
   const load = useCallback(() => {
     if (!cwd) return;
@@ -74,7 +88,19 @@ export const WorktreesPanel = memo(function WorktreesPanel({
       .catch((e: Error) => setError(e.message));
   }, [cwd]);
 
-  useEffect(load, [load]);
+  /**
+   * The seed is already this read's answer, so spending a request to confirm it is the
+   * round trip this panel was handed the list to avoid. Skipped once, for the directory
+   * it was seeded with — every later read, including the write-driven ones below, runs.
+   */
+  const seeded = useRef(initialTrees ? cwd : null);
+  useEffect(() => {
+    if (seeded.current === cwd) {
+      seeded.current = null;
+      return;
+    }
+    load();
+  }, [load, cwd]);
 
   /**
    * A write anywhere can change this list — a branch switch frees a branch, a commit
@@ -82,7 +108,14 @@ export const WorktreesPanel = memo(function WorktreesPanel({
    * wrote to a repo" signal, fed by both local writes and the daemon's SSE, so reuse it
    * rather than polling.
    */
-  useEffect(() => watchStatus(load), [load]);
+  useEffect(
+    () =>
+      watchStatus(() => {
+        load();
+        setDirtyNonce((n) => n + 1);
+      }),
+    [load],
+  );
 
   // The tiles layout puts the create form in a dialog, and a dialog closes on Escape.
   useEffect(() => {
@@ -143,7 +176,7 @@ export const WorktreesPanel = memo(function WorktreesPanel({
     <>
       <BranchPicker
         cwd={cwd}
-        from={status.detached ? (status.head ?? "HEAD") : (status.branch ?? "HEAD")}
+        from={status?.detached ? (status.head ?? "HEAD") : (status?.branch ?? "HEAD")}
         value={branch}
         onChange={setBranch}
         disabled={!!busy}
@@ -221,8 +254,9 @@ export const WorktreesPanel = memo(function WorktreesPanel({
         {(trees ?? []).map((w) => {
           const props = {
             tree: w,
+            nonce: dirtyNonce,
             /* Real paths on both sides — git reports one, the session carries another. */
-            current: w.path === (currentPath === undefined ? status.root : currentPath),
+            current: w.path === (currentPath === undefined ? (status?.root ?? null) : currentPath),
             busy,
             confirming: confirming === w.path,
             onConfirm: () => setConfirming(w.path),
@@ -243,14 +277,20 @@ export const WorktreesPanel = memo(function WorktreesPanel({
               setBranch(null);
               setAdding(!adding);
             }}
-            disabled={!!busy}
-            title="Check this repository out again, on another branch, in its own directory"
+            disabled={!!busy || !status}
+            title={
+              status
+                ? "Check this repository out again, on another branch, in its own directory"
+                : "Available once this repository has been read"
+            }
           >
             <span className="folder-ic">
               <PlusIcon />
             </span>
             <span className="folder-name">New worktree…</span>
-            <span className="folder-sub">a second branch, its own files</span>
+            <span className="folder-sub">
+              {status ? "a second branch, its own files" : "reading repository…"}
+            </span>
           </button>
         )}
       </div>
@@ -313,8 +353,8 @@ export const WorktreesPanel = memo(function WorktreesPanel({
 });
 
 /** Where a new worktree would land, so the form says it before you commit to it. */
-function dirOf(status: RepoStatus, branch: string, root?: string): string {
-  const main = status.mainRoot;
+function dirOf(status: RepoStatus | null, branch: string, root?: string): string {
+  const main = status?.mainRoot;
   if (!main) return root?.trim() ? root.trim() : "a sibling directory";
   const slug =
     branch
@@ -333,12 +373,36 @@ function dirOf(status: RepoStatus, branch: string, root?: string): string {
 /**
  * One checkout.
  *
- * The uncommitted count is read per row rather than coming with the list: `git
- * worktree list` does not carry it, and it is the one fact that decides whether this
- * row can be removed at all.
+ * The uncommitted count is read per row: `git worktree list` does not carry it, and it
+ * is the one fact that decides whether this row can be removed at all. Read one path at
+ * a time rather than a batch per panel, so each tile fills as its own answer lands
+ * instead of every tile waiting on the slowest checkout in the repository.
  */
+function useDirtyCount(w: Worktree, nonce: number): number | null {
+  const [dirty, setDirty] = useState<number | null>(null);
+
+  useEffect(() => {
+    // Nothing to count in a directory that is gone.
+    if (w.prunable !== null) return;
+    let alive = true;
+    gitApi
+      .dirty([w.path])
+      .then((r) => {
+        if (alive && typeof r.dirty[w.path] === "number") setDirty(r.dirty[w.path]);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [w.path, w.head, w.prunable, nonce]);
+
+  return dirty;
+}
+
 type EntryProps = {
   tree: Worktree;
+  /** Bumped to force a re-read after a write. */
+  nonce: number;
   current: boolean;
   busy: string | null;
   confirming: boolean;
@@ -347,27 +411,6 @@ type EntryProps = {
   onRemove: () => void;
   onOpen?: (path: string) => void;
 };
-
-/** Read per checkout: `git worktree list` does not carry it. */
-function useDirtyCount(w: Worktree): number | null {
-  const [dirty, setDirty] = useState<number | null>(null);
-
-  useEffect(() => {
-    // Nothing to count in a directory that is gone.
-    if (w.prunable !== null) return;
-    let alive = true;
-    cachedStatus(w.path)
-      .then((s) => {
-        if (alive) setDirty(s.counts.staged + s.counts.unstaged + s.counts.untracked);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [w.path, w.head]);
-
-  return dirty;
-}
 
 function Row({
   tree: w,
@@ -378,9 +421,9 @@ function Row({
   onCancel,
   onRemove,
   onOpen,
+  nonce,
 }: EntryProps) {
-  const dirty = useDirtyCount(w);
-
+  const dirty = useDirtyCount(w, nonce);
   const removable = !w.isMain && w.locked === null;
 
   return (
@@ -466,8 +509,18 @@ function Row({
  * small destructive corner button, and it asks first: the card's footer becomes the
  * confirmation rather than a dialog appearing over the list.
  */
-function Tile({ tree: w, current, busy, confirming, onConfirm, onCancel, onRemove, onOpen }: EntryProps) {
-  const dirty = useDirtyCount(w);
+function Tile({
+  tree: w,
+  nonce,
+  current,
+  busy,
+  confirming,
+  onConfirm,
+  onCancel,
+  onRemove,
+  onOpen,
+}: EntryProps) {
+  const dirty = useDirtyCount(w, nonce);
   const missing = w.prunable !== null;
   const openable = !!onOpen && !missing && !current;
   const removable = !w.isMain && w.locked === null;

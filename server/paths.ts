@@ -16,3 +16,9 @@ export const PORT = Number(process.env.PORT ?? 5757);
 export function slugToPath(slug: string): string {
   return slug.replace(/^-/, "/").replace(/-/g, "/");
 }
+
+/**
+ * Home for sessions started without a project. Empty and outside every checkout,
+ * so nothing on disk invites the model into a codebase it was not asked about.
+ */
+export const SCRATCH_DIR = join(DATA_DIR, "scratch");

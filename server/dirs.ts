@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { DATA_DIR } from "./paths.ts";
+import { DATA_DIR, SCRATCH_DIR } from "./paths.ts";
 
 /**
  * Directory picking for the new-session dialog.
@@ -45,8 +45,19 @@ export function listDirs(input?: string): {
   };
 }
 
+/**
+ * The directory a research session runs in, created on first use.
+ *
+ * Kept and reused rather than made per-session, so notes and downloads from one
+ * research session are still there for the next one.
+ */
+export function scratchDir(): string {
+  mkdirSync(SCRATCH_DIR, { recursive: true });
+  return SCRATCH_DIR;
+}
+
 /** `~` and `$HOME` are what people type; resolve() alone would not expand them. */
-function expand(p: string): string {
+export function expand(p: string): string {
   if (p === "~") return homedir();
   if (p.startsWith("~/")) return join(homedir(), p.slice(2));
   return p.replace(/^\$HOME(?=\/|$)/, homedir());

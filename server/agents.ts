@@ -14,6 +14,7 @@ import { DATA_DIR } from "./paths.ts";
 import {
   query,
   type ModelInfo,
+  type Options,
   type PermissionMode,
   type PermissionResult,
   type PermissionUpdate,
@@ -33,6 +34,11 @@ import {
  * default so they load ~/.claude settings, CLAUDE.md, skills and MCP servers
  * exactly like the CLI, and the transcript lands in ~/.claude/projects where
  * the indexer already picks it up.
+ *
+ * Research sessions are the one exception, and only in what they load: no
+ * CLAUDE.md and no skills, so a general question is answered on its merits
+ * instead of through whatever the last project happened to be about. See
+ * `RESEARCH_OPTIONS`.
  */
 
 /**
@@ -109,6 +115,7 @@ type Agent = {
   key: string;
   sessionId: string | null;
   cwd: string;
+  research: boolean;
   title: string | null;
   model: string | null;
   permissionMode: PermissionMode;
@@ -151,6 +158,7 @@ const agents = new Map<string, Agent>();
 export type Restorable = {
   sessionId: string;
   cwd: string;
+  research?: boolean;
   title: string | null;
   model: string | null;
   lastSeen: number;
@@ -184,6 +192,7 @@ function saveRestorable() {
       .map((a) => ({
         sessionId: a.sessionId!,
         cwd: a.cwd,
+        research: a.research,
         title: a.title,
         model: a.model,
         lastSeen: a.updatedAt,
@@ -260,6 +269,7 @@ export function agentSummary(a: Agent) {
     key: a.key,
     sessionId: a.sessionId,
     cwd: a.cwd,
+    research: a.research,
     title: a.title,
     model: a.model,
     permissionMode: a.permissionMode,
@@ -507,6 +517,8 @@ function userMessage(
 // ── lifecycle ─────────────────────────────────────────────────────────────────
 export type StartOptions = {
   cwd: string;
+  /** Start with no project context — see RESEARCH_OPTIONS. */
+  research?: boolean;
   model?: string;
   permissionMode?: PermissionMode;
   /** Session id to continue; its history is loaded and appended to. */
@@ -517,6 +529,33 @@ export type StartOptions = {
   title?: string;
 };
 
+/**
+ * What a research session drops, and what it deliberately keeps.
+ *
+ * Dropping the local tools is what makes it a research session rather than a session
+ * that happens to start somewhere empty: with no Bash, no Read and no Glob there is no
+ * route to a codebase at all, so the answer cannot quietly become about whatever is
+ * checked out on this machine. Removing the tools rather than fencing the paths is
+ * deliberate — `sandbox.filesystem.allowRead` does not restrict reads without an
+ * admin-managed settings tier, and a deny list over $HOME cannot carve out an
+ * exception for the scratch directory that lives inside it.
+ *
+ * `settingSources` without `'project'` drops the project's CLAUDE.md, and an empty
+ * `skills` list hides the skill catalogue, whose trigger descriptions otherwise sit in
+ * the system prompt arguing for a tool the question never asked for.
+ *
+ * `'user'` stays because the MCP connectors ride on it: they are account-side, so
+ * unlike a local server they cannot be handed over programmatically, and dropping the
+ * source takes Slack, Notion and Gmail with it. ~/.claude/CLAUDE.md rides on the same
+ * source and is the one thing that cannot be dropped without them — it still names
+ * directories, though nothing in the session can open one.
+ */
+const RESEARCH_OPTIONS: Pick<Options, "settingSources" | "skills" | "disallowedTools"> = {
+  settingSources: ["user"],
+  skills: [],
+  disallowedTools: ["Bash", "BashOutput", "KillShell", "Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep", "Task"],
+};
+
 export function startAgent(opts: StartOptions): string {
   const key = randomUUID();
   const queue = inputQueue();
@@ -525,6 +564,7 @@ export function startAgent(opts: StartOptions): string {
     key,
     sessionId: opts.resume ?? null,
     cwd: opts.cwd,
+    research: opts.research === true,
     title: opts.title?.trim() || null,
     model: opts.model ?? null,
     permissionMode: opts.permissionMode ?? "default",
@@ -551,6 +591,7 @@ export function startAgent(opts: StartOptions): string {
     prompt: queue,
     options: {
       cwd: opts.cwd,
+      ...(opts.research ? RESEARCH_OPTIONS : {}),
       model: opts.model,
       permissionMode: opts.permissionMode ?? "default",
       // The CLI refuses bypassPermissions unless it was allowed at spawn time, so
@@ -944,6 +985,7 @@ export function restoreAgent(sessionId: string): { key: string } | { error: stri
   return {
     key: startAgent({
       cwd: row.cwd,
+      research: row.research === true,
       model: row.model ?? undefined,
       title: row.title ?? undefined,
       resume: sessionId,

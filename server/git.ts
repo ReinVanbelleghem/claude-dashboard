@@ -323,6 +323,41 @@ async function computeStatus(cwd: string): Promise<RepoStatus> {
  * survives paths containing spaces or quotes, which the non-z form escapes into
  * something you have to un-escape by hand.
  */
+/**
+ * How many files are changed in each of these checkouts.
+ *
+ * The tiles want one number per worktree, and `git worktree list` does not carry it.
+ * Reading it through `repoStatus` costs a full status — base detection, rev-list counts
+ * and two numstat diffs — per tile, which on a large repository is around a second each,
+ * serialised behind nothing and multiplied by every checkout on screen. Porcelain alone
+ * answers the question, and all of them are asked at once.
+ *
+ * A path that cannot be read is left out rather than reported as zero: "no changes" and
+ * "could not look" are different answers, and the tile shows nothing for the second.
+ */
+export async function dirtyCounts(paths: string[]): Promise<Record<string, number>> {
+  const wanted = [...new Set(paths.filter((p) => p && isAbsolute(p)))];
+  const counted = await Promise.all(
+    wanted.map(async (path) => {
+      const r = await run(path, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]).catch(
+        () => null,
+      );
+      if (!r?.ok) return null;
+      let n = 0;
+      const parts = r.out.split("\0");
+      for (let i = 0; i < parts.length; i++) {
+        const entry = parts[i];
+        if (!entry) continue;
+        // A rename or copy is followed by its source path, which is not a second change.
+        if (entry[0] === "R" || entry[0] === "C") i++;
+        n++;
+      }
+      return [path, n] as const;
+    }),
+  );
+  return Object.fromEntries(counted.filter((c): c is readonly [string, number] => c !== null));
+}
+
 async function workingFiles(root: string): Promise<ChangedFile[]> {
   const [status, unstagedStat, stagedStat] = await Promise.all([
     run(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
@@ -645,7 +680,12 @@ export type WorktreeRepo = {
   /** A checkout that exists on disk, to ask this repository's questions from. */
   root: string;
   mainRoot: string | null;
-  count: number;
+  /**
+   * This repository's checkouts. Returned with the repository rather than left for the
+   * client to ask for, because listing them is how `count` was arrived at anyway — and
+   * a second round trip per repository is what kept the page blank while it waited.
+   */
+  worktrees: Worktree[];
 };
 
 /**
@@ -658,36 +698,67 @@ export type WorktreeRepo = {
  * linked worktree's directory is named for its branch.
  */
 export async function worktreeRepos(candidates: string[]): Promise<WorktreeRepo[]> {
-  const byKey = new Map<string, WorktreeRepo>();
+  // Candidates arrive from two sources that overlap heavily — a worktree in the
+  // configured directory is usually also one a session has run in — and probing the
+  // same directory twice costs the same as probing two.
+  const dirs = [...new Set(candidates.filter((d) => d && isAbsolute(d)))];
+  const found = await Promise.all(dirs.map((dir) => repoIdentity(dir)));
 
-  for (const dir of candidates) {
-    if (!dir || !isAbsolute(dir)) continue;
-    const status = await repoStatus(dir).catch(() => null);
-    if (!status?.isRepo || !status.root || !status.commonDir) continue;
-    const prev = byKey.get(status.commonDir);
+  const byKey = new Map<string, WorktreeRepo>();
+  for (const id of found) {
+    if (!id) continue;
+    const prev = byKey.get(id.commonDir);
     // A main checkout answers for the repository better than a linked one, so it wins
     // even when a linked worktree was seen first.
-    if (prev && !(status.mainRoot && status.root === status.mainRoot)) continue;
-    const named = status.mainRoot ?? status.root;
-    byKey.set(status.commonDir, {
-      repoKey: status.commonDir,
+    if (prev && !(id.mainRoot && id.root === id.mainRoot)) continue;
+    const named = id.mainRoot ?? id.root;
+    byKey.set(id.commonDir, {
+      repoKey: id.commonDir,
       name: basename(named),
-      root: status.root,
-      mainRoot: status.mainRoot,
-      count: 0,
+      root: id.root,
+      mainRoot: id.mainRoot,
+      worktrees: [],
     });
   }
 
+  const repos = [...byKey.values()];
+  const counted = await Promise.all(repos.map((r) => worktrees(r.root).catch(() => null)));
+
   const out: WorktreeRepo[] = [];
-  for (const repo of byKey.values()) {
-    const listed = await worktrees(repo.root).catch(() => null);
+  for (const [i, repo] of repos.entries()) {
+    const listed = counted[i];
     // A repository whose list cannot be read has nothing to manage, and reporting it
     // would put an empty group on screen with no action in it.
     if (!listed?.ok) continue;
-    out.push({ ...repo, count: listed.worktrees.length });
+    out.push({ ...repo, worktrees: listed.worktrees });
   }
 
   return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+type RepoIdentity = { root: string; commonDir: string; mainRoot: string | null };
+
+/**
+ * Which repository a directory belongs to, and nothing else.
+ *
+ * `repoStatus` answers this too, but on the way it detects a base branch, counts
+ * commits against it and stats every changed file — around ten git processes for a
+ * grouping key that one `rev-parse` already has. That is affordable for a single
+ * session card and not for every directory sessions have ever run in.
+ */
+async function repoIdentity(dir: string): Promise<RepoIdentity | null> {
+  const out = await line(dir, [
+    "rev-parse",
+    "--show-toplevel",
+    "--path-format=absolute",
+    "--git-dir",
+    "--git-common-dir",
+  ]);
+  const [root, , commonDir] = (out ?? "").split("\n").map((s) => s.trim());
+  if (!root || !commonDir) return null;
+  // `<repo>/.git` → `<repo>`. A bare repo has no main working tree to point at.
+  const mainRoot = basename(commonDir) === ".git" ? dirname(commonDir) : null;
+  return { root, commonDir, mainRoot };
 }
 
 // ── branches ──────────────────────────────────────────────────────────────────

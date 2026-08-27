@@ -91,11 +91,15 @@ export function WorktreesView({
 /**
  * One repository's checkouts.
  *
- * The panel needs a status to know which checkout is the main one and where a new one
- * would land, and it takes it as a prop rather than fetching it — that is what lets the
- * session page hand it the status it already has. Here there is none to hand down, so
- * this wrapper reads it, through the shared cache so a repository open in a session
- * costs nothing extra.
+ * The panel needs a status to know where a new checkout would land, and it takes it as
+ * a prop rather than fetching it — that is what lets the session page hand it the status
+ * it already has. Here there is none to hand down, so this wrapper reads it, through the
+ * shared cache so a repository open in a session costs nothing extra.
+ *
+ * That read is slow: it stats every changed file in a repository the size of a backend.
+ * The checkouts came with the repository list and do not depend on it, so they are
+ * handed straight to the panel and the status arrives underneath them — the list is
+ * readable and clickable while only the create button is still waiting.
  */
 function RepoGroup({
   repo,
@@ -122,18 +126,11 @@ function RepoGroup({
     };
   }, [repo.mainRoot, repo.root]);
 
-  if (!status?.isRepo || !status.root)
-    return (
-      <div className="panel">
-        <h2>{repo.name}</h2>
-        <p className="hint">Reading {shortPath(repo.mainRoot ?? repo.root, 3)}…</p>
-      </div>
-    );
-
   return (
     <WorktreesPanel
-      cwd={status.root}
-      status={status}
+      cwd={status?.root ?? repo.root}
+      status={status?.isRepo ? status : null}
+      initialTrees={repo.worktrees}
       title={repo.name}
       subtitle={shortPath(repo.mainRoot ?? repo.root, 3)}
       worktreeRoot={worktreeRoot}

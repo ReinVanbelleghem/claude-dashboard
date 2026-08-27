@@ -43,7 +43,14 @@ import {
 } from "./comments.ts";
 import { loadConfig } from "./config.ts";
 import { openDb } from "./db.ts";
-import { listDirs, listFavourites, removeFavourite, saveFavourite } from "./dirs.ts";
+import {
+  expand,
+  listDirs,
+  listFavourites,
+  removeFavourite,
+  saveFavourite,
+  scratchDir,
+} from "./dirs.ts";
 import { browse as browseFiles, readFile, writeFile } from "./files.ts";
 import {
   branchFiles,
@@ -63,6 +70,7 @@ import {
   worktreeAdd as gitWorktreeAdd,
   worktreePrune as gitWorktreePrune,
   worktreeRemove as gitWorktreeRemove,
+  dirtyCounts as gitDirtyCounts,
   worktrees as gitWorktrees,
   worktreeRepos as gitWorktreeRepos,
   provisionPlan as gitProvisionPlan,
@@ -78,7 +86,7 @@ import {
   setNotifyEmitter,
   type NotifySubject,
 } from "./notify.ts";
-import { PORT, PROJECTS_DIR, SESSIONS_DIR, slugToPath } from "./paths.ts";
+import { PORT, PROJECTS_DIR, SCRATCH_DIR, SESSIONS_DIR, slugToPath } from "./paths.ts";
 import { needsInput, readRegistry } from "./registry.ts";
 import {
   getSettings,
@@ -253,6 +261,9 @@ function realBranch(branch: string | null): string | null {
 }
 
 function contextOf(cwd: string, branch: string | null): string {
+  // The scratch folder is an implementation detail: naming it in a banner would
+  // read as a project, which is the one thing this session deliberately has not got.
+  if (cwd === SCRATCH_DIR) return "research · no project";
   const short = cwd ? tildify(cwd) : "";
   // Two trailing segments are enough to recognise a project; "~" stays whole.
   const where = short === "~" ? "~" : short.split("/").filter(Boolean).slice(-2).join("/");
@@ -267,6 +278,7 @@ function contextOf(cwd: string, branch: string | null): string {
 function labelOf(title: string | null | undefined, cwd: string, key: string): string {
   const named = title?.trim();
   if (named) return clamp(named, 44);
+  if (cwd === SCRATCH_DIR) return "Research";
   const base = cwd && cwd !== HOME ? basename(cwd) : "";
   return base || `session ${key.slice(0, 8)}`;
 }
@@ -677,6 +689,7 @@ const server = Bun.serve({
       const body = (await req.json().catch(() => null)) as
         | {
             cwd?: string;
+            research?: boolean;
             model?: string;
             permissionMode?: string;
             resume?: string;
@@ -684,11 +697,15 @@ const server = Bun.serve({
             title?: string;
           }
         | null;
-      const cwd = body?.cwd?.trim();
+      // A research session is the one case with nothing to point at: it gets the
+      // scratch directory, created on demand, instead of a cwd from the caller.
+      const research = body?.research === true;
+      const cwd = research ? scratchDir() : expand(body?.cwd?.trim() ?? "");
       if (!cwd) return json({ error: "cwd is required" }, 400);
       if (!existsSync(cwd)) return json({ error: `no such directory: ${cwd}` }, 400);
       const key = startAgent({
         cwd,
+        research,
         model: body?.model || undefined,
         permissionMode: (body?.permissionMode as never) || undefined,
         resume: body?.resume || undefined,
@@ -1124,6 +1141,15 @@ const server = Bun.serve({
           }
         }
         return json({ repos: await gitWorktreeRepos([...seen, ...placed]) });
+      }
+
+      /**
+       * Changed-file counts for many checkouts at once. One request per panel rather
+       * than one per tile: the answers are wanted together, and asking separately made
+       * every tile queue behind its own full status read.
+       */
+      if (p === "/api/git/dirty") {
+        return json({ dirty: await gitDirtyCounts(url.searchParams.getAll("path")) });
       }
 
       const cwd = url.searchParams.get("cwd");

@@ -523,7 +523,8 @@ export type WorktreeRepo = {
   /** A checkout that exists, to address this repository's reads and writes to. */
   root: string;
   mainRoot: string | null;
-  count: number;
+  /** This repository's checkouts, so the list paints without a second request. */
+  worktrees: Worktree[];
 };
 
 export type BranchList = {
@@ -585,6 +586,11 @@ export const gitApi = {
     ),
   /** Every repository worth listing worktrees for, across all of session history. */
   repos: () => get<{ repos: WorktreeRepo[] }>("/api/git/repos"),
+  /** Changed-file counts for several checkouts in one request. */
+  dirty: (paths: string[]) =>
+    get<{ dirty: Record<string, number> }>(
+      `/api/git/dirty?${paths.map((p) => `path=${encodeURIComponent(p)}`).join("&")}`,
+    ),
   worktrees: (cwd: string) =>
     get<{ ok: boolean; worktrees: Worktree[]; error: string | null }>(
       `/api/git/worktrees?${q({ cwd })}`,
@@ -757,7 +763,9 @@ export const agentApi = {
   forget: (sessionId: string) => post("/api/agents/forget", { sessionId }),
   get: (key: string) => get<AgentDetail>(`/api/agents/${key}`),
   start: (opts: {
-    cwd: string;
+    /** Omitted for a research session: the daemon supplies its scratch directory. */
+    cwd?: string;
+    research?: boolean;
     model?: string;
     permissionMode?: PermissionMode;
     resume?: string;
