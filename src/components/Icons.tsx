@@ -325,3 +325,22 @@ export function CopyIcon() {
     </svg>
   );
 }
+
+/**
+ * Attach. Drawn inside a 20-unit box with the stroke kept two units clear of every
+ * edge — at 16 the clip's curves ran into the viewBox and the corners came out
+ * shaved once the stroke was applied.
+ */
+export function ClipIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" fill="none" aria-hidden="true">
+      <path
+        d="M12.5 5.5 6.9 11.1a2.2 2.2 0 0 0 3.1 3.1l5.6-5.6a4 4 0 0 0-5.7-5.7L4.3 8.5a5.8 5.8 0 0 0 8.2 8.2l3.1-3.1"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}

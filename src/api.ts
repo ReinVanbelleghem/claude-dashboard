@@ -53,6 +53,15 @@ export type UsagePayload = {
   weekFable: Bucket;
   allTime: Bucket;
   byModel: (Bucket & { model: string })[];
+  /** Priciest sessions of the last 7 days — which session spent the week's budget. */
+  topSessions: {
+    id: string;
+    title: string | null;
+    cwd: string | null;
+    costUsd: number;
+    fresh: number;
+    requests: number;
+  }[];
   hourly: { bucket: number; tokens: number }[];
   daily: { day: string; tokens: number; turns: number }[];
   remaining: {
@@ -81,6 +90,28 @@ export type SessionRow = {
   model: string | null;
 };
 
+/** Which text a search looks at. Both is the default, and what a bad value falls to. */
+export type SearchScope = "prompts" | "replies" | "both";
+
+/**
+ * Where a session matched and the text around the hit, marked up by SQLite's own
+ * snippet(). Without it a reply match is invisible: nothing in the row you see
+ * contains the words you typed.
+ */
+export type SearchHit = { source: "prompt" | "reply"; snippet: string };
+
+/**
+ * What a single session cost. `cachedPct` is the share of the prompt served from
+ * cache, which is why a long session can bill less than its token count implies.
+ */
+export type SessionReceipt = Bucket & {
+  requests: number;
+  cachedPct: number;
+  firstTs: number | null;
+  lastTs: number | null;
+  byModel: (Bucket & { model: string; requests: number })[];
+};
+
 export type SessionDetail = {
   session: SessionRow;
   prompts: { uuid: string; ts: number | null; text: string }[];
@@ -93,6 +124,8 @@ export type SessionDetail = {
   }[];
   tools: { name: string; count: number }[];
   prLinks: { pr_url: string; pr_number: number | null; repo: string | null }[];
+  /** Null when the session has no priced usage events — not the same as zero. */
+  receipt: SessionReceipt | null;
 };
 
 export type Overview = {
@@ -191,7 +224,30 @@ export type AgentSummary = {
   endedReason: string | null;
   turns: number;
   pending: number;
+  /** How the timeline ends. Null before the first item lands. */
+  lastKind: TimelineItem["kind"] | null;
+  /** Text of the failure, when the last thing that happened was one. */
+  lastError: string | null;
+  /** Messages typed mid-turn that have not been picked up yet. */
+  queued: number;
 };
+
+/**
+ * Why a live session is sitting still, or null when it is simply done.
+ *
+ * `idle` covers two opposite situations — a session that finished its turn and one
+ * that stopped without finishing — and they were previously indistinguishable on the
+ * grid. Both look calm; only one is.
+ */
+export function stalledReason(a: AgentSummary): string | null {
+  if (a.status !== "idle") return null;
+  if (a.lastError) return a.lastError;
+  // The last thing in the timeline is your own message: it was accepted and then
+  // nothing came back, which is a dropped turn rather than a finished one.
+  if (a.lastKind === "user") return "your message got no reply";
+  if (a.queued > 0) return `${a.queued} message${a.queued === 1 ? "" : "s"} never started`;
+  return null;
+}
 
 /** A past dashboard session that can be resumed with its history intact. */
 export type Restorable = {
@@ -784,6 +840,7 @@ export const agentApi = {
   interrupt: (key: string) => post(`/api/agents/${key}/interrupt`),
   model: (key: string, model: string) => post(`/api/agents/${key}/model`, { model }),
   mode: (key: string, permissionMode: PermissionMode) => post(`/api/agents/${key}/mode`, { permissionMode }),
+  rename: (key: string, title: string) => post(`/api/agents/${key}/rename`, { title }),
   stop: (key: string) => fetch(`/api/agents/${key}`, { method: "DELETE" }),
 };
 
@@ -838,11 +895,37 @@ export const api = {
   usage: () => get<UsagePayload>("/api/usage"),
   overview: () => get<Overview>("/api/overview"),
   /** One page of history. `total` is the size of the whole result set, for the pager. */
-  sessions: (q: string, limit = 200, offset = 0) =>
-    get<{ sessions: SessionRow[]; total: number }>(
-      `/api/sessions?limit=${limit}&offset=${offset}${q ? `&q=${encodeURIComponent(q)}` : ""}`,
+  sessions: (q: string, limit = 200, offset = 0, scope: SearchScope = "both") =>
+    get<{ sessions: SessionRow[]; total: number; hits: Record<string, SearchHit> }>(
+      `/api/sessions?limit=${limit}&offset=${offset}&scope=${scope}${q ? `&q=${encodeURIComponent(q)}` : ""}`,
     ),
   session: (id: string) => get<SessionDetail>(`/api/sessions/${encodeURIComponent(id)}`),
+  /**
+   * Hand a pasted file to the daemon and get back the path it now lives at.
+   *
+   * The browser cannot tell us where the file came from — `File` is a name and some
+   * bytes — so the only way to produce a path a session can actually read is to
+   * store the bytes daemon-side and use that path instead.
+   */
+  stashFile: async (file: File): Promise<{ path: string; bytes: number }> => {
+    const res = await fetch(`/api/files/stash?name=${encodeURIComponent(file.name)}`, {
+      method: "POST",
+      body: file,
+    });
+    const body = (await res.json().catch(() => ({}))) as { path?: string; bytes?: number; error?: string };
+    if (body.error) throw new Error(body.error);
+    // A 200 with no path means the route did not match and the SPA's own index came
+    // back instead — i.e. the daemon predates this endpoint. Saying so beats
+    // reporting a status code that looks like success.
+    if (!body.path) throw new Error("this daemon is too old for file paste — restart it");
+    return { path: body.path, bytes: body.bytes ?? file.size };
+  },
+  /**
+   * Retitle by session id. Works whether or not the session is running here — the
+   * daemon routes a live one through its agent so the roster label moves too.
+   */
+  renameSession: (id: string, title: string) =>
+    post(`/api/sessions/${encodeURIComponent(id)}/rename`, { title }),
 };
 
 // ── formatting ────────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  agentApi,
   api,
   fmtTokens,
   type AgentSummary,
@@ -7,7 +8,9 @@ import {
   type Settings,
 } from "../api.ts";
 import { HBars } from "./Charts.tsx";
+import { Receipt } from "./Receipt.tsx";
 import { LiveConversation } from "./Conversation.tsx";
+import { EditableTitle } from "./EditableTitle.tsx";
 import { GitBadge } from "./GitPanel.tsx";
 import { MuteMenu } from "./MuteMenu.tsx";
 import { ScrollJump, useJumpToEnd, useScrollEdges } from "./scroll.tsx";
@@ -86,6 +89,14 @@ export function SessionDrawer({
   // A session started here has no indexed rows until its first flush, so the
   // agent's own state is what the header falls back to.
   const title = data?.session.title ?? agent?.title ?? "Untitled session";
+
+  // Live sessions rename through their agent, so the roster label moves too; the rest
+  // go at the index directly. See SessionPage.renameTo.
+  async function renameTo(next: string) {
+    if (agent) await agentApi.rename(agent.key, next);
+    else await api.renameSession(id, next);
+    setData((d) => (d ? { ...d, session: { ...d.session, title: next } } : d));
+  }
   const cwd = data?.session.cwd ?? agent?.cwd ?? null;
 
   return (
@@ -108,7 +119,7 @@ export function SessionDrawer({
           </button>
         </div>
 
-        <h3>{title}</h3>
+        <EditableTitle as="h3" value={title} onRename={renameTo} />
         <p className="drawer-sub">{cwd ?? id}</p>
         {/* Live from git rather than the indexed value, which is only as fresh as
             the last transcript flush. */}
@@ -167,6 +178,8 @@ export function SessionDrawer({
                     </tbody>
                   </table>
                 </div>
+
+                {data.receipt && <Receipt receipt={data.receipt} />}
 
                 {data.prLinks.length > 0 && (
                   <div className="panel">

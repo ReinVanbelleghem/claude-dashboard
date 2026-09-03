@@ -1,5 +1,32 @@
 import { useEffect, useState } from "react";
-import { api, fmtAgo, fmtTokens, shortPath, type SessionRow } from "../api.ts";
+import {
+  api,
+  fmtAgo,
+  fmtTokens,
+  shortPath,
+  type SearchHit,
+  type SearchScope,
+  type SessionRow,
+} from "../api.ts";
+
+/**
+ * SQLite marks the matched terms with ⟪ ⟫ rather than HTML, so the snippet can be
+ * rendered as text — no dangerouslySetInnerHTML on a string built from transcript
+ * content.
+ */
+function Snippet({ text }: { text: string }) {
+  return (
+    <span className="snip-text">
+      {text.split(/⟪|⟫/).map((part, i) =>
+        i % 2 === 1 ? (
+          <mark key={i}>{part}</mark>
+        ) : (
+          <span key={i}>{part}</span>
+        ),
+      )}
+    </span>
+  );
+}
 
 /**
  * Page sizes, smallest first. 20 is the default because history is read by
@@ -16,9 +43,15 @@ function readPerPage(): number {
   return PER_PAGE_OPTIONS.includes(saved) ? saved : DEFAULT_PER_PAGE;
 }
 
-export function HistoryView({ onOpen }: { onOpen: (id: string) => void }) {
+export function HistoryView({
+  onOpen,
+}: {
+  onOpen: (id: string, opts?: { full?: boolean }) => void;
+}) {
   const [q, setQ] = useState("");
+  const [scope, setScope] = useState<SearchScope>("both");
   const [rows, setRows] = useState<SessionRow[]>([]);
+  const [hits, setHits] = useState<Record<string, SearchHit>>({});
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   // Remembered, because a page size is a preference about how you read, not about
@@ -36,16 +69,18 @@ export function HistoryView({ onOpen }: { onOpen: (id: string) => void }) {
     setLoading(true);
     const t = setTimeout(() => {
       api
-        .sessions(q, perPage, page * perPage)
+        .sessions(q, perPage, page * perPage, scope)
         .then((r) => {
           if (cancelled) return;
           setRows(r.sessions);
           setTotal(r.total);
+          setHits(r.hits ?? {});
         })
         .catch(() => {
           if (cancelled) return;
           setRows([]);
           setTotal(0);
+          setHits({});
         })
         .finally(() => {
           if (!cancelled) setLoading(false);
@@ -55,7 +90,7 @@ export function HistoryView({ onOpen }: { onOpen: (id: string) => void }) {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [q, page, perPage]);
+  }, [q, page, perPage, scope]);
 
   const pageCount = Math.max(1, Math.ceil(total / perPage));
 
@@ -76,6 +111,10 @@ export function HistoryView({ onOpen }: { onOpen: (id: string) => void }) {
     setQ(next);
     setPage(0);
   };
+  const rescope = (next: SearchScope) => {
+    setScope(next);
+    setPage(0);
+  };
 
   const first = total === 0 ? 0 : page * perPage + 1;
   const last = page * perPage + rows.length;
@@ -84,15 +123,39 @@ export function HistoryView({ onOpen }: { onOpen: (id: string) => void }) {
     <div className="panel">
       <h2>Session history</h2>
       <p className="hint">
-        Full-text search over every prompt you have typed, across all projects. Click a row for the
-        transcript summary.
+        Full-text search across all projects — over the prompts you typed, the replies you got
+        back, or both. Click a row for the transcript summary.
       </p>
-      <input
-        className="search"
-        placeholder="Search your prompts — e.g. redis queue, trimble syncer, pallet network…"
-        value={q}
-        onChange={(e) => search(e.target.value)}
-      />
+      <div className="search-row">
+        <input
+          className="search"
+          placeholder="Search — e.g. redis queue, trimble syncer, pallet network…"
+          aria-label="Search sessions"
+          value={q}
+          onChange={(e) => search(e.target.value)}
+        />
+        {/* Radio rather than checkboxes: the three states are exclusive, and "neither"
+            is not a search. */}
+        <div className="scope" role="radiogroup" aria-label="What to search">
+          {(
+            [
+              ["both", "Both"],
+              ["prompts", "My prompts"],
+              ["replies", "Replies"],
+            ] as [SearchScope, string][]
+          ).map(([s, label]) => (
+            <button
+              key={s}
+              role="radio"
+              aria-checked={scope === s}
+              className={`scope-btn ${scope === s ? "on" : ""}`}
+              onClick={() => rescope(s)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
       {loading && rows.length === 0 ? (
         <div className="empty">Searching…</div>
       ) : rows.length === 0 ? (
@@ -115,8 +178,36 @@ export function HistoryView({ onOpen }: { onOpen: (id: string) => void }) {
               </thead>
               <tbody>
                 {rows.map((s) => (
-                  <tr key={s.id} className="click" onClick={() => onOpen(s.id)}>
-                    <td style={{ maxWidth: 340 }}>{s.title ?? <em style={{ color: "var(--text-muted)" }}>untitled</em>}</td>
+                  <tr
+                    key={s.id}
+                    className="click"
+                    tabIndex={0}
+                    onClick={(e) => onOpen(s.id, { full: e.metaKey || e.ctrlKey })}
+                    onAuxClick={(e) => {
+                      if (e.button !== 1) return;
+                      e.preventDefault();
+                      onOpen(s.id, { full: true });
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.target !== e.currentTarget) return;
+                      if (e.key !== "Enter" && e.key !== " ") return;
+                      e.preventDefault();
+                      onOpen(s.id, { full: e.metaKey || e.ctrlKey });
+                    }}
+                  >
+                    <td style={{ maxWidth: 340 }}>
+                      {s.title ?? <em style={{ color: "var(--text-muted)" }}>untitled</em>}
+                      {/* Why this row is here. The title and the path rarely contain the
+                          words you typed, and a reply match is otherwise invisible. */}
+                      {hits[s.id] && (
+                        <div className={`snip ${hits[s.id].source}`}>
+                          <span className="snip-tag">
+                            {hits[s.id].source === "reply" ? "reply" : "you"}
+                          </span>
+                          <Snippet text={hits[s.id].snippet} />
+                        </div>
+                      )}
+                    </td>
                     <td title={s.cwd ?? ""} style={{ color: "var(--text-secondary)" }}>
                       {shortPath(s.cwd, 2)}
                     </td>

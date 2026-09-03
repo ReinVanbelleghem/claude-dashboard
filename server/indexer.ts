@@ -234,6 +234,7 @@ function applyLines(
         db.query(`DELETE FROM ${t} WHERE session_id = ?`).run(sessionId);
       }
       db.query("DELETE FROM prompts_fts WHERE session_id = ?").run(sessionId);
+      db.query("DELETE FROM replies_fts WHERE session_id = ?").run(sessionId);
     }
   }
 
@@ -268,6 +269,9 @@ function applyLines(
   const insertReply = db.query(
     `INSERT OR REPLACE INTO replies (uuid, session_id, ts, text, model, is_sidechain)
      VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  const insertReplyFts = db.query(
+    "INSERT INTO replies_fts (text, uuid, session_id, ts) VALUES (?, ?, ?, ?)",
   );
   const insertPr = db.query(
     `INSERT OR REPLACE INTO pr_links (session_id, pr_url, pr_number, repo, ts) VALUES (?, ?, ?, ?, ?)`,
@@ -369,6 +373,7 @@ function applyLines(
               msg.model ?? null,
               rec.isSidechain ? 1 : 0,
             );
+            insertReplyFts.run(reply, rec.uuid ?? "", sessionId, t ?? 0);
           }
           for (const b of usageOnly || !Array.isArray(msg.content) ? [] : msg.content) {
             if (b?.type === "tool_use" && b.name) {

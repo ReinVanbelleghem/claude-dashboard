@@ -15,6 +15,8 @@ import {
   type InboundImage,
   listRestorable,
   pruneImages,
+  renameAgent,
+  renamePastSession,
   restoreAgent,
   interruptAgent,
   listAgents,
@@ -87,6 +89,7 @@ import {
   type NotifySubject,
 } from "./notify.ts";
 import { PORT, PROJECTS_DIR, SCRATCH_DIR, SESSIONS_DIR, slugToPath } from "./paths.ts";
+import { MAX_DROP_BYTES, pruneDropped, storeDropped } from "./dropped.ts";
 import { needsInput, readRegistry } from "./registry.ts";
 import {
   getSettings,
@@ -103,7 +106,7 @@ const NOTIFY_KINDS: NotifyEventKind[] = [
   "turnComplete",
   "sessionError",
 ];
-import { usageSummary } from "./usage.ts";
+import { sessionReceipt, usageSummary } from "./usage.ts";
 
 const cfg = loadConfig();
 const settings = loadSettings();
@@ -161,6 +164,7 @@ function broadcast(event: string, data: unknown) {
 // No timeline can be pointing at a stored attachment yet, so this is the one
 // safe moment to expire them.
 pruneImages();
+pruneDropped();
 
 setNotifyEmitter(broadcast);
 // Every roster change already flows through here, which makes it the natural
@@ -489,7 +493,50 @@ const SESSION_COLS = `id, project_slug, cwd, git_branch, title, first_ts, last_t
  * neither disable "next" nor say how much is behind it. It counts the same
  * predicate the page does, so the two can never disagree.
  */
-function listSessions(limit: number, offset: number, q: string | null) {
+export type SearchScope = "prompts" | "replies" | "both";
+
+/**
+ * Where a session matched, and the text around the hit.
+ *
+ * A search over assistant prose is only useful if the result says why it matched:
+ * the table shows a title and a path, neither of which contains the words you
+ * typed. FTS5's own snippet() does the excerpting, so the marks come from SQLite
+ * rather than from us re-finding the terms in the text.
+ */
+export type SearchHit = { source: "prompt" | "reply"; snippet: string };
+
+/** Rows are capped per table: a common word can match most of the index. */
+const SEARCH_CAP = 600;
+
+function ftsHits(
+  table: "prompts_fts" | "replies_fts",
+  source: "prompt" | "reply",
+  terms: string,
+  into: Map<string, SearchHit>,
+): string[] {
+  const rows = db
+    .query<{ session_id: string; snip: string }, [string]>(
+      `SELECT session_id, snippet(${table}, 0, '⟪', '⟫', '…', 14) AS snip
+         FROM ${table} WHERE ${table} MATCH ? ORDER BY rank LIMIT ${SEARCH_CAP}`,
+    )
+    .all(terms);
+  const ids: string[] = [];
+  for (const r of rows) {
+    // ORDER BY rank means the first row for a session is its best hit, so a later
+    // weaker one must not overwrite it. Prompts are added first and win ties: what
+    // you asked is a better label for a session than what came back.
+    if (!into.has(r.session_id)) into.set(r.session_id, { source, snippet: r.snip });
+    if (!ids.includes(r.session_id)) ids.push(r.session_id);
+  }
+  return ids;
+}
+
+function listSessions(
+  limit: number,
+  offset: number,
+  q: string | null,
+  scope: SearchScope = "both",
+) {
   if (q && q.trim()) {
     // FTS5 needs a sanitized query — bare punctuation is a syntax error, so we
     // quote each term and let the caller's words act as an implicit AND.
@@ -498,13 +545,13 @@ function listSessions(limit: number, offset: number, q: string | null) {
       .split(/\s+/)
       .map((w) => `"${w.replace(/"/g, '""')}"`)
       .join(" ");
-    const ids = db
-      .query<{ session_id: string }, [string]>(
-        `SELECT DISTINCT session_id FROM prompts_fts WHERE prompts_fts MATCH ?`,
-      )
-      .all(terms)
-      .map((r) => r.session_id);
-    if (ids.length === 0) return { sessions: [], total: 0 };
+    const hits = new Map<string, SearchHit>();
+    const ids: string[] = [];
+    for (const id of scope === "replies" ? [] : ftsHits("prompts_fts", "prompt", terms, hits))
+      if (!ids.includes(id)) ids.push(id);
+    for (const id of scope === "prompts" ? [] : ftsHits("replies_fts", "reply", terms, hits))
+      if (!ids.includes(id)) ids.push(id);
+    if (ids.length === 0) return { sessions: [], total: 0, hits: {} };
     const holes = ids.map(() => "?").join(",");
     const sessions = db
       .query<SessionRow, string[]>(
@@ -521,7 +568,14 @@ function listSessions(limit: number, offset: number, q: string | null) {
       db
         .query<{ n: number }, string[]>(`SELECT COUNT(*) AS n FROM sessions WHERE id IN (${holes})`)
         .get(...ids)?.n ?? sessions.length;
-    return { sessions, total };
+    // Only the page's own hits: the map is keyed by id, and shipping every match
+    // for a one-word query would dwarf the rows it annotates.
+    const paged: Record<string, SearchHit> = {};
+    for (const row of sessions) {
+      const hit = hits.get(row.id);
+      if (hit) paged[row.id] = hit;
+    }
+    return { sessions, total, hits: paged };
   }
   const sessions = db
     .query<SessionRow, [number, number]>(
@@ -529,7 +583,18 @@ function listSessions(limit: number, offset: number, q: string | null) {
     )
     .all(limit, offset);
   const total = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM sessions`).get()?.n ?? 0;
-  return { sessions, total };
+  return { sessions, total, hits: {} };
+}
+
+/**
+ * Point the index at a new title. `title_custom` is what stops the next reindex from
+ * overwriting it with the model's generated summary — the same flag a title typed in
+ * the new-session dialog sets. The row may not exist yet for a session that has not
+ * flushed, in which case the transcript record is the durable copy and the row picks
+ * it up on its first index.
+ */
+function setSessionTitle(id: string, title: string) {
+  db.query("UPDATE sessions SET title = ?, title_custom = 1 WHERE id = ?").run(title, id);
 }
 
 function sessionDetail(id: string) {
@@ -568,6 +633,9 @@ function sessionDetail(id: string) {
         "SELECT pr_url, pr_number, repo FROM pr_links WHERE session_id = ?",
       )
       .all(id),
+    // Null for a session with no priced events yet, which the UI reads as "nothing
+    // to bill" rather than as zero.
+    receipt: sessionReceipt(db, cfg, id),
   };
 }
 
@@ -762,6 +830,12 @@ const server = Bun.serve({
             const r = await setAgentMode(id, body.permissionMode as never);
             return json(r, r.ok ? 200 : 400);
           }
+          case "rename": {
+            const title = String(body.title ?? "").trim();
+            const r = await renameAgent(id, title);
+            if (r.ok && r.sessionId) setSessionTitle(r.sessionId, title);
+            return json(r, r.ok ? 200 : 400);
+          }
         }
       }
       return json({ error: "not found" }, 404);
@@ -779,6 +853,30 @@ const server = Bun.serve({
       return new Response(file, {
         headers: { "cache-control": "public, max-age=31536000, immutable" },
       });
+    }
+
+    /**
+     * Park a pasted or dropped file next to the daemon and answer with its path.
+     *
+     * Raw body rather than base64 JSON: these are spreadsheets and logs, not
+     * thumbnails, and base64 would inflate a 20MB file by a third on the way in for
+     * no benefit. The name rides on the query string because that is all a browser
+     * knows about a clipboard file besides its bytes.
+     */
+    if (p === "/api/files/stash" && req.method === "POST") {
+      const name = url.searchParams.get("name") ?? "pasted-file";
+      const buf = new Uint8Array(await req.arrayBuffer());
+      if (buf.byteLength === 0) return json({ error: "empty file" }, 400);
+      if (buf.byteLength > MAX_DROP_BYTES)
+        return json(
+          { error: `file is larger than ${Math.round(MAX_DROP_BYTES / 1024 / 1024)}MB` },
+          413,
+        );
+      try {
+        return json({ path: storeDropped(name, buf), bytes: buf.byteLength });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 500);
+      }
     }
 
     if (p === "/api/health") return json({ ok: true, projectsDir: PROJECTS_DIR });
@@ -1285,12 +1383,35 @@ const server = Bun.serve({
       const limit = Math.min(500, Math.max(1, Math.floor(Number(url.searchParams.get("limit")) || 100)));
       const offset = Math.max(0, Math.floor(Number(url.searchParams.get("offset")) || 0));
       const q = url.searchParams.get("q");
-      const { sessions, total } = listSessions(limit, offset, q);
-      return json({ sessions, total, limit, offset });
+      // Anything unrecognised searches both, which is also the default: a bad scope
+      // should widen the search, never silently narrow it.
+      const raw = url.searchParams.get("scope");
+      const scope: SearchScope = raw === "prompts" || raw === "replies" ? raw : "both";
+      const { sessions, total, hits } = listSessions(limit, offset, q, scope);
+      return json({ sessions, total, limit, offset, scope, hits });
     }
 
     if (p.startsWith("/api/sessions/")) {
-      const detail = sessionDetail(decodeURIComponent(p.slice("/api/sessions/".length)));
+      const [rawId, action] = p.slice("/api/sessions/".length).split("/");
+      const id = decodeURIComponent(rawId ?? "");
+
+      // Retitling a session the dashboard is not currently running: the index row and
+      // the transcript record move, and the live path is delegated to so a session
+      // that happens to be running here does not end up with a stale in-memory label.
+      if (action === "rename" && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as { title?: string };
+        const title = String(body.title ?? "").trim();
+        if (!title) return json({ error: "title is required" }, 400);
+        const running = listAgents().find((a) => a.sessionId === id);
+        const r = running
+          ? await renameAgent(running.key, title)
+          : await renamePastSession(id, title, sessionDetail(id)?.session.cwd ?? undefined);
+        if (!r.ok) return json(r, r.error === "unknown session" ? 404 : 400);
+        setSessionTitle(id, title);
+        return json({ ok: true, title });
+      }
+
+      const detail = sessionDetail(id);
       return detail ? json(detail) : json({ error: "not found" }, 404);
     }
 

@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { api, fmtResets, fmtTokens, fmtUsd, type Overview, type UsagePayload } from "../api.ts";
+import {
+  api,
+  fmtResets,
+  fmtTokens,
+  fmtUsd,
+  shortPath,
+  type Overview,
+  type UsagePayload,
+} from "../api.ts";
 import { HBars, Sparkline } from "./Charts.tsx";
 
 /**
@@ -39,7 +47,13 @@ function projectRows(overview: Overview) {
   return rows.sort((a, b) => b.value - a.value);
 }
 
-export function UsageView({ usage }: { usage: UsagePayload | null }) {
+export function UsageView({
+  usage,
+  onOpen,
+}: {
+  usage: UsagePayload | null;
+  onOpen: (id: string, opts?: { full?: boolean }) => void;
+}) {
   const [overview, setOverview] = useState<Overview | null>(null);
 
   useEffect(() => {
@@ -152,6 +166,41 @@ export function UsageView({ usage }: { usage: UsagePayload | null }) {
           <HBars rows={mix} />
         </div>
       </div>
+
+      {usage.topSessions.length > 0 && (
+        <div className="panel">
+          <h2>Priciest sessions, last 7 days</h2>
+          <p className="hint">
+            The gauges above say the week went badly; this says which session did it. A runaway
+            loop shows up here as one row with an implausible request count.
+          </p>
+          <div className="top-sessions">
+            {usage.topSessions.map((t) => (
+              <button
+                key={t.id}
+                className="top-session"
+                onClick={(e) => onOpen(t.id, { full: e.metaKey || e.ctrlKey })}
+                title={t.cwd ?? undefined}
+              >
+                <span className="top-session-usd">{fmtUsd(t.costUsd)}</span>
+                <span className="top-session-bar">
+                  <i
+                    style={{
+                      width: `${(t.costUsd / usage.topSessions[0].costUsd) * 100}%`,
+                    }}
+                  />
+                </span>
+                <span className="top-session-name">
+                  {t.title ?? <em>untitled</em>}
+                  {t.cwd && <small>{shortPath(t.cwd, 2)}</small>}
+                </span>
+                <span className="top-session-req">{t.requests}×</span>
+                <span className="top-session-tok">{fmtTokens(t.fresh)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="panel">
         <h2>Daily fresh tokens, last 30 days</h2>

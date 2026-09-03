@@ -1,8 +1,10 @@
 import {
   agentApi,
+  api,
   fmtAgo,
   fmtDuration,
   shortPath,
+  stalledReason,
   type AgentSummary,
   type LivePayload,
   type LiveSession,
@@ -10,10 +12,12 @@ import {
   type SessionRow,
   type Settings,
 } from "../api.ts";
+import { EditableTitle } from "./EditableTitle.tsx";
 import { GitBadge } from "./GitPanel.tsx";
 import { MODE_LABEL } from "./Conversation.tsx";
 import { FolderIcon, PlusIcon } from "./Icons.tsx";
 import { MuteMenu } from "./MuteMenu.tsx";
+import { openable, type OpenOpts } from "./openable.ts";
 
 /** Always opens the full page, whatever the click preference is set to. */
 function PageLink({ id }: { id: string }) {
@@ -63,8 +67,8 @@ export function LiveView({
   agents: AgentSummary[];
   restorable: Restorable[];
   titles: Map<string, SessionRow>;
-  onOpen: (id: string) => void;
-  onOpenAgent: (a: AgentSummary) => void;
+  onOpen: (id: string, opts?: OpenOpts) => void;
+  onOpenAgent: (a: AgentSummary, opts?: OpenOpts) => void;
   onNew: () => void;
   onManageFolders: () => void;
   settings: Settings | null;
@@ -77,12 +81,16 @@ export function LiveView({
     .filter((a) => a.status !== "ended" && a.status !== "error")
     .sort((a, b) => a.createdAt - b.createdAt);
   const closed = agents.filter((a) => a.status === "ended" || a.status === "error");
+  const stalledCount = open.filter((a) => stalledReason(a) !== null).length;
 
   return (
     <>
       <div className="panel">
         <div className="panel-head">
-          <h2>Your sessions ({open.length})</h2>
+          <h2>
+            Your sessions ({open.length})
+            {stalledCount > 0 && <span className="h2-note"> · {stalledCount} stalled</span>}
+          </h2>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="icon-btn" onClick={onManageFolders} title="Manage working directories">
               <FolderIcon /> Folders
@@ -152,7 +160,13 @@ export function LiveView({
             {restorable.map((r) => (
               <div key={r.sessionId} className="card dead">
                 <div className="card-head">
-                  <span className="card-name">{r.title ?? shortPath(r.cwd, 1)}</span>
+                  <EditableTitle
+                    className="card-name"
+                    openOn="doubleClick"
+                    value={r.title}
+                    placeholder={shortPath(r.cwd, 1)}
+                    onRename={(t) => api.renameSession(r.sessionId, t)}
+                  />
                   <span className="spacer" style={{ flex: 1 }} />
                   <PageLink id={r.sessionId} />
                 </div>
@@ -218,7 +232,7 @@ function AgentCards({
   onSettings,
 }: {
   agents: AgentSummary[];
-  onOpen: (a: AgentSummary) => void;
+  onOpen: (a: AgentSummary, opts?: OpenOpts) => void;
   settings: Settings | null;
   onSettings: (s: Settings) => void;
 }) {
@@ -226,18 +240,34 @@ function AgentCards({
     <div className="cards">
       {agents.map((a) => {
         const ended = a.status === "ended" || a.status === "error";
+        const stalled = stalledReason(a);
         const cls =
           a.status === "awaiting-permission"
             ? "attention"
             : a.status === "thinking" || a.status === "starting"
               ? "busy"
               : a.status === "idle"
-                ? "idle"
+                ? stalled
+                  ? "stalled"
+                  : "idle"
                 : "dead";
         return (
-          <div key={a.key} className={`card ${cls}`} onClick={() => onOpen(a)} style={{ cursor: "pointer" }}>
+          <div
+            key={a.key}
+            className={`card ${cls}`}
+            style={{ cursor: "pointer" }}
+            aria-label={`Open ${a.title ?? shortPath(a.cwd, 1)}`}
+            {...openable((opts) => onOpen(a, opts))}
+          >
             <div className="card-head">
-              <span className="card-name">{a.title ?? shortPath(a.cwd, 1)}</span>
+              {/* Double-click, not click: the whole card opens the session. */}
+              <EditableTitle
+                className="card-name"
+                openOn="doubleClick"
+                value={a.title}
+                placeholder={shortPath(a.cwd, 1)}
+                onRename={(t) => agentApi.rename(a.key, t)}
+              />
               <span className="spacer" style={{ flex: 1 }} />
               {/* Icon only here: the card head is already carrying a title, a link
                   and a status, and the word "Notify" on every card would read as an
@@ -250,9 +280,9 @@ function AgentCards({
                 compact
               />
               <PageLink id={a.sessionId ?? a.key} />
-              <span className={`pill ${cls}`}>
+              <span className={`pill ${cls}`} title={stalled ?? undefined}>
                 <i className="dot" />
-                {a.status === "awaiting-permission" ? "needs you" : a.status}
+                {a.status === "awaiting-permission" ? "needs you" : stalled ? "stalled" : a.status}
               </span>
             </div>
             <div className="card-body">
@@ -282,6 +312,9 @@ function AgentCards({
             {/* Outside the collapsible row on purpose: why a session died is the one
                 thing that must not disappear because the card got narrow. */}
             {a.error && <div className="card-why card-error">{a.error}</div>}
+            {/* Why it is stalled rather than finished. Outside the collapsible row for
+                the same reason an error is: it must not vanish when the card narrows. */}
+            {!a.error && stalled && <div className="card-why card-stalled">{stalled}</div>}
             {/* An ended session is only a transcript; resuming starts a fresh
                 process on the same conversation. */}
             {ended && a.sessionId && (
@@ -319,7 +352,7 @@ function Cards({
 }: {
   sessions: LiveSession[];
   titles: Map<string, SessionRow>;
-  onOpen: (id: string) => void;
+  onOpen: (id: string, opts?: OpenOpts) => void;
 }) {
   return (
     <div className="cards">
@@ -330,8 +363,9 @@ function Cards({
           <div
             key={s.pid}
             className={`card ${cls}`}
-            onClick={() => onOpen(s.sessionId)}
             style={{ cursor: "pointer" }}
+            aria-label={`Open ${s.name ?? s.sessionId.slice(0, 8)}`}
+            {...openable((opts) => onOpen(s.sessionId, opts))}
           >
             <div className="card-head">
               <span className="card-name">{s.name ?? s.sessionId.slice(0, 8)}</span>

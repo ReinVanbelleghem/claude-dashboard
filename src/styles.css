@@ -325,13 +325,55 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border-left: 3px solid var(--text-muted);
   border-radius: var(--radius);
   padding: 13px 15px;
+  position: relative;
 }
-.card.busy { border-left-color: var(--accent); }
-.card.attention { border-left-color: var(--warning); background: color-mix(in oklab, var(--warning) 7%, var(--surface-1)); }
+/* A working session has to be legible from across the room: the tint and the
+   accent border say "something is happening here", the glow breathes so it reads
+   as motion in a peripheral glance, and the pill still carries the word. The rail
+   is the card's own border-left rather than an overlay — an overlay strip cannot
+   follow the corner radius, so it read as a detached floating bar. */
+.card.busy {
+  border-color: color-mix(in oklab, var(--accent) 32%, var(--border));
+  border-left-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 8%, var(--surface-1));
+  animation: busy-glow 2.6s ease-in-out infinite;
+}
+@keyframes busy-glow {
+  0%, 100% { box-shadow: 0 0 10px -3px color-mix(in oklab, var(--accent) 22%, transparent); }
+  50% { box-shadow: 0 0 18px -1px color-mix(in oklab, var(--accent) 42%, transparent); }
+}
+.card.attention {
+  border-color: color-mix(in oklab, var(--warning) 30%, var(--border));
+  border-left-color: var(--warning);
+  background: color-mix(in oklab, var(--warning) 7%, var(--surface-1));
+}
 .card.dead { border-left-color: var(--critical); opacity: 0.72; }
 
 .card-head { display: flex; align-items: center; gap: 8px; }
 .card-name { font: 600 14px/1.2 var(--mono); }
+
+/* Rename in place. A session title is read a hundred times for every time it is
+   corrected, so the affordance stays out of the way until the pointer is on it —
+   and the input keeps the typography of whatever it replaced, an h1 or a card name,
+   so the row does not resize mid-edit. */
+.title-editable { cursor: text; border-radius: 6px; }
+.title-editable:hover {
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-muted) 16%, transparent);
+}
+.title-edit {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid var(--accent);
+  border-radius: 0;
+  background: none;
+  font: inherit;
+  color: var(--text-primary);
+}
+.title-edit:focus { outline: none; }
+.title-error { color: var(--critical); font-size: 11px; font-weight: 500; }
 .card-body { margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
 .card-title { color: var(--text-primary); font-size: 13px; margin-bottom: 4px; }
 .card-meta {
@@ -358,13 +400,42 @@ button { font: inherit; color: inherit; cursor: pointer; }
   text-transform: lowercase;
 }
 .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
-.pill.busy .dot, .pill.running .dot, .pill.thinking .dot { background: var(--accent); }
 .pill.attention .dot { background: var(--warning); }
 .pill.dead .dot { background: var(--critical); }
-.pill.busy .dot, .pill.running .dot, .pill.thinking .dot, .pill.attention .dot {
-  animation: pulse 1.6s ease-in-out infinite;
-}
+.pill.attention .dot { animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.35; } }
+
+/* Busy is the one state you scan for, so it gets a filled pill and a spinner
+   instead of a dot that fades: a fading dot reads as "going quiet", a turning
+   ring reads as "working". */
+.pill.busy, .pill.running, .pill.thinking {
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+  background: color-mix(in oklab, var(--accent) 16%, var(--surface-2));
+  color: color-mix(in oklab, var(--accent) 70%, var(--text-primary));
+}
+.pill.busy .dot, .pill.running .dot, .pill.thinking .dot {
+  width: 9px;
+  height: 9px;
+  background: none;
+  border: 2px solid color-mix(in oklab, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
+  animation: spinner 0.8s linear infinite;
+}
+@keyframes spinner { to { transform: rotate(1turn); } }
+
+/* Needs-you keeps the louder colour and stays a filled pill for the same reason. */
+.pill.attention {
+  border-color: color-mix(in oklab, var(--warning) 50%, var(--border));
+  background: color-mix(in oklab, var(--warning) 18%, var(--surface-2));
+  color: color-mix(in oklab, var(--warning) 45%, var(--text-primary));
+}
+
+/* The pill's word and the card tint already carry the state; motion is the bonus. */
+@media (prefers-reduced-motion: reduce) {
+  .card.busy { animation: none; box-shadow: 0 0 12px -2px color-mix(in oklab, var(--accent) 30%, transparent); }
+  .pill.busy .dot, .pill.running .dot, .pill.thinking .dot { animation: none; }
+  .pill.attention .dot { animation: none; }
+}
 
 /* ── panels & tables ──────────────────────────────────────────────────────── */
 .panel {
@@ -832,18 +903,99 @@ tr.click:hover td { background: var(--surface-2); }
   padding-top: 12px;
   border-top: 1px solid var(--border);
 }
-.composer-box {
+/* The field holds two stacked boxes: the highlight mirror and the textarea over
+   it. It carries the frame and the background, so the textarea can be transparent
+   and let the token pills through. */
+.composer-field {
+  position: relative;
   flex: 1;
-  padding: 9px 12px;
+  display: flex;
   border-radius: 9px;
   border: 1px solid var(--border);
   background: var(--surface-0);
-  color: var(--text-primary);
+}
+.composer-field:focus-within { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+
+/* Every property that affects where a glyph lands has to be identical in both, or
+   the pills drift off the words they are marking. */
+.composer-box,
+.composer-mirror {
+  /* The right inset is the gutter the controls sit in — wide enough to clear them
+     with a few pixels to spare, or a long line runs underneath the Send button. It
+     has to be identical in both layers, like every other metric here. */
+  padding: 9px 94px 9px 12px;
+  border: 0;
   font: inherit;
   font-size: 13px;
-  resize: vertical;
+  line-height: 1.5;
+  letter-spacing: normal;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  tab-size: 4;
 }
-.composer-box:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+/* Inverted from the obvious arrangement: the mirror below draws the visible text
+   and the textarea above is transparent, because a token can only be *coloured* by
+   whichever layer actually paints the glyphs. The textarea still owns the caret,
+   the selection and the scrolling — it is only its ink that moves down a layer. */
+.composer-box {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text-primary);
+  /* The box grows with its content now, so a drag handle would only fight it. */
+  resize: none;
+  overflow-y: auto;
+  min-height: 38px;
+  position: relative;
+  z-index: 1;
+}
+.composer-box:focus { outline: none; }
+/* The placeholder takes its own colour, so transparent text does not hide it. */
+.composer-box::placeholder { color: var(--text-muted); }
+/* Translucent, so the highlighted text underneath reads through a selection
+   instead of being covered by a solid block. */
+.composer-box::selection { background: color-mix(in oklab, var(--accent) 30%, transparent); }
+.composer-mirror {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* `<mark>` comes with a yellow fill from the UA stylesheet, which the old pill
+   design happened to cover. Colour and weight are the whole treatment now, so the
+   fill has to be turned off explicitly. */
+.tok {
+  background: none;
+  color: inherit;
+}
+
+/* Colour and weight, no fill. `-webkit-text-stroke` rather than font-weight: bold
+   thickens the glyphs without changing their advance widths, so the caret — which is
+   positioned by the textarea's own (unbolded) layout — stays exactly under the
+   character it belongs to. A real bold would drift it a pixel per character. */
+.tok-cmd {
+  color: var(--accent);
+  -webkit-text-stroke: 0.4px currentColor;
+}
+.tok-path {
+  color: color-mix(in oklab, var(--accent) 82%, var(--text-primary));
+  -webkit-text-stroke: 0.35px currentColor;
+}
+.tok-img {
+  color: color-mix(in oklab, var(--accent) 82%, var(--text-primary));
+  -webkit-text-stroke: 0.35px currentColor;
+}
+/* A collapsed paste stands for text that is not on screen, so it reads as a label
+   rather than as words you wrote. */
+.tok-paste {
+  color: var(--good);
+  -webkit-text-stroke: 0.3px currentColor;
+}
 .field { display: block; margin-bottom: 12px; }
 .field > span { display: block; margin-bottom: 5px; font-size: 12px; color: var(--text-muted); }
 .field .search { margin-bottom: 0; }
@@ -2243,8 +2395,8 @@ a { color: var(--accent); }
   align-items: center;
   gap: 8px;
   padding: 5px 8px 5px 5px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--accent) 10%, var(--surface-2));
+  border: 1px solid color-mix(in oklab, var(--accent) 32%, var(--border));
   border-radius: 9px;
   font: 500 11px/1.4 var(--mono);
   color: var(--text-secondary);
@@ -2256,7 +2408,7 @@ a { color: var(--accent); }
   border-radius: 5px;
   background: var(--surface-0);
 }
-.attach-label { color: var(--text-primary); }
+.attach-label { color: color-mix(in oklab, var(--accent) 82%, var(--text-primary)); }
 .attach-size { color: var(--text-muted); }
 .attach-x {
   border: 0;
@@ -2342,19 +2494,42 @@ a { color: var(--accent); }
   z-index: 32;
   overflow: hidden;
 }
-.palette-input {
-  border: 0;
+.palette-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--border);
+}
+.palette-search { font-size: 15px; color: var(--text-muted); }
+.palette-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
   background: transparent;
-  padding: 16px 18px;
+  padding: 16px 0;
   font-size: 15px;
   color: var(--text-primary);
   outline: none;
 }
 .palette-input::placeholder { color: var(--text-muted); }
+.palette-clear {
+  border: 0;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  font-size: 13px;
+}
+.palette-clear:hover { color: var(--text-primary); }
 
 .palette-list { overflow-y: auto; padding: 6px; }
 .palette-group {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   padding: 10px 10px 4px;
   font-size: 10px;
   font-weight: 600;
@@ -2362,9 +2537,16 @@ a { color: var(--accent); }
   text-transform: uppercase;
   color: var(--text-muted);
 }
+.palette-count {
+  padding: 0 5px;
+  border-radius: 20px;
+  background: var(--surface-2);
+  font: 500 10px/15px var(--mono);
+  letter-spacing: 0;
+}
 .palette-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   width: 100%;
   padding: 8px 10px;
@@ -2374,7 +2556,27 @@ a { color: var(--accent); }
   text-align: left;
 }
 .palette-row.on { background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); }
-.palette-label { font-size: 13px; color: var(--text-primary); }
+
+/* A glyph per row rather than only a heading: the heading scrolls away, and with
+   ranking a "Live" hit and a transcript hit can be one row apart. */
+.palette-icon {
+  flex: 0 0 18px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.palette-icon.busy { color: var(--accent); }
+.palette-icon.attention { color: var(--warning); }
+.palette-icon.dead { color: var(--critical); }
+.palette-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text-primary);
+}
 .palette-hint {
   flex: 1;
   min-width: 0;
@@ -2383,15 +2585,54 @@ a { color: var(--accent); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: right;
+}
+/* Right-aligned status/age column, so the eye can run down it. */
+.palette-meta {
+  flex: 0 0 auto;
+  font: 500 10px/16px var(--mono);
+  color: var(--text-secondary);
+  padding: 0 6px;
+  border-radius: 20px;
+  background: var(--surface-2);
+}
+.palette-meta.busy {
+  color: color-mix(in oklab, var(--accent) 70%, var(--text-primary));
+  background: color-mix(in oklab, var(--accent) 16%, var(--surface-2));
+}
+.palette-meta.attention {
+  color: color-mix(in oklab, var(--warning) 45%, var(--text-primary));
+  background: color-mix(in oklab, var(--warning) 18%, var(--surface-2));
+}
+/* Shown only on the highlighted row: it is the answer to "what does Enter do now". */
+.palette-enter {
+  flex: 0 0 auto;
+  font: 500 11px/1 var(--mono);
+  color: var(--text-muted);
+  opacity: 0;
+}
+.palette-row.on .palette-enter { opacity: 1; }
+.palette-more {
+  padding: 8px 12px 4px;
+  font: 500 11px/1.5 var(--mono);
+  color: var(--text-muted);
 }
 .palette-foot {
   display: flex;
+  align-items: center;
   gap: 14px;
   padding: 8px 14px;
   border-top: 1px solid var(--border);
-  font: 500 11px/1.5 var(--mono);
+  font-size: 11px;
   color: var(--text-muted);
+}
+.palette-foot kbd {
+  padding: 1px 5px;
+  margin-right: 3px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2);
+  font: 500 10px/15px var(--mono);
+  color: var(--text-secondary);
 }
 
 /* Palette cards paint themselves in the palette they offer, so the choice is
@@ -3483,3 +3724,245 @@ a { color: var(--accent); }
 .new-wt > .field-head { margin-bottom: 2px; font-size: 12px; color: var(--text-muted); }
 .new-wt .folder-grid { margin-bottom: 2px; }
 .new-wt .hint { margin: 0; }
+
+/* ── focus ────────────────────────────────────────────────────────────────── */
+/* One rule for every interactive surface that had only a :hover state. Tabbing
+   the dashboard was previously invisible everywhere except the brand mark and the
+   colour pickers. */
+.icon-btn:focus-visible,
+.link-btn:focus-visible,
+.tabs button:focus-visible,
+.card:focus-visible,
+.palette-row:focus-visible,
+.card-open:focus-visible,
+.row-open:focus-visible,
+.diff-act:focus-visible,
+.folder-card:focus-visible,
+tr.click:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* A card is the size of the ring, so it reads better inset than around. */
+.card:focus-visible, tr.click:focus-visible { outline-offset: -2px; }
+
+/* ── history search: scope + match snippets ───────────────────────────────── */
+.search-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.search-row .search { flex: 1; min-width: 220px; }
+.scope { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); }
+.scope-btn {
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 5px 10px;
+  font: 500 11px/1.4 var(--mono);
+  color: var(--text-secondary);
+}
+.scope-btn:hover { color: var(--text-primary); }
+.scope-btn.on { background: var(--surface-1); color: var(--text-primary); box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); }
+.scope-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The match, under the title it explains. Two lines maximum: this is a reason to
+   click the row, not the transcript. */
+.snip {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 3px;
+  font: 400 11px/1.5 var(--mono);
+  color: var(--text-muted);
+}
+.snip-tag {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 20px;
+  background: var(--surface-2);
+  font: 500 10px/17px var(--mono);
+}
+.snip.reply .snip-tag { color: color-mix(in oklab, var(--accent) 70%, var(--text-primary)); background: color-mix(in oklab, var(--accent) 14%, var(--surface-2)); }
+.snip-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.snip mark { background: color-mix(in oklab, var(--warning) 34%, transparent); color: var(--text-primary); border-radius: 3px; }
+
+/* ── stalled ──────────────────────────────────────────────────────────────── */
+/* Idle and finished is calm; idle and stopped is not. A dashed rail rather than
+   another colour fill: it reads as "incomplete" next to the solid rails, and it
+   does not compete with the amber of a session actually waiting on you. */
+.card.stalled {
+  border-color: color-mix(in oklab, var(--critical) 24%, var(--border));
+  border-left-style: dashed;
+  border-left-color: var(--critical);
+  background: color-mix(in oklab, var(--critical) 4%, var(--surface-1));
+}
+.pill.stalled {
+  border-color: color-mix(in oklab, var(--critical) 40%, var(--border));
+  background: color-mix(in oklab, var(--critical) 12%, var(--surface-2));
+  color: color-mix(in oklab, var(--critical) 55%, var(--text-primary));
+}
+.pill.stalled .dot { background: var(--critical); }
+.card-stalled { color: color-mix(in oklab, var(--critical) 45%, var(--text-secondary)); }
+.h2-note { font-weight: 500; color: var(--text-muted); }
+
+/* ── session receipt ──────────────────────────────────────────────────────── */
+.receipt { display: flex; align-items: baseline; gap: 22px; flex-wrap: wrap; }
+.receipt-total { display: flex; flex-direction: column; gap: 2px; }
+.receipt-usd { font: 600 30px/1 var(--mono); color: var(--text-primary); }
+.receipt-cap {
+  font: 500 10px/1 var(--mono);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.receipt-stats { display: flex; gap: 20px; flex-wrap: wrap; }
+.receipt-stat { display: flex; flex-direction: column; gap: 2px; }
+.receipt-stat-v { font: 600 15px/1.2 var(--mono); color: var(--text-primary); }
+.receipt-stat-l { font-size: 11px; color: var(--text-muted); }
+
+.receipt-models { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+.receipt-model {
+  display: grid;
+  grid-template-columns: minmax(70px, 100px) 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  font: 500 11px/1.6 var(--mono);
+  color: var(--text-secondary);
+}
+.receipt-model-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.receipt-model-bar { height: 6px; border-radius: 20px; background: var(--surface-2); overflow: hidden; }
+.receipt-model-bar > i { display: block; height: 100%; background: var(--accent); }
+.receipt-model-req { color: var(--text-muted); }
+.receipt-model-usd { color: var(--text-primary); min-width: 52px; text-align: right; }
+
+/* ── priciest sessions ────────────────────────────────────────────────────── */
+.top-sessions { display: flex; flex-direction: column; gap: 4px; }
+.top-session {
+  display: grid;
+  grid-template-columns: 62px 90px 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  font: 500 11px/1.5 var(--mono);
+  color: var(--text-muted);
+}
+.top-session:hover { background: var(--surface-2); }
+.top-session:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.top-session-usd { font-weight: 600; color: var(--text-primary); text-align: right; }
+.top-session-bar { height: 7px; border-radius: 20px; background: var(--surface-2); overflow: hidden; }
+.top-session-bar > i { display: block; height: 100%; background: var(--accent); }
+.top-session-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font: 500 12px/1.4 var(--sans, inherit);
+  color: var(--text-primary);
+}
+.top-session-name small { font: 500 10px/1.4 var(--mono); color: var(--text-muted); }
+.top-session-name, .top-session-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── answer-next bar ──────────────────────────────────────────────────────── */
+/* Sticky rather than in the header: it is the one thing that should follow you
+   down a long transcript, and the header already holds five other jobs. */
+.answer-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 9px 14px;
+  border: 1px solid color-mix(in oklab, var(--warning) 42%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--warning) 14%, var(--surface-1));
+  font-size: 12px;
+  color: var(--text-secondary);
+  backdrop-filter: blur(6px);
+}
+.answer-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warning);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.answer-count { font: 600 12px/1.4 var(--mono); color: var(--text-primary); }
+.answer-sep { color: var(--text-muted); }
+.answer-who { font: 500 12px/1.4 var(--mono); color: var(--text-primary); }
+.answer-since { color: var(--text-muted); font-weight: 400; }
+.answer-go { margin-left: auto; }
+.answer-go kbd {
+  margin-left: 5px;
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--accent-ink) 45%, transparent);
+  border-radius: 4px;
+  font: 500 10px/15px var(--mono);
+}
+.answer-ext { flex-basis: 100%; font-size: 11px; color: var(--text-muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-dot { animation: none; }
+}
+
+/* Inside the field, pinned to its bottom-right corner rather than stacked beside
+   it: as a separate column they were as tall as the composer and read as the main
+   event, when they are the smallest thing in it. */
+.composer-side {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+/* Ghost until hovered — the paperclip is an alternative to dragging a file in, not
+   something to aim at. */
+.composer-attach {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-muted);
+}
+.composer-attach:hover:not(:disabled) { background: var(--surface-2); color: var(--text-primary); }
+.composer-attach:disabled { opacity: 0.4; }
+.composer-send {
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 7px;
+  font: 600 11px/1 var(--mono);
+  white-space: nowrap;
+}
+
+/* Says what a highlighted token is. Positioned from the token's own rectangle, so
+   it follows a path that has wrapped onto the next line. */
+.composer-tip {
+  position: absolute;
+  z-index: 3;
+  transform: translate(-50%, -100%);
+  margin-top: -6px;
+  max-width: 320px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font: 500 11px/1.5 var(--mono);
+  /* Wraps rather than truncating: a command's description is the whole point of
+     hovering it, and "takes an issu…" answers nothing. */
+  white-space: normal;
+  pointer-events: none;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.28);
+}

@@ -20,14 +20,14 @@ import {
   applyAppearance,
   currentIconUrl,
   normalizeAppearance,
-  faviconFor,
   readStored,
   setAttention,
   setBusy,
   type Appearance,
 } from "./appearance.ts";
-import { useIconPhase } from "./useIconPhase.ts";
 import { SunMoonIcon } from "./components/Icons.tsx";
+import { BrandMark } from "./components/BrandMark.tsx";
+import { AnswerNext } from "./components/AnswerNext.tsx";
 import { Tile } from "./components/Charts.tsx";
 import { FindBar } from "./components/FindBar.tsx";
 import { HistoryView } from "./components/HistoryView.tsx";
@@ -233,7 +233,12 @@ export default function App() {
   const needsInput = live?.counts.needsInput ?? 0;
   // A parked permission request is the same kind of "you are the blocker" signal
   // as a terminal session waiting for input, so it shares the badge.
-  const awaiting = agents.filter((a) => a.status === "awaiting-permission").length;
+  // Oldest first: the session that has been blocked longest is the one costing you
+  // time, and it is the one "answer next" should hand you.
+  const blockedQueue = agents
+    .filter((a) => a.status === "awaiting-permission")
+    .sort((a, b) => a.updatedAt - b.updatedAt);
+  const awaiting = blockedQueue.length;
   const blocked = needsInput + awaiting;
   // The other half of the pair: blocked is "you are the blocker", thinking is
   // "Claude is". The icon animates for the second and badges for the first, so the
@@ -268,9 +273,14 @@ export default function App() {
   }, []);
   const closeDrawer = useCallback(() => setOpenId(null), []);
 
+  /**
+   * `full` overrides the preference: it is what a ⌘/Ctrl-click, a middle click or a
+   * ⌘-Enter asks for, and the point of asking is to bypass the drawer.
+   */
   const openSession = useCallback(
-    (id: string) => {
-      if (settings?.ui.openSessionsIn === "page") window.location.hash = `#/session/${encodeURIComponent(id)}`;
+    (id: string, opts?: { full?: boolean }) => {
+      if (opts?.full || settings?.ui.openSessionsIn === "page")
+        window.location.hash = `#/session/${encodeURIComponent(id)}`;
       else setOpenId(id);
     },
     [settings?.ui.openSessionsIn],
@@ -317,8 +327,6 @@ export default function App() {
     return () => setBusy(false);
   }, [thinking]);
 
-  const brandPhase = useIconPhase(thinking > 0 && appearance.motion);
-
   return (
     <div className="shell">
       <header className="topbar">
@@ -335,18 +343,7 @@ export default function App() {
               if (pageId) closePage();
             }}
           >
-            <span
-              className={`brand-mark ${blocked > 0 ? "waiting" : ""}`}
-              title={blocked > 0 ? `${blocked} session${blocked > 1 ? "s" : ""} waiting on you` : undefined}
-            >
-              <img
-                className="brand-icon"
-                src={faviconFor(appearance, blocked > 0, brandPhase)}
-                alt=""
-                width={22}
-                height={22}
-              />
-            </span>
+            <BrandMark appearance={appearance} blocked={blocked} thinking={thinking} />
             Claude Sessions
           </button>
           {/* Both kinds, because the header is the one place that should answer "is
@@ -389,6 +386,13 @@ export default function App() {
           <SunMoonIcon />
         </button>
       </header>
+
+      <AnswerNext
+        queue={blockedQueue}
+        external={needsInput}
+        openId={pageId ?? openId}
+        onOpen={openSession}
+      />
 
       {pageId && (
         <SessionPage
@@ -465,7 +469,7 @@ export default function App() {
           titles={titles}
           onOpen={openSession}
           // Before init lands there is no session id yet, so the key stands in.
-          onOpenAgent={(a) => openSession(a.sessionId ?? a.key)}
+          onOpenAgent={(a, opts) => openSession(a.sessionId ?? a.key, opts)}
           onNew={() => setShowNew(true)}
           onManageFolders={() => setShowFolders(true)}
           settings={settings}
@@ -484,7 +488,7 @@ export default function App() {
           }}
         />
       )}
-      {!pageId && tab === "usage" && <UsageView usage={usage} />}
+      {!pageId && tab === "usage" && <UsageView usage={usage} onOpen={openSession} />}
       {!pageId && tab === "settings" && (
         <SettingsView
           settings={settings}
@@ -511,6 +515,7 @@ export default function App() {
         <Palette
           agents={agents}
           projects={projects}
+          recent={recent}
           appearance={appearance}
           onClose={() => setShowPalette(false)}
           onOpenSession={openSession}
@@ -519,6 +524,17 @@ export default function App() {
             if (pageId) window.location.hash = "";
           }}
           onNewSession={() => setShowNew(true)}
+          onNewIn={(cwd) => {
+            setNewIn(cwd);
+            setShowNew(true);
+          }}
+          onManageFolders={() => setShowFolders(true)}
+          onFind={() => {
+            setShowFind(true);
+            requestAnimationFrame(() =>
+              document.querySelector<HTMLInputElement>(".find-input")?.select(),
+            );
+          }}
           onAppearance={changeAppearance}
         />
       )}

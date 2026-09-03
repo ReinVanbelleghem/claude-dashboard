@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  agentApi,
   api,
   fmtDuration,
   fmtTokens,
@@ -8,7 +9,9 @@ import {
   type Settings,
 } from "../api.ts";
 import { HBars } from "./Charts.tsx";
+import { Receipt } from "./Receipt.tsx";
 import { LiveConversation } from "./Conversation.tsx";
+import { EditableTitle } from "./EditableTitle.tsx";
 import { GitControls } from "./GitControls.tsx";
 import { GitBadge, GitPanel } from "./GitPanel.tsx";
 import { MuteMenu } from "./MuteMenu.tsx";
@@ -90,6 +93,18 @@ export function SessionPage({
    */
   const repo = useGitRepo(cwd ?? "");
 
+  /**
+   * A live session is renamed through its agent so the in-memory label the roster
+   * reads moves with the rest; only a session nobody is driving goes straight at the
+   * index. The route id is the agent key until a session id exists, which is why the
+   * agent is asked first rather than `id` being used for both.
+   */
+  async function renameTo(title: string) {
+    if (agent) await agentApi.rename(agent.key, title);
+    else await api.renameSession(id, title);
+    setData((d) => (d ? { ...d, session: { ...d.session, title } } : d));
+  }
+
   return (
     <div className="page">
       <div className="page-head">
@@ -97,7 +112,12 @@ export function SessionPage({
           ← Back
         </button>
         <div>
-          <h1>{s?.title ?? agent?.title ?? (error ? "Session" : "Loading…")}</h1>
+          <EditableTitle
+            as="h1"
+            value={s?.title ?? agent?.title ?? null}
+            placeholder={error ? "Session" : "Loading…"}
+            onRename={renameTo}
+          />
           <p className="page-sub">
             {s?.cwd ?? agent?.cwd ?? ""}
             {s?.model ? ` · ${s.model}` : ""}
@@ -240,6 +260,8 @@ export function SessionPage({
 
           {data && s && (
             <>
+              {data.receipt && <Receipt receipt={data.receipt} />}
+
               {data.prLinks.length > 0 && (
                 <div className="panel">
                   <h2>Pull requests</h2>

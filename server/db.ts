@@ -29,6 +29,18 @@ function migrate(db: Database) {
     .get();
   const needsBackfill = (hadReplies?.n ?? 0) === 0;
 
+  /**
+   * The reply index was added after replies themselves, so an existing database
+   * already holds every row it needs — the text is in `replies`. That makes this a
+   * copy rather than a re-index: no transcript is re-read, and the offsets stay put.
+   */
+  const hadRepliesFts = db
+    .query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'replies_fts'",
+    )
+    .get();
+  const needsRepliesFts = (hadRepliesFts?.n ?? 0) === 0;
+
   // Usage events used to be keyed on `uuid` alone. A single API request can emit
   // several transcript records (streaming continuations), all with distinct uuids
   // but one shared requestId, so every such call was counted once per record —
@@ -97,6 +109,13 @@ function migrate(db: Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_replies_session ON replies(session_id, ts);
 
+    -- Assistant prose, searchable. Standalone rather than external-content for the
+    -- same reason prompts_fts is: we own every write, so no triggers are needed to
+    -- keep it in step with the table it mirrors.
+    CREATE VIRTUAL TABLE IF NOT EXISTS replies_fts USING fts5(
+      text, uuid UNINDEXED, session_id UNINDEXED, ts UNINDEXED
+    );
+
     CREATE TABLE IF NOT EXISTS tools (
       session_id TEXT NOT NULL,
       name       TEXT NOT NULL,
@@ -138,6 +157,17 @@ function migrate(db: Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_events(ts DESC);
   `);
+
+  if (needsRepliesFts) {
+    const n = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM replies").get()?.n ?? 0;
+    if (n > 0) {
+      db.exec(
+        `INSERT INTO replies_fts (text, uuid, session_id, ts)
+         SELECT text, uuid, session_id, COALESCE(ts, 0) FROM replies WHERE text IS NOT NULL`,
+      );
+      console.log(`[claude-dashboard] indexed ${n} assistant replies for search`);
+    }
+  }
 
   // Added with dashboard-set titles: marks a title the user chose, so a later
   // auto-generated one cannot quietly replace it.

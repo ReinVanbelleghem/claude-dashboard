@@ -22,3 +22,14 @@ export function slugToPath(slug: string): string {
  * so nothing on disk invites the model into a codebase it was not asked about.
  */
 export const SCRATCH_DIR = join(DATA_DIR, "scratch");
+
+/**
+ * Files pasted or dropped into a composer.
+ *
+ * A browser never reveals a file's real path — `File` carries a name and bytes and
+ * nothing else — so a path can only be produced by storing the bytes ourselves. That
+ * is also the only version that works when the dashboard is open on a different
+ * machine from the daemon: the session reads the copy that lives next to it, not one
+ * that only ever existed on the laptop that did the pasting.
+ */
+export const DROPPED_DIR = join(DATA_DIR, "dropped");

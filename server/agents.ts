@@ -13,6 +13,7 @@ import { join, sep } from "node:path";
 import { DATA_DIR } from "./paths.ts";
 import {
   query,
+  renameSession,
   type ModelInfo,
   type Options,
   type PermissionMode,
@@ -142,6 +143,14 @@ type Agent = {
    */
   commands: { name: string; description: string; argumentHint?: string }[] | null;
   stderr: string[];
+  /**
+   * A title that has not reached the transcript yet. A session renamed before its
+   * first flush has no file to append to, and leaving it at that would lose the
+   * rename on the next reindex — the startup record carrying the old title would be
+   * the only one in the file. So the value is held here and retried until it lands.
+   */
+  pendingTitle?: string | null;
+  titleWriting?: boolean;
 };
 
 const agents = new Map<string, Agent>();
@@ -265,6 +274,7 @@ function emitRoster() {
 
 // ── public shape ──────────────────────────────────────────────────────────────
 export function agentSummary(a: Agent) {
+  const last = a.timeline[a.timeline.length - 1];
   return {
     key: a.key,
     sessionId: a.sessionId,
@@ -281,6 +291,18 @@ export function agentSummary(a: Agent) {
     endedReason: a.endedReason,
     turns: a.timeline.filter((i) => i.kind === "user").length,
     pending: a.timeline.filter((i) => i.kind === "permission" && i.decision === null).length,
+    /**
+     * How the timeline currently ends, which is what separates "idle because it
+     * finished" from "idle because it stopped". A status of `idle` alone cannot tell
+     * those apart, and they are not the same news: a turn whose last item is still
+     * the user's message never produced a reply at all.
+     */
+    lastKind: last?.kind ?? null,
+    /** Set only when the very last item failed, so an error it recovered from does not linger. */
+    lastError:
+      last?.kind === "error" ? last.text : last?.kind === "result" ? (last.error ?? null) : null,
+    /** Messages typed mid-turn that the CLI has not started yet. */
+    queued: a.timeline.filter((i) => i.kind === "user" && i.queued).length,
   };
 }
 
@@ -345,6 +367,7 @@ export function getAgent(key: string) {
 
 function touch(a: Agent, status?: AgentStatus) {
   a.updatedAt = Date.now();
+  if (a.pendingTitle) void flushTitle(a);
   // Ended is terminal. A turn already in flight when the session was stopped
   // still emits its result, which would otherwise flip the status back to idle.
   const settled = a.endedAt !== null;
@@ -581,6 +604,7 @@ export function startAgent(opts: StartOptions): string {
     models: null,
     commands: null,
     stderr: [],
+    pendingTitle: null,
     push: queue.push,
     close: queue.close,
     // Replaced immediately below; declared here to keep the type non-optional.
@@ -956,6 +980,81 @@ export async function setAgentMode(
   a.permissionMode = mode;
   touch(a);
   return { ok: true, mode };
+}
+
+/**
+ * Retitle a session.
+ *
+ * A title lives in three places and they drift apart if any one is skipped: the live
+ * agent in memory (what the roster card reads), the restore list on disk, and a
+ * `custom-title` record in the transcript (what the indexer reads, and the only copy
+ * that outlives this process). The database row is the caller's, since the handle to
+ * it belongs to the server.
+ *
+ * The transcript record is an append, exactly as the CLI's own `/rename` does it —
+ * the indexer takes the last one it sees, so a correction simply lands after the
+ * mistake rather than rewriting history.
+ */
+async function flushTitle(a: Agent): Promise<void> {
+  const title = a.pendingTitle;
+  if (!title || !a.sessionId || a.titleWriting) return;
+  a.titleWriting = true;
+  // Cleared up front rather than after the append: a touch() landing while the write
+  // is in flight would otherwise queue a second, identical record.
+  a.pendingTitle = null;
+  try {
+    await renameSession(a.sessionId, title, { dir: a.cwd });
+  } catch {
+    // Almost always a session that has not written its transcript yet. touch() runs
+    // on every timeline change, so the next one retries; saying so each time would
+    // fill the log with a condition that resolves itself.
+    a.pendingTitle ??= title;
+  } finally {
+    a.titleWriting = false;
+  }
+}
+
+export async function renameAgent(
+  key: string,
+  title: string,
+): Promise<{ ok: boolean; error?: string; sessionId?: string | null }> {
+  const a = agents.get(key);
+  if (!a) return { ok: false, error: "no such session" };
+  const clean = title.trim();
+  if (!clean) return { ok: false, error: "title is required" };
+  a.title = clean;
+  a.pendingTitle = clean;
+  await flushTitle(a);
+  // Saves the restore list and fans the new label out over SSE, so every open card
+  // and header follows without a refetch.
+  touch(a);
+  return { ok: true, sessionId: a.sessionId };
+}
+
+/** Retitle a session no longer running here: the restore list and the transcript. */
+export async function renamePastSession(
+  sessionId: string,
+  title: string,
+  cwd?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const clean = title.trim();
+  if (!clean) return { ok: false, error: "title is required" };
+  const row = restorable.find((r) => r.sessionId === sessionId);
+  if (row) {
+    row.title = clean;
+    saveRestorable();
+    emitRoster();
+  }
+  const dir = row?.cwd ?? cwd;
+  if (!dir) return { ok: false, error: "unknown session" };
+  try {
+    await renameSession(sessionId, clean, { dir });
+  } catch (err) {
+    // Nothing is running to retry this later, so an unwritable transcript is the
+    // caller's problem: the index would say one thing and a reindex another.
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  return { ok: true };
 }
 
 export async function stopAgent(key: string, reason = "ended from the dashboard"): Promise<boolean> {

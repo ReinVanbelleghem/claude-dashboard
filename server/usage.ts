@@ -140,6 +140,94 @@ function usedInWindow(db: Database, w: Window, now: number): Row[] {
     .all(w.start, Math.min(w.end, now));
 }
 
+/**
+ * What one session cost, and how much of its prompt it got for free.
+ *
+ * Spend is otherwise only ever aggregated — the Usage tab knows the week and the
+ * day, but never which session that was. A session's events span its own transcript
+ * plus one file per subagent, and they are all keyed by session_id here, so a
+ * session that spawned ten subagents reports what the whole tree cost.
+ */
+export function sessionReceipt(db: Database, cfg: Config, id: string) {
+  const rows = db
+    .query<Row, [string]>(`SELECT ${COLS} FROM usage_events WHERE session_id = ?`)
+    .all(id);
+  if (rows.length === 0) return null;
+  const totals = fold(rows, cfg);
+  const byModelRows = db
+    .query<Row & { model: string | null; n: number }, [string]>(
+      `SELECT model, COUNT(*) AS n, SUM(input_tokens) AS input_tokens,
+              SUM(output_tokens) AS output_tokens, SUM(cache_read) AS cache_read,
+              SUM(cache_write) AS cache_write, SUM(cache_write_5m) AS cache_write_5m,
+              SUM(cache_write_1h) AS cache_write_1h
+         FROM usage_events WHERE session_id = ? GROUP BY model`,
+    )
+    .all(id);
+  const span = db
+    .query<{ first: number | null; last: number | null }, [string]>(
+      "SELECT MIN(ts) AS first, MAX(ts) AS last FROM usage_events WHERE session_id = ?",
+    )
+    .get(id);
+  // Share of the prompt that came out of the cache. Reads are billed at a tenth of
+  // the input rate, so this is the single number that explains a long session
+  // costing less than its token count suggests.
+  const prompt = totals.input + totals.cacheRead + totals.cacheWrite;
+  return {
+    requests: rows.length,
+    ...totals,
+    cachedPct: prompt > 0 ? (totals.cacheRead / prompt) * 100 : 0,
+    firstTs: span?.first ?? null,
+    lastTs: span?.last ?? null,
+    byModel: byModelRows
+      .map((r) => ({ model: normalizeModel(r.model), requests: r.n, ...fold([r], cfg) }))
+      .sort((a, b) => b.costUsd - a.costUsd),
+  };
+}
+
+/**
+ * The priciest sessions in a window, which is how a runaway loop is found after the
+ * fact — the gauges show that the week went badly, not which session did it.
+ */
+function topSessions(db: Database, cfg: Config, since: number, limit = 8) {
+  const rows = db
+    .query<Row & { session_id: string; n: number }, [number]>(
+      `SELECT session_id, model, COUNT(*) AS n, SUM(input_tokens) AS input_tokens,
+              SUM(output_tokens) AS output_tokens, SUM(cache_read) AS cache_read,
+              SUM(cache_write) AS cache_write, SUM(cache_write_5m) AS cache_write_5m,
+              SUM(cache_write_1h) AS cache_write_1h
+         FROM usage_events WHERE ts >= ? GROUP BY session_id, model`,
+    )
+    .all(since);
+  const per = new Map<string, { costUsd: number; fresh: number; requests: number }>();
+  for (const r of rows) {
+    const b = fold([r], cfg);
+    const cur = per.get(r.session_id) ?? { costUsd: 0, fresh: 0, requests: 0 };
+    cur.costUsd += b.costUsd;
+    cur.fresh += b.fresh;
+    cur.requests += r.n;
+    per.set(r.session_id, cur);
+  }
+  const top = [...per.entries()]
+    .sort((a, b) => b[1].costUsd - a[1].costUsd)
+    .slice(0, limit);
+  if (top.length === 0) return [];
+  const holes = top.map(() => "?").join(",");
+  const meta = new Map(
+    db
+      .query<{ id: string; title: string | null; cwd: string | null }, string[]>(
+        `SELECT id, title, cwd FROM sessions WHERE id IN (${holes})`,
+      )
+      .all(...top.map(([id]) => id))
+      .map((r) => [r.id, r]),
+  );
+  return top.map(([id, v]) => ({
+    id,
+    title: meta.get(id)?.title ?? null,
+    cwd: meta.get(id)?.cwd ?? null,
+    ...v,
+  }));
+}
+
 export function usageSummary(db: Database, cfg: Config, now: number) {
   const hour = HOUR;
   const startOfToday = new Date(now);
@@ -209,6 +297,7 @@ export function usageSummary(db: Database, cfg: Config, now: number) {
     weekFable,
     allTime,
     byModel,
+    topSessions: topSessions(db, cfg, now - 7 * 24 * hour),
     hourly,
     daily,
     // Fractions of the configured budget. Anthropic does not publish the real
