@@ -114,6 +114,19 @@ export type Appearance = {
   faviconColor: IconColor;
   /** Let the icon animate while a session is working. Ignored under reduced motion. */
   motion: boolean;
+  /** Hover lift on cards/tiles, button press feedback, the streaming cursor blink,
+   *  chart draw-in. Ignored under reduced motion regardless of this setting. */
+  hoverFx: boolean;
+  /** Frosted blur behind the drawer/modal scrim. Off is plainer but cheaper to paint. */
+  glassFx: boolean;
+  /** Backdrop blur radius, in px, on the drawer/modal/palette panels themselves —
+   *  not just the scrim behind them. Only visible while glassFx is on. One value per
+   *  mode: a blur that reads as a light frost on a dark ground can look like fog on
+   *  a pale one, so the two columns are allowed to disagree like every other slider. */
+  glassBlur: { dark: number; light: number };
+  /** How much of the panel's surface colour shows through, 0–100, one value per
+   *  mode. Lower reads as more see-through; higher is closer to the old solid panel. */
+  glassOpacity: { dark: number; light: number };
 };
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -131,6 +144,10 @@ export const DEFAULT_APPEARANCE: Appearance = {
   favicon: "prompt",
   faviconColor: "clay",
   motion: true,
+  hoverFx: true,
+  glassFx: true,
+  glassBlur: { dark: 18, light: 18 },
+  glassOpacity: { dark: 70, light: 78 },
 };
 
 export const ACCENTS: { name: AccentName; label: string; dark: string; light: string }[] = [
@@ -1064,6 +1081,8 @@ export function normalizeAppearance(partial: Partial<Appearance> | null | undefi
     customAccent: { ...DEFAULT_APPEARANCE.customAccent, ...(p.customAccent ?? {}) },
     customIconColor: { ...DEFAULT_APPEARANCE.customIconColor, ...(p.customIconColor ?? {}) },
     customAccentInk: { ...DEFAULT_APPEARANCE.customAccentInk, ...(p.customAccentInk ?? {}) },
+    glassBlur: { ...DEFAULT_APPEARANCE.glassBlur, ...(p.glassBlur ?? {}) },
+    glassOpacity: { ...DEFAULT_APPEARANCE.glassOpacity, ...(p.glassOpacity ?? {}) },
   };
 }
 
@@ -1134,6 +1153,10 @@ export function readStored(): Appearance {
 export function applyAppearance(a: Appearance) {
   const root = document.documentElement;
   root.dataset.theme = a.theme;
+  root.dataset.hoverFx = a.hoverFx ? "on" : "off";
+  root.dataset.glassFx = a.glassFx ? "on" : "off";
+  root.style.setProperty("--glass-blur", `${a.glassBlur[a.theme]}px`);
+  root.style.setProperty("--glass-opacity", `${a.glassOpacity[a.theme]}%`);
   root.style.setProperty("--accent", accentColor(a));
   // What goes on top of the accent, not beside it. A user-chosen accent spans the
   // whole lightness range, so anything filled with --accent needs a measured label

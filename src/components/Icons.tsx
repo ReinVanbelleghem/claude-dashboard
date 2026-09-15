@@ -91,6 +91,21 @@ export function TrashIcon() {
   );
 }
 
+export function RefreshIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <path
+        d="M15.5 8.5a5.5 5.5 0 10-1.4 5.3M15.5 8.5V4.5M15.5 8.5h-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function PlusIcon() {
   return (
     <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
@@ -336,6 +351,23 @@ export function ClipIcon() {
     <svg viewBox="0 0 20 20" width="14" height="14" fill="none" aria-hidden="true">
       <path
         d="M12.5 5.5 6.9 11.1a2.2 2.2 0 0 0 3.1 3.1l5.6-5.6a4 4 0 0 0-5.7-5.7L4.3 8.5a5.8 5.8 0 0 0 8.2 8.2l3.1-3.1"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** A `!`-prefixed message hands off to the shell instead of the model. */
+export function TerminalIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <rect x="2.5" y="4" width="15" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M5.6 7.8 8.6 10l-3 2.2M10 12.3h4"
+        fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
         strokeLinecap="round"

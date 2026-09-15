@@ -107,6 +107,182 @@ function splitRow(line: string): Row {
 
 const isTableDivider = (line: string) => /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(line) && line.includes("-");
 
+// ── copy-as-markdown ─────────────────────────────────────────────────────────
+// A plain browser copy of rendered output yields flattened text: the `**`/`` ` ``/`#`
+// syntax never existed in the DOM, only its visual effect. Intercepting `copy` and
+// re-serializing the selected DOM subtree back into literal Markdown means a paste
+// into Slack/Notion/a markdown file gets the real syntax instead of stripped prose.
+
+// A fence has to be longer than the longest backtick run already inside the
+// content, or the delimiters and the content merge into one indistinguishable
+// run (CommonMark's rule for code spans/fences containing literal backticks).
+function backtickFence(content: string, minLen = 1): string {
+  const runs = content.match(/`+/g) ?? [];
+  const longest = runs.reduce((m, r) => Math.max(m, r.length), 0);
+  return "`".repeat(Math.max(minLen, longest + 1));
+}
+
+// Renders one node (text or element) by its own tag — as opposed to inlineToMd,
+// which renders a node's children. Both a top-level selected child (handled here
+// directly) and a nested child (reached via inlineToMd's loop) must resolve to
+// the same wrapping, so this is the single place that switches on tag name.
+function inlineNodeToMd(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+  const el = node as HTMLElement;
+  switch (el.tagName) {
+    case "BR":
+      return "\n";
+    case "STRONG":
+    case "B":
+      return `**${inlineToMd(el)}**`;
+    case "EM":
+    case "I":
+      return `*${inlineToMd(el)}*`;
+    case "S":
+    case "STRIKE":
+    case "DEL":
+      return `~~${inlineToMd(el)}~~`;
+    case "CODE": {
+      const content = el.textContent ?? "";
+      const fence = backtickFence(content);
+      const pad = content.startsWith("`") || content.endsWith("`") || content === "" ? " " : "";
+      return `${fence}${pad}${content}${pad}${fence}`;
+    }
+    case "A":
+      return `[${inlineToMd(el)}](${el.getAttribute("href") ?? ""})`;
+    default: {
+      const block = elementToBlockMd(el);
+      return block !== null ? `\n${block}\n` : inlineToMd(el);
+    }
+  }
+}
+
+function inlineToMd(node: Node): string {
+  let out = "";
+  for (const child of Array.from(node.childNodes)) out += inlineNodeToMd(child);
+  return out;
+}
+
+// Ordered-ness can't be recovered once a selection has clipped off the `<ol>`
+// wrapper and left only bare `<li>` siblings (see nodesToMarkdown) — those fall
+// back to `-` markers, a safe approximation rather than a perfect round-trip.
+function renderListItems(items: HTMLElement[], ordered: boolean): string {
+  return items
+    .map((li, idx) => {
+      const depthMatch = (li.className || "").match(/md-d(\d)/);
+      const depth = depthMatch ? Number(depthMatch[1]) : 0;
+      const indent = "  ".repeat(depth);
+      const marker = ordered ? `${idx + 1}.` : "-";
+      const text = inlineToMd(li).split("\n").join(`\n${indent}  `);
+      return `${indent}${marker} ${text}`;
+    })
+    .join("\n");
+}
+
+function elementToBlockMd(el: HTMLElement): string | null {
+  const tag = el.tagName;
+  const cls = el.className || "";
+
+  if (/^H[1-6]$/.test(tag)) {
+    const m = cls.match(/md-h(\d)/);
+    const level = m ? Math.max(1, Math.min(6, Number(m[1]))) : Number(tag[1]);
+    return `${"#".repeat(level)} ${inlineToMd(el)}`;
+  }
+  if (tag === "HR") return "---";
+  if (tag === "P") return inlineToMd(el);
+  if (tag === "BLOCKQUOTE") {
+    return nodesToMarkdown(el)
+      .split("\n")
+      .map((l) => (l ? `> ${l}` : ">"))
+      .join("\n");
+  }
+  if (tag === "UL" || tag === "OL") {
+    const items = Array.from(el.children).filter((c) => c.tagName === "LI") as HTMLElement[];
+    return renderListItems(items, tag === "OL");
+  }
+  if (cls.includes("md-code-wrap")) {
+    const source = el.querySelector("code")?.textContent ?? "";
+    const lang = el.querySelector(".md-lang")?.textContent ?? "";
+    const fence = backtickFence(source, 3);
+    return `${fence}${lang}\n${source}\n${fence}`;
+  }
+  if (cls.includes("md-table-wrap") || tag === "TABLE") {
+    const table = tag === "TABLE" ? el : el.querySelector("table");
+    const rows = table ? Array.from(table.querySelectorAll("tr")) : [];
+    if (rows.length === 0) return "";
+    const rowToCells = (row: Element) =>
+      Array.from(row.children).map((cell) => inlineToMd(cell as HTMLElement).trim() || " ");
+    const header = rowToCells(rows[0]);
+    const body = rows.slice(1).map(rowToCells);
+    const line = (cells: string[]) => `| ${cells.join(" | ")} |`;
+    return [line(header), line(header.map(() => "---")), ...body.map(line)].join("\n");
+  }
+  if (cls.split(/\s+/).includes("md")) return nodesToMarkdown(el);
+
+  return null;
+}
+
+function nodesToMarkdown(container: Node): string {
+  const parts: string[] = [];
+  let buffer = "";
+  const flush = () => {
+    if (buffer.trim()) parts.push(buffer);
+    buffer = "";
+  };
+  const children = Array.from(container.childNodes);
+  let i = 0;
+  while (i < children.length) {
+    const child = children[i];
+    if (child.nodeType === Node.TEXT_NODE) {
+      buffer += child.textContent ?? "";
+      i++;
+      continue;
+    }
+    const el = child as HTMLElement;
+    // A selection can clip off the `<ul>`/`<ol>` wrapper, leaving bare `<li>`
+    // siblings as direct children here — group them back into one list.
+    if (el.tagName === "LI") {
+      flush();
+      const items: HTMLElement[] = [];
+      while (i < children.length && (children[i] as HTMLElement).tagName === "LI") {
+        items.push(children[i] as HTMLElement);
+        i++;
+      }
+      parts.push(renderListItems(items, false));
+      continue;
+    }
+    const block = elementToBlockMd(el);
+    if (block !== null) {
+      flush();
+      if (block.trim()) parts.push(block);
+    } else {
+      buffer += inlineNodeToMd(el);
+    }
+    i++;
+  }
+  flush();
+  return parts.join("\n\n");
+}
+
+/**
+ * Attach to the outermost scroll/message container, not to each individual
+ * `.md` block — a selection often starts outside rendered markdown (e.g. in a
+ * turn's timestamp header) and the native `copy` event only bubbles through
+ * the DOM ancestors of wherever the selection actually lives. Serializing
+ * from a container above everything means the reconstruction always runs,
+ * regardless of where the selection starts or ends.
+ */
+export function handleMdCopy(e: React.ClipboardEvent<HTMLDivElement>) {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed || !e.clipboardData) return;
+  const container = document.createElement("div");
+  container.appendChild(selection.getRangeAt(0).cloneContents());
+  const md = nodesToMarkdown(container).trim();
+  if (!md) return;
+  e.preventDefault();
+  e.clipboardData.setData("text/plain", md);
+}
+
 export function Markdown({ text }: { text: string }) {
   const lines = text.split("\n");
   const blocks: ReactNode[] = [];

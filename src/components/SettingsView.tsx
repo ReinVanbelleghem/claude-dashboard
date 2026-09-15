@@ -3,6 +3,7 @@ import { settingsApi, type NotifyEventKind, type Settings, type SettingsPatch } 
 import type { Appearance } from "../appearance.ts";
 import { AppearancePanel } from "./AppearancePanel.tsx";
 import { CheckIcon } from "./Icons.tsx";
+import { McpPanel } from "./McpPanel.tsx";
 
 /**
  * Preferences, saved on change.
@@ -48,13 +49,14 @@ const EVENTS: { kind: NotifyEventKind; label: string; help: string }[] = [
  * scrolling: notifications alone is longer than a screen, and the three short
  * panels were disappearing under it.
  */
-type SectionKey = "appearance" | "notifications" | "sessions" | "git";
+type SectionKey = "appearance" | "notifications" | "sessions" | "git" | "mcp";
 
 const SECTIONS: { key: SectionKey; label: string; help: string }[] = [
   { key: "appearance", label: "Appearance", help: "Theme, accent, tab icon" },
   { key: "notifications", label: "Notifications", help: "What interrupts you" },
   { key: "sessions", label: "Sessions", help: "Where a card opens" },
   { key: "git", label: "Git", help: "Diffs and worktrees" },
+  { key: "mcp", label: "MCP", help: "Connectors and sign-in" },
 ];
 
 const SECTION_KEY = "settings-section";
@@ -131,7 +133,8 @@ export function SettingsView({
   );
 
   // Appearance renders either way: it is local state, so there is nothing to wait
-  // for, and it is the panel you are most likely here to play with.
+  // for, and it is the panel you are most likely here to play with. MCP is the same
+  // case for a different reason — it reads the machine, not the settings file.
   if (!settings) {
     return (
       <div className="settings-layout">
@@ -139,6 +142,8 @@ export function SettingsView({
         <div className="settings-body">
           {section === "appearance" ? (
             <AppearancePanel appearance={appearance} onChange={onAppearance} />
+          ) : section === "mcp" ? (
+            <McpPanel />
           ) : (
             <div className="empty">Loading settings…</div>
           )}
@@ -568,6 +573,8 @@ export function SettingsView({
             </p>
           </div>
         )}
+
+        {section === "mcp" && <McpPanel />}
       </div>
     </div>
   );

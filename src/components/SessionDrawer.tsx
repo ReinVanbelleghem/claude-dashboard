@@ -103,27 +103,35 @@ export function SessionDrawer({
     <>
       <div className="scrim" onClick={onClose} />
       <aside className={`drawer ${agent ? "drawer-live" : ""}`} ref={aside}>
-        <div className="drawer-actions">
-          <MuteMenu
-            id={agent?.sessionId ?? agent?.key ?? id}
-            label={title}
-            settings={settings}
-            onSettings={onSettings}
-          />
-          <span style={{ flex: 1 }} />
-          <a className="icon-btn" href={`#/session/${encodeURIComponent(id)}`}>
-            Open full page
-          </a>
-          <button className="icon-btn" onClick={onClose}>
-            Close
-          </button>
+        {/* Title and actions share one flex row instead of the title sitting in normal
+            flow with the actions absolutely positioned over it — that hack assumed a
+            fixed title height, so a longer name (wrapping or just wider) drifted out
+            of line with the buttons instead of staying level with them. */}
+        <div className="drawer-head">
+          <EditableTitle as="h3" value={title} onRename={renameTo} />
+          <div className="drawer-actions">
+            <MuteMenu
+              id={agent?.sessionId ?? agent?.key ?? id}
+              label={title}
+              settings={settings}
+              onSettings={onSettings}
+            />
+            <a className="icon-btn" href={`#/session/${encodeURIComponent(id)}`}>
+              Open full page
+            </a>
+            <button className="icon-btn" onClick={onClose}>
+              Close
+            </button>
+          </div>
         </div>
 
-        <EditableTitle as="h3" value={title} onRename={renameTo} />
-        <p className="drawer-sub">{cwd ?? id}</p>
-        {/* Live from git rather than the indexed value, which is only as fresh as
+        {/* Path and branch are both "where this session lives" — one line, not two.
+            Live from git rather than the indexed value, which is only as fresh as
             the last transcript flush. */}
-        {cwd && <GitBadge cwd={cwd} />}
+        <div className="drawer-meta">
+          <p className="drawer-sub">{cwd ?? id}</p>
+          {cwd && <GitBadge cwd={cwd} compact />}
+        </div>
 
         {agent ? (
           <>

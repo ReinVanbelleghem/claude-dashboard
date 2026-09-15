@@ -1,4 +1,4 @@
-export type TokenKind = "cmd" | "path" | "img" | "paste";
+export type TokenKind = "cmd" | "path" | "img" | "paste" | "bang";
 export type Segment = { text: string; kind: "plain" | TokenKind };
 
 /** A collapsed paste, as it reads in the box. */
@@ -54,6 +54,8 @@ type Candidate = { start: number; end: number; kind: TokenKind };
  * - `@fragment` — the reference being typed, before it resolves to a path.
  * - `[Image #1]` / `[Pasted text #1 +400 lines]` — markers standing in for content
  *   that is not in the textarea at all.
+ * - `!shell command` — a leading `!` hands the whole message to the shell instead
+ *   of the model, so the entire draft marks as one token rather than just the `!`.
  *
  * Overlaps resolve earliest-first then longest, so a path that is a prefix of a
  * longer one cannot claim its position.
@@ -63,6 +65,8 @@ export function tokenizeComposer(
   known: Set<string>,
   paths: string[] = [],
 ): Segment[] {
+  if (text.startsWith("!")) return [{ kind: "bang", text }];
+
   const found: Candidate[] = [];
 
   const markers = /(\[Image #\d+\])|(\[Pasted text #\d+ \+\d+ lines\])/g;

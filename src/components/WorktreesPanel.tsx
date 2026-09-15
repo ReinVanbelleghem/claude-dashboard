@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { gitApi, shortPath, type RepoStatus, type Worktree } from "../api.ts";
 import { BranchPicker, type BranchChoice } from "./BranchPicker.tsx";
-import { CheckIcon, FolderIcon, PlusIcon, TrashIcon, WorktreeIcon } from "./Icons.tsx";
+import { CheckIcon, FolderIcon, PlusIcon, RefreshIcon, TrashIcon, WorktreeIcon } from "./Icons.tsx";
 import { ProvisionEditor } from "./ProvisionEditor.tsx";
 import { invalidateStatusCache, watchStatus } from "./useGitRepo.ts";
 
@@ -166,6 +166,7 @@ export const WorktreesPanel = memo(function WorktreesPanel({
   };
 
   const stale = (trees ?? []).filter((w) => w.prunable !== null).length;
+  const reprovisionable = (trees ?? []).filter((w) => !w.isMain && w.prunable === null).length;
 
   /**
    * The branch half of the create form, shared by both layouts: rows open it inline
@@ -266,6 +267,9 @@ export const WorktreesPanel = memo(function WorktreesPanel({
               setConfirming(null);
               await act("Remove", () => gitApi.worktreeRemove(cwd, w.path));
             },
+            onReprovision: async () => {
+              await act("Reprovision", () => gitApi.worktreeReprovision(cwd, { path: w.path }));
+            },
           };
           return layout === "tiles" ? <Tile key={w.path} {...props} /> : <Row key={w.path} {...props} />;
         })}
@@ -327,6 +331,17 @@ export const WorktreesPanel = memo(function WorktreesPanel({
         the screen to answer a question nobody asked mid-session.
       */}
       {layout === "tiles" && <ProvisionEditor cwd={cwd} />}
+
+      {reprovisionable > 1 && (
+        <button
+          className="link-btn inline"
+          disabled={!!busy}
+          onClick={() => void act("Reprovision all", () => gitApi.worktreeReprovision(cwd, { all: true }))}
+          title="Re-run provisioning against every other checkout, so a rule you changed since they were created catches up. Never overwrites what's already there."
+        >
+          {busy === "Reprovision all" ? "Reprovisioning…" : `reprovision ${reprovisionable} worktrees`}
+        </button>
+      )}
 
       {stale > 0 && (
         <button
@@ -409,6 +424,7 @@ type EntryProps = {
   onConfirm: () => void;
   onCancel: () => void;
   onRemove: () => void;
+  onReprovision: () => void;
   onOpen?: (path: string) => void;
 };
 
@@ -420,11 +436,13 @@ function Row({
   onConfirm,
   onCancel,
   onRemove,
+  onReprovision,
   onOpen,
   nonce,
 }: EntryProps) {
   const dirty = useDirtyCount(w, nonce);
   const removable = !w.isMain && w.locked === null;
+  const reprovisionable = !w.isMain && w.prunable === null;
 
   return (
     <div className={`wt-row ${current ? "current" : ""}`}>
@@ -470,6 +488,16 @@ function Row({
             title={`Start a session in ${w.path}`}
           >
             Open
+          </button>
+        )}
+        {reprovisionable && !confirming && (
+          <button
+            className="icon-btn tiny"
+            disabled={!!busy}
+            onClick={onReprovision}
+            title="Re-run provisioning here — fills in anything a rule change added since this checkout was created. Never overwrites what's already there."
+          >
+            {busy === "Reprovision" ? "Reprovisioning…" : "Reprovision"}
           </button>
         )}
         {removable &&
@@ -518,12 +546,14 @@ function Tile({
   onConfirm,
   onCancel,
   onRemove,
+  onReprovision,
   onOpen,
 }: EntryProps) {
   const dirty = useDirtyCount(w, nonce);
   const missing = w.prunable !== null;
   const openable = !!onOpen && !missing && !current;
   const removable = !w.isMain && w.locked === null;
+  const reprovisionable = !w.isMain && !missing;
 
   const body = (
     <>
@@ -576,6 +606,16 @@ function Tile({
         </div>
       )}
 
+      {reprovisionable && !confirming && (
+        <button
+          className="icon-btn tiny wt-tile-reprovision"
+          disabled={!!busy}
+          onClick={onReprovision}
+          title="Re-run provisioning here — fills in anything a rule change added since this checkout was created. Never overwrites what's already there."
+        >
+          <RefreshIcon />
+        </button>
+      )}
       {removable && !confirming && (
         <button
           className="icon-btn tiny wt-tile-x"

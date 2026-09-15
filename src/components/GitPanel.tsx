@@ -17,7 +17,7 @@ import { DiffView, langOf } from "./DiffView.tsx";
 import { FileEditor } from "./FileEditor.tsx";
 import { FilePicker } from "./FilePicker.tsx";
 import type { CommentHandlers } from "./ReviewComments.tsx";
-import { GitIcon, PencilIcon, WorktreeIcon } from "./Icons.tsx";
+import { EditorIcon, GitIcon, PencilIcon, WorktreeIcon } from "./Icons.tsx";
 import { cachedStatus, watchStatus, type GitRepo } from "./useGitRepo.ts";
 
 /** Branch state in one line, for headers and cards. */
@@ -448,6 +448,15 @@ export const GitPanel = memo(function GitPanel({
               </button>
             </div>
             <span style={{ flex: 1 }} />
+            {root && (
+              <a
+                className="icon-btn"
+                href={`vscode://file${root}`}
+                title={`Open ${root} in VS Code`}
+              >
+                <EditorIcon /> Open in VS Code
+              </a>
+            )}
             {/* The diff can only offer files something has already changed. This is
                 the way to the rest of the repository. */}
             <button

@@ -243,8 +243,21 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 6px 10px;
   font-size: 13px;
   color: var(--text-secondary);
+  text-decoration: none;
 }
 .icon-btn:hover { border-color: var(--border-strong); color: var(--text-primary); }
+:root[data-hover-fx="on"] .icon-btn { transition: transform 0.08s ease; }
+:root[data-hover-fx="on"] .icon-btn:active { transform: scale(0.96); }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-hover-fx="on"] .icon-btn:active { transform: none; }
+}
+/* Not .primary: a solid accent fill is a call to action, and a glass CTA is
+   harder to read at exactly the moment legibility matters most. */
+:root[data-glass-fx="on"] .icon-btn:not(.primary) {
+  background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+}
 
 /* ── KPI tiles ─────────────────────────────────────────────────────────────── */
 .kpis {
@@ -259,6 +272,22 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 14px 16px 15px;
+}
+:root[data-glass-fx="on"] .tile {
+  background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 2)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 2)) saturate(1.2);
+}
+:root[data-hover-fx="on"] .tile {
+  transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
+}
+:root[data-hover-fx="on"] .tile:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px -6px rgb(0 0 0 / 0.35);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-hover-fx="on"] .tile { transition: none; }
+  :root[data-hover-fx="on"] .tile:hover { transform: none; box-shadow: none; }
 }
 .tile .label {
   font-size: 11px;
@@ -327,6 +356,27 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 13px 15px;
   position: relative;
 }
+/* Interface effects → glass, surface-1 group: raised chrome (cards, tiles, buttons,
+   selects) gets a lighter blur than a full-screen modal — it is sitting in the page
+   flow, not floating over it, so a heavy smear would fight the content around it. */
+:root[data-glass-fx="on"] .card {
+  background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 2)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 2)) saturate(1.2);
+}
+/* Interface effects → Hover lift: gated by data-hover-fx, set from Appearance, and
+   always dropped under the OS's reduced-motion preference regardless of that setting. */
+:root[data-hover-fx="on"] .card {
+  transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
+}
+:root[data-hover-fx="on"] .card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px -6px rgb(0 0 0 / 0.35);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-hover-fx="on"] .card { transition: none; }
+  :root[data-hover-fx="on"] .card:hover { transform: none; box-shadow: none; }
+}
 /* A working session has to be legible from across the room: the tint and the
    accent border say "something is happening here", the glow breathes so it reads
    as motion in a peripheral glance, and the pill still carries the word. The rail
@@ -348,6 +398,22 @@ button { font: inherit; color: inherit; cursor: pointer; }
   background: color-mix(in oklab, var(--warning) 7%, var(--surface-1));
 }
 .card.dead { border-left-color: var(--critical); opacity: 0.72; }
+/* The state tint has to survive glass mode too, or "something is happening here"
+   disappears the moment the background goes translucent. */
+:root[data-glass-fx="on"] .card.busy {
+  background: color-mix(
+    in oklab,
+    var(--accent) 8%,
+    color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent)
+  );
+}
+:root[data-glass-fx="on"] .card.attention {
+  background: color-mix(
+    in oklab,
+    var(--warning) 7%,
+    color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent)
+  );
+}
 
 .card-head { display: flex; align-items: center; gap: 8px; }
 .card-name { font: 600 14px/1.2 var(--mono); }
@@ -398,6 +464,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
   background: var(--surface-2);
   font: 600 11px/16px var(--mono);
   text-transform: lowercase;
+}
+:root[data-glass-fx="on"] .pill {
+  background: color-mix(in oklab, var(--surface-2) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
 }
 .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
 .pill.attention .dot { background: var(--warning); }
@@ -484,6 +555,11 @@ tr.click:hover td { background: var(--surface-2); }
   margin-bottom: 14px;
 }
 .search:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+:root[data-glass-fx="on"] .search {
+  background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+}
 
 /* Paging controls under a table. Counts are tabular so the numbers do not shuffle
    sideways as you page through them. */
@@ -544,18 +620,38 @@ tr.click:hover td { background: var(--surface-2); }
 
 /* ── drawer ────────────────────────────────────────────────────────────────── */
 .scrim { position: fixed; inset: 0; background: rgb(0 0 0 / 0.5); z-index: 20; }
+:root[data-glass-fx="on"] .scrim { backdrop-filter: blur(calc(var(--glass-blur, 18px) / 6)); }
 .drawer {
   position: fixed;
   top: 0; right: 0; bottom: 0;
-  width: min(680px, 94vw);
+  width: min(820px, 94vw);
   background: var(--surface-0);
   border-left: 1px solid var(--border);
   z-index: 21;
   overflow-y: auto;
   padding: 20px 24px 60px;
 }
-.drawer h3 { margin: 0 0 4px; font-size: 16px; padding-right: 190px; }
-.drawer-actions { position: absolute; top: 16px; right: 20px; display: flex; gap: 8px; }
+/* Interface effects → glass panels: the surface itself turns translucent and blurs
+   whatever is behind it (the page, scrolled underneath a fixed drawer), on top of
+   the flat blurred scrim already dimming the rest of the page. Blur radius and how
+   much of the surface colour shows through are both sliders in the theme studio. */
+:root[data-glass-fx="on"] .drawer {
+  background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+  border-left-color: color-mix(in oklab, var(--border) 70%, transparent);
+}
+.drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.drawer h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drawer-actions { flex: 0 0 auto; display: flex; gap: 8px; padding-top: 1px; }
 .drawer-actions a { text-decoration: none; }
 
 /* ── transcript ────────────────────────────────────────────────────────────── */
@@ -597,6 +693,7 @@ tr.click:hover td { background: var(--surface-2); }
 .turn.assistant .turn-who { color: var(--text-muted); }
 .turn-head time { font: 500 11px/1.6 var(--mono); color: var(--text-muted); }
 .turn-plain { white-space: pre-wrap; }
+.turn-plain .md { color: inherit; }
 
 /* Slash command, rendered as the invocation instead of its raw XML envelope. */
 .cmd {
@@ -612,6 +709,11 @@ tr.click:hover td { background: var(--surface-2); }
   font-family: var(--mono);
   font-size: 12px;
   flex-wrap: wrap;
+}
+:root[data-glass-fx="on"] .cmd {
+  background: color-mix(in oklab, var(--surface-2) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
 }
 .cmd-slash { color: var(--accent); font-weight: 700; }
 .cmd-name { color: var(--text-primary); font-weight: 600; }
@@ -636,6 +738,11 @@ tr.click:hover td { background: var(--surface-2); }
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
+:root[data-glass-fx="on"] .md code {
+  background: color-mix(in oklab, var(--surface-2) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
+}
 .md-code-wrap { position: relative; margin: 0 0 12px; }
 .md-code {
   margin: 0;
@@ -645,7 +752,20 @@ tr.click:hover td { background: var(--surface-2); }
   background: var(--surface-0);
   overflow-x: auto;
 }
+:root[data-glass-fx="on"] .md-code {
+  background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 2)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 2)) saturate(1.2);
+}
 .md-code code { padding: 0; background: none; font-size: 12px; white-space: pre; }
+/* The glass rule above targets every `.md code`, which also matches a code block's
+   own `<code>` — undoing the plain override just above unless this repeats it at
+   matching specificity, placed after so the tie breaks its way. */
+:root[data-glass-fx="on"] .md-code code {
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 .md-code-tools {
   position: absolute;
   top: 3px; right: 5px;
@@ -737,7 +857,7 @@ tr.click:hover td { background: var(--surface-2); }
   gap: 6px;
   flex-wrap: wrap;
   flex: 0 0 auto;
-  padding: 10px 0;
+  padding: 8px 0;
   border-bottom: 1px solid var(--border);
 }
 .chat-pane { display: flex; flex-direction: column; min-height: 0; margin-bottom: 16px; }
@@ -753,19 +873,41 @@ tr.click:hover td { background: var(--surface-2); }
   font-size: 12px;
   max-width: 150px;
 }
+:root[data-glass-fx="on"] .mini-select {
+  background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+}
 .chat-scroll { flex: 1; overflow-y: auto; padding: 14px 2px 4px; min-height: 200px; }
 
 /* The drawer becomes a chat surface for owned sessions: fixed header, scrolling
    middle, composer pinned to the bottom. */
 .drawer-live { display: flex; flex-direction: column; padding-bottom: 20px; }
 .drawer-live .chat-scroll { min-height: 0; }
+/* Path and branch used to be two stacked rows; one line reads the same info in
+   half the height. The path is the one side allowed to give way, since the
+   branch name and dirty count are the parts worth keeping intact. */
+.drawer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 0 0 12px;
+}
 .drawer-sub {
-  margin: 0 0 10px;
+  margin: 0;
+  /* Below this the path is cut down to nothing while the badge sits flush against
+     it; once there is not enough room for both, drop the badge to its own line
+     instead of squeezing the path past readability. */
+  min-width: 160px;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font: 500 11px/1.5 var(--mono);
   color: var(--text-muted);
-  word-break: break-all;
-  padding-right: 190px;
 }
+.drawer-meta .git-badge.compact { flex: 0 0 auto; margin: 0; }
 
 .card-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
 .card-actions a { text-decoration: none; }
@@ -812,11 +954,46 @@ tr.click:hover td { background: var(--surface-2); }
   background: var(--surface-1);
   box-shadow: 0 18px 50px rgb(0 0 0 / 0.45);
 }
+:root[data-glass-fx="on"] .modal {
+  background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+  border-color: color-mix(in oklab, var(--border-strong) 70%, transparent);
+}
 .modal h3 { margin: 0 0 4px; font-size: 15px; }
 .modal .hint { margin: 0 0 16px; font-size: 12px; color: var(--text-muted); line-height: 1.55; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .link-btn.inline { display: inline; margin: 0; }
 .chat-working { font: 500 12px/1.6 var(--mono); color: var(--text-muted); animation: pulse 1.4s infinite; }
+/* Interface effects → streaming cursor: a live caret at the end of the reply in
+   progress, in place of the flat colour pulse alone. Static (still visible, just
+   not blinking) with the effect off or under reduced motion, rather than gone. */
+.stream-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 1px;
+  vertical-align: -2px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+:root[data-hover-fx="on"] .stream-cursor { animation: caret-blink 1s steps(1) infinite; }
+@keyframes caret-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-hover-fx="on"] .stream-cursor { animation: none; }
+}
+
+/* Interface effects → chart draw-in. 3000 comfortably exceeds any real sparkline's
+   path length at this viewBox (1000 wide, height capped well under 300). */
+:root[data-hover-fx="on"] .spark-line {
+  stroke-dasharray: 3000;
+  stroke-dashoffset: 3000;
+  animation: spark-in 0.9s ease-out forwards;
+}
+@keyframes spark-in { to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-hover-fx="on"] .spark-line { animation: none; stroke-dashoffset: 0; }
+}
 .chat-result { margin: 4px 0 16px; font: 500 11px/1.6 var(--mono); color: var(--text-muted); }
 .chat-error {
   margin: 8px 0;
@@ -915,6 +1092,11 @@ tr.click:hover td { background: var(--surface-2); }
   background: var(--surface-0);
 }
 .composer-field:focus-within { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+:root[data-glass-fx="on"] .composer-field {
+  background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+}
 
 /* Every property that affects where a glyph lands has to be identical in both, or
    the pills drift off the words they are marking. */
@@ -995,6 +1177,11 @@ tr.click:hover td { background: var(--surface-2); }
 .tok-paste {
   color: var(--good);
   -webkit-text-stroke: 0.3px currentColor;
+}
+/* A leading `!` hands the whole line to the shell instead of the model. */
+.tok-bang {
+  color: var(--accent);
+  -webkit-text-stroke: 0.4px currentColor;
 }
 .field { display: block; margin-bottom: 12px; }
 .field > span { display: block; margin-bottom: 5px; font-size: 12px; color: var(--text-muted); }
@@ -1745,6 +1932,11 @@ a { color: var(--accent); }
   color: var(--text-secondary);
   max-width: 100%;
 }
+:root[data-glass-fx="on"] .git-badge {
+  background: color-mix(in oklab, var(--surface-2) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
+}
 .git-badge .icon { width: 13px; height: 13px; color: var(--accent); }
 .git-badge-branch { color: var(--text-primary); font-weight: 600; overflow-wrap: anywhere; }
 .git-badge-dirty { color: var(--warning); }
@@ -1984,11 +2176,11 @@ a { color: var(--accent); }
   flex: 0 0 auto;
   overflow-x: auto;
   overscroll-behavior-x: contain;
-  padding: 10px 2px 2px;
+  padding: 6px 2px 2px;
   margin-bottom: 4px;
   border-bottom: 1px solid var(--border);
   /* Scrollbar included, so a long strip never eats the transcript's height. */
-  min-height: 58px;
+  min-height: 54px;
   scrollbar-width: thin;
 }
 .agent-tabs-more {
@@ -2014,6 +2206,15 @@ a { color: var(--accent); }
 }
 .agent-tab:hover { background: var(--surface-1); }
 .agent-tab.active { border-bottom-color: var(--accent); background: var(--surface-1); }
+:root[data-glass-fx="on"] .agent-tab {
+  background: color-mix(in oklab, var(--surface-2) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
+}
+:root[data-glass-fx="on"] .agent-tab:hover,
+:root[data-glass-fx="on"] .agent-tab.active {
+  background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
+}
 .agent-tab-top { display: flex; align-items: center; gap: 6px; }
 .agent-tab .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex: 0 0 auto; }
 .agent-tab.running .dot { background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
@@ -2042,6 +2243,22 @@ a { color: var(--accent); }
 }
 /* A message accepted mid-turn: recorded, waiting for the current reply to land. */
 .turn.user.queued { opacity: 0.75; border-left-style: dashed; }
+/* A leading `!` hands the message to the shell instead of the model, so it reads as
+   a terminal line rather than prose — icon, monospace, its own chip. */
+.bash-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-0);
+  font: 500 12.5px/1.5 var(--mono);
+  color: var(--text-primary);
+}
+.bash-line .icon { flex: none; color: var(--accent); }
+.bash-line code { background: none; padding: 0; font: inherit; color: inherit; overflow-wrap: anywhere; }
 .queued-chip {
   padding: 0 6px;
   border-radius: 8px;
@@ -2135,13 +2352,16 @@ a { color: var(--accent); }
 }
 .comment-edit { display: flex; flex-direction: column; gap: 8px; }
 /* .composer-box sizes itself with flex:1 for the chat row; as a block child that
-   does nothing, leaving the textarea at its default ~20 columns. */
+   does nothing, leaving the textarea at its default ~20 columns. Comments have no
+   highlight mirror underneath, so unlike the chat composer this one has to paint
+   its own text instead of staying transparent. */
 .comment .composer-box {
   display: block;
   width: 100%;
   box-sizing: border-box;
   font-size: 13px;
   min-height: 68px;
+  color: var(--text-primary);
 }
 .comment-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 /* Always-visible route to the full page, on every session card. */
@@ -2493,6 +2713,12 @@ a { color: var(--accent); }
   box-shadow: 0 24px 60px rgb(0 0 0 / 0.5);
   z-index: 32;
   overflow: hidden;
+}
+:root[data-glass-fx="on"] .palette {
+  background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+  border-color: color-mix(in oklab, var(--border-strong) 70%, transparent);
 }
 .palette-bar {
   display: flex;
@@ -2867,6 +3093,12 @@ a { color: var(--accent); }
   box-shadow: 0 28px 70px rgb(0 0 0 / 0.55);
   overflow: hidden;
 }
+:root[data-glass-fx="on"] .studio {
+  background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+  border-color: color-mix(in oklab, var(--border-strong) 70%, transparent);
+}
 .studio-head {
   display: flex;
   align-items: center;
@@ -2896,6 +3128,11 @@ a { color: var(--accent); }
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface-0);
+}
+:root[data-glass-fx="on"] .studio-group {
+  background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
 }
 /* Columns are placed explicitly so a narrower viewport folds them in a chosen order
    rather than whatever auto-flow lands on: the preview keeps its own column longest,
@@ -2981,10 +3218,27 @@ a { color: var(--accent); }
   display: flex;
   flex-direction: column;
   gap: 10px;
+  overflow: hidden;
 }
 .studio-preview-bar { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .studio-preview-tab { width: 34px; height: 3px; border-radius: 2px; margin-left: auto; }
+/* Demo prop for the glass sliders: without something actually behind the card, a
+   backdrop blur has nothing to smear and the sliders look like they do nothing.
+   Absolute + a shared z-index-auto stacking group with the card, so DOM order (this
+   comes first) is what keeps it behind rather than painting over everything. */
+.studio-preview-glow {
+  position: absolute;
+  top: 34px;
+  left: 18px;
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+  filter: blur(2px);
+  opacity: 0.6;
+  pointer-events: none;
+}
 .studio-preview-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -3691,6 +3945,21 @@ a { color: var(--accent); }
 .wt-tile-x:focus-visible { opacity: 1; }
 .wt-tile-x:hover { color: var(--critical); }
 
+.wt-tile-reprovision {
+  position: absolute;
+  top: 7px;
+  right: 29px;
+  padding: 4px;
+  line-height: 0;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.wt-tile-reprovision .icon { width: 12px; height: 12px; }
+.wt-tile:hover .wt-tile-reprovision,
+.wt-tile-reprovision:focus-visible { opacity: 1; }
+.wt-tile-reprovision:hover { color: var(--accent); }
+
 /* In the tiles layout the create form is a dialog: the branch list is long, and
    opening it in place pushes every tile below it off the screen. */
 .modal .wt-add { margin-bottom: 0; }
@@ -3966,3 +4235,298 @@ tr.click:focus-visible {
   pointer-events: none;
   box-shadow: 0 6px 18px rgb(0 0 0 / 0.28);
 }
+
+/* ── MCP servers (settings) ───────────────────────────────────────────────────
+   Forty-odd servers, of which the great majority are one status. So the layout
+   is grouped rather than uniform: a grid of cards for what wants a click, wider
+   cards for what failed (the error text is the content), and chips for what
+   already works. Every status carries a written label as well as a colour. */
+.mcp-head-right { display: flex; align-items: center; gap: 10px; }
+.mcp-checked { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.mcp-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 2px 0 18px;
+}
+.mcp-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.mcp-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 500 11.5px/1.4 var(--mono);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.mcp-tab:hover { background: var(--surface-2); color: var(--text-primary); }
+.mcp-tab.on { background: var(--surface-2); border-color: var(--border-strong); color: var(--text-primary); }
+.mcp-tab .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.mcp-tab-n { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.mcp-tab.on .mcp-tab-n { color: var(--text-secondary); }
+.mcp-filter { width: min(260px, 100%); }
+
+.mcp-tab.connected .dot, .mcp-group-h.connected .dot { background: var(--good); }
+.mcp-tab.needs-auth .dot, .mcp-group-h.needs-auth .dot { background: var(--warning); }
+.mcp-tab.failed .dot, .mcp-group-h.failed .dot { background: var(--critical); }
+
+.mcp-group + .mcp-group { margin-top: 22px; }
+.mcp-group-h {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 9px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.mcp-group-h .dot { width: 7px; height: 7px; border-radius: 50%; align-self: center; }
+.mcp-group-n {
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font: 500 10.5px/16px var(--mono);
+  color: var(--text-secondary);
+}
+/* Says what the group means once, instead of a status pill on every card in it. */
+.mcp-group-blurb { font-size: 11.5px; font-weight: 400; color: var(--text-muted); }
+
+/* auto-fill, so a wide window packs more columns instead of stretching one row of
+   labels away from its own button. */
+.mcp-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(212px, 1fr));
+  gap: 8px;
+}
+.mcp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 11px 11px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface-2);
+  min-width: 0;
+}
+.mcp-card.needs-auth { border-left-color: var(--warning); }
+.mcp-card.failed { border-left-color: var(--critical); }
+/* An error message is a sentence, not a label — give it room rather than a
+   two-line ellipsis in a narrow column. */
+.mcp-card.wide { grid-column: span 2; }
+
+.mcp-card-head { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.mcp-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-origin { flex: 0 0 auto; font: 400 10px/1.4 var(--mono); color: var(--text-muted); }
+.mcp-target {
+  font: 400 11px/1.5 var(--mono);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-detail { font-size: 11.5px; line-height: 1.5; color: var(--text-secondary); }
+.mcp-detail.bad { color: var(--critical); }
+.mcp-detail.good { color: var(--good); }
+.mcp-detail.waiting { color: var(--warning); }
+.mcp-detail .link-btn.inline { margin-left: 6px; }
+
+/* Full width inside the card: the button is the card's purpose, and a small one
+   floated right is a target you have to aim at. */
+.mcp-connect {
+  /* auto, not a fixed gap: cards in a row are stretched to the tallest, and one
+     carrying a sign-in message would otherwise leave its neighbours' buttons
+     floating at different heights across the row. */
+  margin-top: auto;
+  padding: 5px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font: 500 11.5px/1.4 inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.mcp-connect:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.mcp-connect:disabled { opacity: 0.6; cursor: default; }
+
+.mcp-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.mcp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: default;
+}
+.mcp-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
+
+.mcp-error {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--critical) 40%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--critical) 8%, transparent);
+  font: 400 11.5px/1.5 var(--mono);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+  /* The heading has to stay one line to read as a heading, and the blurb is the
+     part that can go: the group title and its colour already say the same thing. */
+  .mcp-group-blurb { display: none; }
+}
+@media (max-width: 640px) {
+  .mcp-card.wide { grid-column: span 1; }
+}
+
+/* ── glass sweep: everything else that reads var(--surface-N) directly ──────── */
+/* Generated from a pass over every `background: var(--surface-N)` in this file
+   that was not already hand-tuned above, grouped by surface tier so the fill
+   colour and its comma list live together instead of five lines repeated a
+   hundred times. Excludes decorative bars/tracks and the page canvas, where
+   translucency has nothing meaningful to blend with. */
+:root[data-glass-fx="on"] .tabs button[aria-selected="true"],
+:root[data-glass-fx="on"] .pager-size select,
+:root[data-glass-fx="on"] .tool pre,
+:root[data-glass-fx="on"] .perm-input,
+:root[data-glass-fx="on"] .seg button.active,
+:root[data-glass-fx="on"] .fav-label-input:focus,
+:root[data-glass-fx="on"] .diff-file,
+:root[data-glass-fx="on"] .bash-line,
+:root[data-glass-fx="on"] .attach-chip img,
+:root[data-glass-fx="on"] .turn-thumb {
+  background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+}
+
+:root[data-glass-fx="on"] .panel,
+:root[data-glass-fx="on"] .md-copy:hover,
+:root[data-glass-fx="on"] .seg,
+:root[data-glass-fx="on"] .modal.wide.scroll .modal-head,
+:root[data-glass-fx="on"] .folder-card:hover,
+:root[data-glass-fx="on"] .icon-btn.ghost:hover,
+:root[data-glass-fx="on"] .cmd-menu,
+:root[data-glass-fx="on"] .branch-trigger,
+:root[data-glass-fx="on"] .branch-pop,
+:root[data-glass-fx="on"] .git-commit-box textarea,
+:root[data-glass-fx="on"] .commit-body,
+:root[data-glass-fx="on"] .diff-file-head:hover,
+:root[data-glass-fx="on"] .diff-act:hover,
+:root[data-glass-fx="on"] .diff-act.on,
+:root[data-glass-fx="on"] .file-editor-code,
+:root[data-glass-fx="on"] .jump-btn,
+:root[data-glass-fx="on"] .line-review,
+:root[data-glass-fx="on"] .file-review,
+:root[data-glass-fx="on"] .settings-nav,
+:root[data-glass-fx="on"] .palette-card,
+:root[data-glass-fx="on"] .find-bar,
+:root[data-glass-fx="on"] .saved-theme-apply,
+:root[data-glass-fx="on"] .cp-pop,
+:root[data-glass-fx="on"] .ink-pick,
+:root[data-glass-fx="on"] .ask-option,
+:root[data-glass-fx="on"] .mute-menu,
+:root[data-glass-fx="on"] .mute-item,
+:root[data-glass-fx="on"] .pv-list,
+:root[data-glass-fx="on"] .wt-row,
+:root[data-glass-fx="on"] .new-wt,
+:root[data-glass-fx="on"] .scope-btn.on,
+:root[data-glass-fx="on"] .mcp-connect {
+  background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
+}
+
+:root[data-glass-fx="on"] .tabs,
+:root[data-glass-fx="on"] .ended-note,
+:root[data-glass-fx="on"] .external-note,
+:root[data-glass-fx="on"] .tool > summary,
+:root[data-glass-fx="on"] .modal.wide .modal-actions,
+:root[data-glass-fx="on"] .folder-card,
+:root[data-glass-fx="on"] .folder-card.locked:hover,
+:root[data-glass-fx="on"] .browser-foot,
+:root[data-glass-fx="on"] .ftype,
+:root[data-glass-fx="on"] .file-picker-row:hover,
+:root[data-glass-fx="on"] .fav-row-item,
+:root[data-glass-fx="on"] .cmd-option.active,
+:root[data-glass-fx="on"] .branch-trigger:hover,
+:root[data-glass-fx="on"] .branch-trigger.open,
+:root[data-glass-fx="on"] .branch-warn,
+:root[data-glass-fx="on"] .branch-error,
+:root[data-glass-fx="on"] .branch-row:hover:not(:disabled),
+:root[data-glass-fx="on"] .branch-row.current,
+:root[data-glass-fx="on"] .git-act:hover,
+:root[data-glass-fx="on"] .git-file:hover,
+:root[data-glass-fx="on"] .git-file.active,
+:root[data-glass-fx="on"] .git-status,
+:root[data-glass-fx="on"] .diff-file-head,
+:root[data-glass-fx="on"] .diff-hunk,
+:root[data-glass-fx="on"] .commit-head,
+:root[data-glass-fx="on"] .diff-file-head-row,
+:root[data-glass-fx="on"] .file-editor-gutter,
+:root[data-glass-fx="on"] .queued-chip,
+:root[data-glass-fx="on"] .agent-report,
+:root[data-glass-fx="on"] .review-bar,
+:root[data-glass-fx="on"] .comment,
+:root[data-glass-fx="on"] .card-open:hover,
+:root[data-glass-fx="on"] .branch-picked,
+:root[data-glass-fx="on"] .git-msg,
+:root[data-glass-fx="on"] .review-orphans,
+:root[data-glass-fx="on"] .fav-pick,
+:root[data-glass-fx="on"] .tab-preview,
+:root[data-glass-fx="on"] .settings-nav-item:hover,
+:root[data-glass-fx="on"] .palette-clear,
+:root[data-glass-fx="on"] .palette-count,
+:root[data-glass-fx="on"] .palette-meta,
+:root[data-glass-fx="on"] .palette-foot kbd,
+:root[data-glass-fx="on"] .cp-hex,
+:root[data-glass-fx="on"] .studio-h-tag,
+:root[data-glass-fx="on"] .custom-summary,
+:root[data-glass-fx="on"] .theme-hero,
+:root[data-glass-fx="on"] .studio-seed,
+:root[data-glass-fx="on"] .studio-glyph,
+:root[data-glass-fx="on"] .mute-row:hover,
+:root[data-glass-fx="on"] .pv-count,
+:root[data-glass-fx="on"] .pv-rule:hover,
+:root[data-glass-fx="on"] .pv-chip:hover,
+:root[data-glass-fx="on"] .wt-row.current,
+:root[data-glass-fx="on"] .wt-tile.current > .folder-card,
+:root[data-glass-fx="on"] .scope,
+:root[data-glass-fx="on"] .snip-tag,
+:root[data-glass-fx="on"] .top-session:hover,
+:root[data-glass-fx="on"] .composer-attach:hover:not(:disabled),
+:root[data-glass-fx="on"] .composer-tip,
+:root[data-glass-fx="on"] .mcp-tab:hover,
+:root[data-glass-fx="on"] .mcp-tab.on,
+:root[data-glass-fx="on"] .mcp-group-n,
+:root[data-glass-fx="on"] .mcp-card,
+:root[data-glass-fx="on"] .mcp-chip {
+  background: color-mix(in oklab, var(--surface-2) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
+}
+

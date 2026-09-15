@@ -16,7 +16,7 @@ import {
   type TaskInfo,
   type TimelineItem,
 } from "../api.ts";
-import { ClipIcon } from "./Icons.tsx";
+import { ClipIcon, TerminalIcon } from "./Icons.tsx";
 import { onCompose } from "./compose.ts";
 import { loadAttachments, loadDraft, saveAttachments, saveDraft } from "./drafts.ts";
 import {
@@ -28,7 +28,7 @@ import {
   tokenizeComposer,
 } from "./composerTokens.ts";
 import { highlight } from "./highlight.tsx";
-import { Markdown } from "./Markdown.tsx";
+import { Markdown, handleMdCopy } from "./Markdown.tsx";
 import { ScrollJump, useJumpToEnd, useScrollEdges } from "./scroll.tsx";
 
 /** What the composer holds between a paste and a send. */
@@ -911,7 +911,7 @@ export function LiveConversation({
       )}
 
       <div className="chat-scroll-wrap">
-      <div className="chat-scroll" ref={scroller} onScroll={onScroll}>
+      <div className="chat-scroll" ref={scroller} onScroll={onScroll} onCopy={handleMdCopy}>
         {visible.map((item, n) => (
           <Item
             key={n}
@@ -956,11 +956,12 @@ export function LiveConversation({
           </div>
         )}
         {streaming && tab === null && (
-          <div className="turn assistant">
+          <div className="turn assistant streaming">
             <div className="turn-head">
               <span className="turn-who">Claude</span>
             </div>
             <Markdown text={streaming} />
+            <span className="stream-cursor" aria-hidden="true" />
           </div>
         )}
         {busy && !streaming && tab === null && <div className="chat-working">working…</div>}
@@ -1324,18 +1325,29 @@ function Item({
   taskIdFor?: string | null;
 }) {
   switch (item.kind) {
-    case "user":
+    case "user": {
+      const isBash = item.text.startsWith("!");
       return (
-        <div className={`turn user ${item.queued ? "queued" : ""}`}>
+        <div className={`turn user ${isBash ? "bash" : ""} ${item.queued ? "queued" : ""}`}>
           <div className="turn-head">
             <span className="turn-who">You</span>
             <time>{new Date(item.ts).toLocaleTimeString()}</time>
             {item.queued && <span className="queued-chip">queued</span>}
           </div>
-          <div className="turn-plain">{item.text}</div>
+          {isBash ? (
+            <div className="bash-line">
+              <TerminalIcon />
+              <code>{item.text.slice(1)}</code>
+            </div>
+          ) : (
+            <div className="turn-plain">
+              <Markdown text={item.text} />
+            </div>
+          )}
           {item.images && item.images.length > 0 && <Attachments images={item.images} />}
         </div>
       );
+    }
 
     case "assistant":
       return (

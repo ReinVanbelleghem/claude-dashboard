@@ -38,6 +38,10 @@ export type Appearance = {
   favicon: string;
   faviconColor: string;
   motion?: boolean;
+  hoverFx?: boolean;
+  glassFx?: boolean;
+  glassBlur?: { dark: number; light: number };
+  glassOpacity?: { dark: number; light: number };
   customAccent?: { dark: string; light: string };
   customIconColor?: { dark: string; light: string };
   /** Per-mode slider sets. Older files hold a single flat set; the UI migrates it. */

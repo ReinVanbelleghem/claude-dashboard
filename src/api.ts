@@ -362,6 +362,52 @@ export type NotifyPayload = {
   at: number;
 };
 
+export type McpStatus = "connected" | "needs-auth" | "failed" | "pending" | "disabled";
+
+export type McpServer = {
+  name: string;
+  target: string;
+  transport: string | null;
+  status: McpStatus;
+  detail: string | null;
+  origin: "claudeai" | "plugin" | "local";
+};
+
+/** An OAuth run in progress, or the wreckage of one that failed. */
+export type McpLogin = {
+  name: string;
+  startedAt: number;
+  output: string;
+  done: boolean;
+  ok: boolean;
+  error: string | null;
+};
+
+export type McpPayload = {
+  servers: McpServer[];
+  /** 0 before the first health check has ever run. */
+  checkedAt: number;
+  error: string | null;
+  /** A health check is running right now; the list is the previous one until it lands. */
+  checking: boolean;
+  logins: McpLogin[];
+};
+
+export const mcpApi = {
+  /** Always the cache — a health check is started separately and watched via `checking`. */
+  list: () => get<McpPayload>("/api/mcp"),
+  /** Returns immediately; the check itself can take minutes on a cold CLI. */
+  refresh: () => post<McpPayload>("/api/mcp/refresh"),
+  /** Returns as soon as the browser has been opened — the run is followed by polling. */
+  login: (name: string) =>
+    postResult<{ ok: boolean; error: string | null; logins: McpLogin[] }>("/api/mcp/login", { name }),
+  dismiss: (name: string) =>
+    postResult<{ ok: boolean; error: string | null; logins: McpLogin[] }>("/api/mcp/login", {
+      name,
+      dismiss: true,
+    }),
+};
+
 export const settingsApi = {
   get: () => get<{ settings: Settings }>("/api/settings"),
   save: (patch: SettingsPatch) => post<{ settings: Settings }>("/api/settings", patch),
@@ -526,6 +572,20 @@ export type WorktreeWriteResult = GitWriteResult & {
   worktrees: Worktree[];
 };
 
+/** What a provisioning rule did against one path in one checkout. */
+export type ProvisionOutcome = {
+  path: string;
+  mode: "symlink" | "copy" | "off";
+  result: "linked" | "copied" | "skipped-exists" | "skipped-missing" | "skipped-tracked" | "failed";
+  error?: string;
+};
+
+export type WorktreeReprovisionResult = GitWriteResult & {
+  worktrees: Worktree[];
+  /** Provisioning outcomes, keyed by the path of each checkout touched. */
+  results: Record<string, ProvisionOutcome[]>;
+};
+
 export type Worktree = {
   path: string;
   name: string;
@@ -662,6 +722,13 @@ export const gitApi = {
     postResult<WorktreeWriteResult>("/api/git/worktree-remove", { cwd, path }),
   worktreePrune: (cwd: string) =>
     postResult<WorktreeWriteResult>("/api/git/worktree-prune", { cwd }),
+  /**
+   * Re-run provisioning against checkout(s) that already exist, so a rule added after
+   * a worktree was created (a new dependency, a config file that did not exist yet)
+   * still reaches it. `provision()` never overwrites, so this only ever fills gaps.
+   */
+  worktreeReprovision: (cwd: string, opts: { path?: string; all?: boolean }) =>
+    postResult<WorktreeReprovisionResult>("/api/git/worktree-reprovision", { cwd, ...opts }),
   /**
    * Provisioning, as three questions about one repository: what would a new worktree
    * get, what is this repo carrying that the rules miss, and here is the new list.

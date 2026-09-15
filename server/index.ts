@@ -72,6 +72,7 @@ import {
   worktreeAdd as gitWorktreeAdd,
   worktreePrune as gitWorktreePrune,
   worktreeRemove as gitWorktreeRemove,
+  worktreeReprovision as gitWorktreeReprovision,
   dirtyCounts as gitDirtyCounts,
   worktrees as gitWorktrees,
   worktreeRepos as gitWorktreeRepos,
@@ -79,6 +80,14 @@ import {
   provisionSuggest as gitProvisionSuggest,
 } from "./git.ts";
 import { indexOnce } from "./indexer.ts";
+import {
+  cachedMcp,
+  dismissMcpLogin,
+  isCheckingMcp,
+  mcpLogins,
+  startMcpLogin,
+  startMcpRefresh,
+} from "./mcp.ts";
 import { validRule as validProvisionRule, type ProvisionRule } from "./provision.ts";
 import { invalidateRepoKeys, resolveRepoKeys } from "./repoKeys.ts";
 import {
@@ -1111,6 +1120,26 @@ const server = Bun.serve({
           return json(r, r.ok ? 200 : 409);
         }
 
+        /**
+         * Re-run provisioning against a checkout (or every checkout) that already
+         * exists — the fix for a rule added after the worktree was, which the create
+         * flow above never sees again.
+         */
+        if (action === "worktree-reprovision") {
+          if (!b.all && !b.path?.trim())
+            return json({ error: "path or all is required" }, 400);
+          const ui = getSettings().ui;
+          const r = await gitWorktreeReprovision(root, {
+            path: b.path?.trim(),
+            all: !!b.all,
+            provision: ui.worktreeProvision ?? [],
+            provisionByRepo: ui.worktreeProvisionByRepo ?? {},
+            excludeProvisioned: ui.worktreeExclude === true,
+          });
+          if (r.ok) broadcast("worktrees", { repoKey: r.status?.commonDir ?? null, worktrees: r.worktrees });
+          return json(r, r.ok ? 200 : 409);
+        }
+
         if (action === "checkout") {
           const branch = b.branch?.trim();
           if (!branch) return json({ error: "branch is required" }, 400);
@@ -1358,6 +1387,30 @@ const server = Bun.serve({
     // Models a session last reported. Empty until the first session has run, in
     // which case the UI falls back to its built-in shortlist.
     if (p === "/api/models") return json({ models: cachedModels() });
+
+    // ── MCP servers ──────────────────────────────────────────────────────────
+    /**
+     * Always the cached list, so the panel paints at once. A health check walks every
+     * configured server and can take minutes when the CLI is cold, so it is started
+     * by its own endpoint and watched through `checking` rather than awaited here.
+     */
+    if (p === "/api/mcp" && req.method === "GET") {
+      return json({ ...cachedMcp(), checking: isCheckingMcp(), logins: mcpLogins() });
+    }
+    if (p === "/api/mcp/refresh" && req.method === "POST") {
+      startMcpRefresh();
+      return json({ ...cachedMcp(), checking: isCheckingMcp(), logins: mcpLogins() });
+    }
+    if (p === "/api/mcp/login" && req.method === "POST") {
+      const b = (await req.json().catch(() => ({}))) as { name?: string; dismiss?: boolean };
+      if (!b.name) return json({ error: "name is required" }, 400);
+      if (b.dismiss) {
+        dismissMcpLogin(b.name);
+        return json({ ok: true, error: null, logins: mcpLogins() });
+      }
+      const r = startMcpLogin(b.name);
+      return json({ ...r, logins: mcpLogins() }, r.ok ? 200 : 409);
+    }
 
     // ── directory picking for the new-session dialog ─────────────────────────
     if (p === "/api/dirs") return json(listDirs(url.searchParams.get("path") ?? undefined));

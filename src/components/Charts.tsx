@@ -43,6 +43,28 @@ export function Tile({
 type Point = { label: string; value: number };
 
 /**
+ * Catmull-Rom through every point, converted to cubic Bezier segments (the
+ * standard 1/6-tension form) — a smooth curve without ever overshooting past a
+ * real data point, which a naive spline can do on a sharp jump.
+ */
+function smoothPath(pts: [number, number][]): string {
+  if (pts.length < 3) return pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0]},${p[1]}`).join(" ");
+  let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] ?? pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] ?? p2;
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+  }
+  return d;
+}
+
+/**
  * Single-series area+line over time. One series, so no legend — the panel title
  * names it. Crosshair + tooltip on hover, per the interaction spec.
  */
@@ -58,7 +80,8 @@ export function Sparkline({ points, height = 92 }: { points: Point[]; height?: n
   const x = (i: number) => (points.length === 1 ? w / 2 : pad + i * stepX);
   const y = (v: number) => h - pad - (v / max) * (h - pad * 2);
 
-  const line = points.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(" ");
+  const coords: [number, number][] = points.map((p, i) => [x(i), y(p.value)]);
+  const line = smoothPath(coords);
   const area = `${line} L${x(points.length - 1).toFixed(1)},${h - pad} L${x(0).toFixed(1)},${h - pad} Z`;
 
   return (
@@ -86,6 +109,7 @@ export function Sparkline({ points, height = 92 }: { points: Point[]; height?: n
         </defs>
         <path d={area} fill="url(#sparkFill)" />
         <path
+          className="spark-line"
           d={line}
           fill="none"
           stroke="var(--accent)"

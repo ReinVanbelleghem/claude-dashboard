@@ -304,7 +304,7 @@ are pay-as-you-go list-price equivalents, not what a subscription charges.
 
 ### Settings
 
-Four sections behind a left rail — Appearance, Notifications, Sessions, Git — one
+Five sections behind a left rail — Appearance, Notifications, Sessions, Git, MCP — one
 panel at a time, with the section you last used remembered. Everything saves as you
 change it; there is no save button.
 
@@ -355,6 +355,34 @@ finished, session error), which channels (macOS banner, browser, Google Chat web
 a delay before notifying, a per-session cooldown, quiet hours, and whether to stay
 quiet about the session already on your screen.
 
+### MCP
+
+Settings → MCP is the dashboard's answer to the TUI's `/mcp`: every server this
+machine is configured with — claude.ai connectors, plugin servers and whatever
+`~/.claude` adds. Sessions load exactly this set, so it is also the place to find out
+why one cannot reach something.
+
+Grouped by status rather than listed flat, because forty servers of which most share
+one status is a wall to read linearly. The ones needing you are cards in a grid, sized
+to be scanned and clicked; the failed ones are wider, since the CLI's error text is the
+content; and the working ones are chips, because "it works" needs a name and nothing
+else. The counts along the top are also the filter, and a search box narrows within the
+groups. Hovering anything shows its full name and address.
+
+Anything reading **needs auth** gets a **Connect** button, which runs
+`claude mcp login` and opens the sign-in in your browser on this machine; the row
+follows the run and updates itself when it lands. Because the browser opens next to
+the daemon rather than next to you, this is the one panel that assumes you are looking
+at the dashboard on the machine it runs on.
+
+The list is read from `claude mcp list` rather than from a session, so it belongs to no
+session in particular — but a health check talks to every server, which takes ten
+seconds warm and minutes on a cold CLI. So the panel paints from a cache with its age
+shown, and **Check now** starts a fresh check in the background instead of holding the
+page. A project-scoped `.mcp.json` is out of scope: the check runs in your home
+directory, so what you see is the machine's set and does not shift with whichever
+project a session last opened.
+
 ---
 
 ## Configuration
@@ -366,6 +394,7 @@ Everything lives in `~/.claude-dashboard/`:
 | `index.db` | SQLite index of every transcript. Derived — safe to delete, it rebuilds |
 | `config.json` | Token budgets and model pricing |
 | `settings.json` | Notification and UI preferences (written by the Settings tab) |
+| `mcp.json` | Last MCP health check. Derived — safe to delete, the next check rewrites it |
 | `comments.json` | Your review comments |
 | `favourites.json` | Saved working directories |
 | `sessions.json` | Sessions that can be resumed |

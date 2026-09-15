@@ -1975,7 +1975,6 @@ export async function worktreeAdd(
      * than raised: a worktree with no `node_modules` symlink is still a worktree, and
      * undoing the create over it would throw away the part that worked.
      */
-    let carried: ProvisionOutcome[] = [];
     /**
      * The repository's own rules layered onto the global ones, then patterns resolved
      * against the source tree. Both steps happen here because both need the answer to
@@ -1985,45 +1984,13 @@ export async function worktreeAdd(
       status.mainRoot!,
       mergeRules(opts.provision ?? [], opts.provisionByRepo?.[status.commonDir ?? ""] ?? []),
     );
-    if (rules.length > 0) {
-      /**
-       * Two passes, and the second is the one that matters.
-       *
-       * The first asks the source tree which of these paths git ignores, which rules out
-       * anything obviously tracked before any work is done. But whether git ignores
-       * something depends on what it *is*, not only what it is called: `node_modules/` in
-       * a `.gitignore` matches a directory and not a symlink to one. So after placing
-       * them, the new tree is asked again about what actually landed, and anything it
-       * does not ignore is taken back out. Otherwise provisioning would leave untracked
-       * work behind — visible in the diff, caught by `stage all`, and enough to make the
-       * worktree undeletable, since a dirty one is refused.
-       */
-      const wanted = rules.map((r) => r.path.trim()).filter(Boolean);
-      carried = provision(status.mainRoot!, target, rules, await ignoredIn(status.mainRoot!, wanted));
-
-      const placed = carried.filter((o) => o.result === "linked" || o.result === "copied");
-      if (placed.length > 0) {
-        let stillIgnored = await ignoredIn(target, placed.map((o) => o.path));
-        let stray = placed.filter((o) => !stillIgnored.has(o.path));
-
-        /**
-         * Asked to, and something landed that git would call untracked — almost always a
-         * `node_modules` symlink against a `node_modules/` pattern. Adding the bare path
-         * to the local exclude file settles it for good; then re-ask, because the answer
-         * is git's to give and not ours to assume.
-         */
-        if (stray.length > 0 && opts.excludeProvisioned && status.commonDir) {
-          excludeLocally(status.commonDir, stray.map((o) => o.path));
-          stillIgnored = await ignoredIn(target, placed.map((o) => o.path));
-          stray = placed.filter((o) => !stillIgnored.has(o.path));
-        }
-
-        for (const o of stray) {
-          unprovision(target, o.path);
-          o.result = "skipped-tracked";
-        }
-      }
-    }
+    const carried = await applyProvisioning(
+      status.mainRoot!,
+      target,
+      status.commonDir ?? null,
+      rules,
+      !!opts.excludeProvisioned,
+    );
 
     const extra = summarise(carried);
     return worktreeFinish(cwd, true, null, null, {
@@ -2043,6 +2010,156 @@ async function ignoredIn(root: string, paths: string[]): Promise<Set<string>> {
     paths.map((x) => `${x}\0`).join(""),
   );
   return new Set(r.out.split("\0").filter(Boolean));
+}
+
+/**
+ * Carry `rules` from `mainRoot` into `target`, whatever `target` already has.
+ *
+ * The one place both `worktreeAdd` and `worktreeReprovision` place files, since the
+ * two passes below apply exactly the same whether `target` is a tree git just made or
+ * one that has been sitting there for weeks: `provision()` never overwrites, so aiming
+ * it at an existing checkout only fills in what a rule added since it was created.
+ */
+async function applyProvisioning(
+  mainRoot: string,
+  target: string,
+  commonDir: string | null,
+  rules: ProvisionRule[],
+  excludeProvisioned: boolean,
+): Promise<ProvisionOutcome[]> {
+  if (rules.length === 0) return [];
+
+  /**
+   * Two passes, and the second is the one that matters.
+   *
+   * The first asks the source tree which of these paths git ignores, which rules out
+   * anything obviously tracked before any work is done. But whether git ignores
+   * something depends on what it *is*, not only what it is called: `node_modules/` in
+   * a `.gitignore` matches a directory and not a symlink to one. So after placing
+   * them, the target tree is asked again about what actually landed, and anything it
+   * does not ignore is taken back out. Otherwise provisioning would leave untracked
+   * work behind — visible in the diff, caught by `stage all`, and enough to make the
+   * worktree undeletable, since a dirty one is refused.
+   */
+  const wanted = rules.map((r) => r.path.trim()).filter(Boolean);
+  const carried = provision(mainRoot, target, rules, await ignoredIn(mainRoot, wanted));
+
+  const placed = carried.filter((o) => o.result === "linked" || o.result === "copied");
+  if (placed.length > 0) {
+    let stillIgnored = await ignoredIn(target, placed.map((o) => o.path));
+    let stray = placed.filter((o) => !stillIgnored.has(o.path));
+
+    /**
+     * Asked to, and something landed that git would call untracked — almost always a
+     * `node_modules` symlink against a `node_modules/` pattern. Adding the bare path
+     * to the local exclude file settles it for good; then re-ask, because the answer
+     * is git's to give and not ours to assume.
+     */
+    if (stray.length > 0 && excludeProvisioned && commonDir) {
+      excludeLocally(commonDir, stray.map((o) => o.path));
+      stillIgnored = await ignoredIn(target, placed.map((o) => o.path));
+      stray = placed.filter((o) => !stillIgnored.has(o.path));
+    }
+
+    for (const o of stray) {
+      unprovision(target, o.path);
+      o.result = "skipped-tracked";
+    }
+  }
+  return carried;
+}
+
+export type ReprovisionResult = {
+  ok: boolean;
+  status: RepoStatus | null;
+  error: string | null;
+  note: string | null;
+  worktrees: Worktree[];
+  /** Provisioning outcomes, keyed by the path of each worktree touched. */
+  results: Record<string, ProvisionOutcome[]>;
+};
+
+/**
+ * Re-run provisioning against worktree(s) that already exist.
+ *
+ * Provisioning only ever ran once, at create time — a rule added afterwards (a new
+ * dependency, a config file that did not exist yet) never reached checkouts that were
+ * already there. This aims the same `provision()` call `worktreeAdd` makes at a tree
+ * instead of a fresh one; since `provision()` never overwrites what is already in
+ * place, running it again only ever fills in what a rule change added.
+ */
+export async function worktreeReprovision(
+  cwd: string,
+  opts: {
+    /** Reprovision this one checkout. Ignored when `all` is set. */
+    path?: string;
+    /** Reprovision every non-main checkout of the repository. */
+    all?: boolean;
+    provision?: ProvisionRule[];
+    provisionByRepo?: Record<string, ProvisionRule[]>;
+    excludeProvisioned?: boolean;
+  },
+): Promise<ReprovisionResult> {
+  const status = await freshStatus(cwd);
+  if (!status.isRepo || !status.root)
+    return { ok: false, status, error: "not a git repository", note: null, worktrees: [], results: {} };
+  if (!status.mainRoot)
+    return {
+      ok: false,
+      status,
+      error: "this repository has no main working tree",
+      note: null,
+      worktrees: [],
+      results: {},
+    };
+
+  return withLock(status.commonDir ?? status.root, async () => {
+    const list = await worktrees(cwd);
+    const targets = opts.all
+      ? list.worktrees.filter((w) => !w.isMain && !w.prunable)
+      : list.worktrees.filter((w) => w.path === opts.path);
+
+    if (targets.length === 0)
+      return {
+        ok: false,
+        status,
+        error: opts.all ? "no other worktrees to reprovision" : `no such worktree: ${opts.path}`,
+        note: null,
+        worktrees: list.worktrees,
+        results: {},
+      };
+
+    const rules = expandRules(
+      status.mainRoot!,
+      mergeRules(opts.provision ?? [], opts.provisionByRepo?.[status.commonDir ?? ""] ?? []),
+    );
+
+    const results: Record<string, ProvisionOutcome[]> = {};
+    for (const w of targets) {
+      results[w.path] = await applyProvisioning(
+        status.mainRoot!,
+        w.path,
+        status.commonDir ?? null,
+        rules,
+        !!opts.excludeProvisioned,
+      );
+    }
+
+    const total = Object.values(results).flat();
+    const extra = summarise(total);
+    const after = await worktrees(cwd);
+    return {
+      ok: true,
+      status,
+      error: null,
+      note:
+        targets.length === 1
+          ? `Reprovisioned ${basename(targets[0].path)}.${extra ? ` ${extra}.` : ""}`
+          : `Reprovisioned ${targets.length} worktrees.${extra ? ` ${extra}.` : ""}`,
+      worktrees: after.worktrees,
+      results,
+    };
+  });
 }
 
 // ── provisioning, as a question you can ask before creating anything ──────────

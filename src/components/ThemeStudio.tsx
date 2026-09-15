@@ -31,6 +31,54 @@ import { useIconPhase } from "../useIconPhase.ts";
 
 
 
+/**
+ * Sample content for the preview card. One static sentence only tells you whether
+ * that sentence is readable — a short status, a long wrapped one, an error, and a
+ * quiet idle state exercise the surfaces very differently, so the preview cycles
+ * through a few rather than picking one for good.
+ */
+const PREVIEW_SCENARIOS: {
+  title: string;
+  body: string;
+  meta: string;
+  link: string;
+  code: { kw: string; fn: string; str: string };
+  chips: string[];
+}[] = [
+  {
+    title: "Session on main",
+    body: "Waiting on a permission prompt for a write to appearance.ts.",
+    meta: "11:04 · 3.2k tokens",
+    link: "an accent link",
+    code: { kw: "export", fn: "buildSurfaces", str: "dark" },
+    chips: ["chip", "active"],
+  },
+  {
+    title: "Session on feat/glass-opacity",
+    body: "Reading through the theme studio to find where the slider bounds are set.",
+    meta: "09:41 · 640 tokens",
+    link: "view the diff",
+    code: { kw: "const", fn: "clamp", str: "0..95" },
+    chips: ["idle", "queued"],
+  },
+  {
+    title: "Session on hotfix/contrast-floor",
+    body: "Command failed: contrast ratio 2.9:1 is below the readability floor for this pair.",
+    meta: "14:52 · 1.1k tokens",
+    link: "open the error",
+    code: { kw: "throw", fn: "belowFloor", str: "text-secondary" },
+    chips: ["error", "blocked"],
+  },
+  {
+    title: "Session on main",
+    body: "Idle. Say the word and I'll pick up where the last run on this branch left off, whenever that turns out to be.",
+    meta: "yesterday · 18.7k tokens",
+    link: "resume this session",
+    code: { kw: "async function", fn: "resume", str: "session-id" },
+    chips: ["idle"],
+  },
+];
+
 const SLIDERS: { key: keyof CustomPalette; label: string; help: string; fmt: (v: number) => string }[] = [
   { key: "hue", label: "Hue", help: "The tint every surface carries", fmt: (v) => `${Math.round(v)}°` },
   { key: "depth", label: "Depth", help: "How dark the page itself is", fmt: (v) => v.toFixed(2) },
@@ -68,6 +116,8 @@ export function ThemeStudio({
   const phase = useIconPhase(a.motion);
   const [name, setName] = useState(editing ?? "");
   const [saved, setSaved] = useState<string | null>(null);
+  const [previewIdx, setPreviewIdx] = useState(0);
+  const scenario = PREVIEW_SCENARIOS[previewIdx];
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -230,6 +280,72 @@ export function ThemeStudio({
               </button>
               </div>
             </section>
+
+            <section className="studio-group">
+              <h3 className="studio-h">Interface effects</h3>
+              <div className="studio-row">
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={a.hoverFx}
+                    onChange={(e) => onChange({ hoverFx: e.target.checked })}
+                  />
+                  <span>Hover lift, button press feedback, streaming cursor</span>
+                </label>
+              </div>
+              <div className="studio-row">
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={a.glassFx}
+                    onChange={(e) => onChange({ glassFx: e.target.checked })}
+                  />
+                  <span>Frosted blur behind the drawer and dialogs</span>
+                </label>
+              </div>
+              {a.glassFx && (
+                <>
+                  <label className="studio-slider">
+                    <span className="studio-slider-label">
+                      Blur · {a.theme}
+                      <span className="studio-slider-help">How much of what's behind smears</span>
+                    </span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={30}
+                      step={1}
+                      value={a.glassBlur[a.theme]}
+                      onChange={(e) =>
+                        onChange({ glassBlur: { ...a.glassBlur, [a.theme]: Number(e.target.value) } })
+                      }
+                    />
+                    <span className="studio-slider-value">{a.glassBlur[a.theme]}px</span>
+                  </label>
+                  <label className="studio-slider">
+                    <span className="studio-slider-label">
+                      Panel opacity · {a.theme}
+                      <span className="studio-slider-help">Lower is more see-through glass</span>
+                    </span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={95}
+                      step={1}
+                      value={a.glassOpacity[a.theme]}
+                      onChange={(e) =>
+                        onChange({ glassOpacity: { ...a.glassOpacity, [a.theme]: Number(e.target.value) } })
+                      }
+                    />
+                    <span className="studio-slider-value">{a.glassOpacity[a.theme]}%</span>
+                  </label>
+                </>
+              )}
+              <span className="studio-note">
+                The hover and cursor motion stays off under your system's reduced-motion
+                setting regardless of this toggle.
+              </span>
+            </section>
           </div>
 
           <div className="studio-col">
@@ -368,6 +484,15 @@ export function ThemeStudio({
               inheriting them, so it stays honest even while the app around it is
               mid-change, and it can show both text steps and a code block at once. */}
           <div className="studio-preview" style={{ ...asVars(s), background: s["surface-0"] }}>
+            {/* Nothing else in this mock sits behind the card, so a backdrop blur has
+                nothing to smear and a slider drag looked like it did nothing. This
+                is purely a demo prop for that — nudged behind the card on purpose. */}
+            {a.glassFx && (
+              <div
+                className="studio-preview-glow"
+                style={{ background: `linear-gradient(135deg, ${accent}, ${s["surface-2"]})` }}
+              />
+            )}
             <div className="studio-preview-bar">
               <img src={faviconFor(a, false, phase)} alt="" width={16} height={16} />
               <span style={{ color: s["text-primary"] }}>Claude Sessions</span>
@@ -376,33 +501,52 @@ export function ThemeStudio({
 
             <div
               className="studio-preview-card"
-              style={{ background: s["surface-1"], borderColor: s.border }}
+              style={{
+                // Painted from the generated variables rather than the live
+                // data-glass-fx attribute, for the same reason the surface colours
+                // are: this has to stay honest while a slider is mid-drag, before
+                // applyAppearance has run.
+                background: a.glassFx
+                  ? `color-mix(in oklab, ${s["surface-1"]} ${a.glassOpacity[a.theme]}%, transparent)`
+                  : s["surface-1"],
+                borderColor: s.border,
+                backdropFilter: a.glassFx
+                  ? `blur(${a.glassBlur[a.theme] / 2}px) saturate(1.2)`
+                  : undefined,
+                WebkitBackdropFilter: a.glassFx
+                  ? `blur(${a.glassBlur[a.theme] / 2}px) saturate(1.2)`
+                  : undefined,
+              }}
             >
-              <div style={{ color: s["text-primary"], fontWeight: 600 }}>Session on main</div>
-              <div style={{ color: s["text-secondary"], fontSize: 13 }}>
-                Waiting on a permission prompt for a write to appearance.ts.
-              </div>
-              <div style={{ color: s["text-muted"], fontSize: 12 }}>11:04 · 3.2k tokens</div>
+              <div style={{ color: s["text-primary"], fontWeight: 600 }}>{scenario.title}</div>
+              <div style={{ color: s["text-secondary"], fontSize: 13 }}>{scenario.body}</div>
+              <div style={{ color: s["text-muted"], fontSize: 12 }}>{scenario.meta}</div>
               <a href="#" style={{ color: accent, fontSize: 13 }} onClick={(e) => e.preventDefault()}>
-                an accent link
+                {scenario.link}
               </a>
               <pre className="studio-preview-code" style={{ background: s["surface-2"] }}>
-                <span className="tok-kw">export</span>{" "}
-                <span className="tok-fn">buildSurfaces</span>
+                <span className="tok-kw">{scenario.code.kw}</span>{" "}
+                <span className="tok-fn">{scenario.code.fn}</span>
                 {"("}
-                <span className="tok-str">"dark"</span>
+                <span className="tok-str">"{scenario.code.str}"</span>
                 {") {"}
               </pre>
               <div className="studio-preview-chips">
-                <span
-                  className="chip"
-                  style={{ background: s["surface-2"], borderColor: s["border-strong"], color: s["text-secondary"] }}
-                >
-                  chip
-                </span>
-                <span className="chip" style={{ background: accent, color: ink, borderColor: accent }}>
-                  active
-                </span>
+                {scenario.chips.map((c, i) =>
+                  i === 0 ? (
+                    <span
+                      key={c}
+                      className="chip"
+                      style={{ background: s["surface-2"], borderColor: s["border-strong"], color: s["text-secondary"] }}
+                    >
+                      {c}
+                    </span>
+                  ) : (
+                    <span key={c} className="chip" style={{ background: accent, color: ink, borderColor: accent }}>
+                      {c}
+                    </span>
+                  ),
+                )}
                 <button
                   className="studio-preview-btn"
                   style={{ background: accent, color: ink }}
@@ -413,7 +557,16 @@ export function ThemeStudio({
               </div>
             </div>
 
-            <h4 className="studio-sub">Text on the surfaces</h4>
+            <h4 className="studio-sub" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              Text on the surfaces
+              <button
+                className="icon-btn tiny"
+                style={{ marginLeft: "auto" }}
+                onClick={() => setPreviewIdx((i) => (i + 1) % PREVIEW_SCENARIOS.length)}
+              >
+                Try another sample
+              </button>
+            </h4>
             <div className="studio-ratios">
               {ratios.map((r) => (
                 <span
