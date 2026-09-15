@@ -624,12 +624,46 @@ tr.click:hover td { background: var(--surface-2); }
 .drawer {
   position: fixed;
   top: 0; right: 0; bottom: 0;
-  width: min(820px, 94vw);
+  width: min(820px, 90vw);
+  max-width: 90vw;
   background: var(--surface-0);
   border-left: 1px solid var(--border);
   z-index: 21;
   overflow-y: auto;
   padding: 20px 24px 60px;
+}
+/* A capsule that floats entirely outside the drawer's own edge, over the
+   scrim, rather than a strip living inside the border — so it reads as a
+   handle you can spot at a glance instead of something you only discover on
+   hover. `right` is set inline to track the drawer's width; positioning it as
+   a sibling of the drawer (not a child) means the drawer's own overflow-y:
+   auto never clips it. */
+.drawer-resize-handle {
+  position: fixed;
+  top: 50%; right: 0;
+  width: 22px;
+  height: 64px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  z-index: 22;
+  touch-action: none;
+}
+.drawer-resize-grip {
+  width: 6px;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+.drawer-resize-handle:hover .drawer-resize-grip,
+.drawer-resize-handle:active .drawer-resize-grip {
+  border-color: var(--accent);
+  background-color: var(--accent);
 }
 /* Interface effects → glass panels: the surface itself turns translucent and blurs
    whatever is behind it (the page, scrolled underneath a fixed drawer), on top of
