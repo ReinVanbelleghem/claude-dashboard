@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { stalledReason, type AgentSummary, type Settings } from "../api.ts";
 import {
   applyEdgeMagnetism,
+  applyMoveMagnetism,
   clampRect,
   DOCK_DRAG_MIME,
   readDockOrder,
@@ -173,9 +174,19 @@ export function TileLayer({
       const dx = e.clientX - d.startX;
       const dy = e.clientY - d.startY;
       if (d.mode === "move") {
-        const rect = clampRect({ ...d.startRect, x: d.startRect.x + dx, y: Math.max(0, d.startRect.y + dy) });
-        onRectChangeRef.current(d.id, rect);
+        const dragged = clampRect({ ...d.startRect, x: d.startRect.x + dx, y: Math.max(0, d.startRect.y + dy) });
         const zone = snapZoneAt(e.clientX, e.clientY);
+        // Near a screen edge, the zone preview (about to replace the whole
+        // rect on release) is the snap that matters — magnetizing against a
+        // neighbor at the same time would fight it right where both are
+        // active. Elsewhere, snap against whatever else is open.
+        const rect = zone
+          ? dragged
+          : applyMoveMagnetism(
+              dragged,
+              tilesRef.current.filter((t) => t.id !== d.id && !t.minimized).map((t) => t.rect),
+            );
+        onRectChangeRef.current(d.id, rect);
         snapZoneRef.current = zone;
         setSnapZone(zone);
       } else {

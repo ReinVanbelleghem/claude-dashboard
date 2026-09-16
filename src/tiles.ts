@@ -261,6 +261,41 @@ export function applyEdgeMagnetism(
   return { x, y, w, h };
 }
 
+/**
+ * The same edge magnetism as `applyEdgeMagnetism`, but for a move instead of
+ * a resize: nothing is anchored (both x and y are free to move, and w/h
+ * never change), so rather than adjusting one already-dragged edge, this
+ * checks the dragged tile's leading and trailing edge on each axis against
+ * a neighbor's and takes whichever candidate lands closest. The same two
+ * kinds of target apply — flush for lining up with a same-type edge, offset
+ * by `SNAP_EDGE_GAP` for meeting an opposite-type edge nose to nose — and
+ * the same original-rect-for-overlap-checks fix from `applyEdgeMagnetism`
+ * carries over: computing eligibility from `x0`/`y0` rather than an
+ * already-snapped x or y keeps a flush x-snap from silently failing the
+ * y-overlap check on the technicality of no longer overlapping, only
+ * touching.
+ */
+export function applyMoveMagnetism(
+  rect: TileRect,
+  neighbors: TileRect[],
+  threshold = EDGE_SNAP_THRESHOLD,
+): TileRect {
+  const { x: x0, y: y0, w, h } = rect;
+  const xCandidates: number[] = [];
+  const yCandidates: number[] = [];
+  for (const n of neighbors) {
+    if (overlaps(y0, y0 + h, n.y, n.y + n.h)) {
+      xCandidates.push(n.x, n.x + n.w - w, n.x + n.w + SNAP_EDGE_GAP, n.x - SNAP_EDGE_GAP - w);
+    }
+    if (overlaps(x0, x0 + w, n.x, n.x + n.w)) {
+      yCandidates.push(n.y, n.y + n.h - h, n.y + n.h + SNAP_EDGE_GAP, n.y - SNAP_EDGE_GAP - h);
+    }
+  }
+  const x = nearest(x0, xCandidates, threshold);
+  const y = nearest(y0, yCandidates, threshold);
+  return { x, y, w, h };
+}
+
 export type SnapZone =
   | "left"
   | "right"
