@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { gitApi, type ProvisionMode, type ProvisionPlan, type ProvisionRule } from "../api.ts";
 import { TrashIcon } from "./Icons.tsx";
 
@@ -148,7 +149,12 @@ export function ProvisionEditor({ cwd }: { cwd: string }) {
         <span className="pv-open">Edit</span>
       </button>
 
-      {open && (
+      {open &&
+        // Portalled to <body>: this is always rendered inside WorktreesPanel's own
+        // `.panel`, which now always carries a `backdrop-filter`, and that creates a
+        // containing block for `.modal`'s `position: fixed` — the modal would center
+        // on that panel instead of the viewport. Same bug and fix as ThemeStudio.
+        createPortal(
         <>
           <div className="scrim" onClick={() => setOpen(false)} />
           <div
@@ -319,7 +325,8 @@ export function ProvisionEditor({ cwd }: { cwd: string }) {
               </button>
             </div>
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </div>
   );

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   accentColor,
   accentInkColor,
@@ -30,6 +31,25 @@ import { ColorPicker, ColorWell } from "./ColorPicker.tsx";
 import { useIconPhase } from "../useIconPhase.ts";
 
 
+
+const BG_BLUR_MAX = 60;
+
+/**
+ * A `backdrop-filter: blur()` px value is wildly non-linear perceptually: the
+ * jump from 0 to 3px is far more visible than 30 to 33px. A plain linear
+ * slider over 0–60 spent most of its drag distance on "very blurry, and
+ * increasingly indistinguishable from more very blurry", leaving almost no
+ * room to land precisely on the low end where the actual visible range is.
+ * Cubic-easing the slider position fixes that: the first two-thirds of the
+ * drag covers roughly 0–18px, the rest reaches on up to 60. The stored value
+ * is still a plain px number — only the *slider's* mapping to it is curved.
+ */
+function bgBlurSliderPos(px: number): number {
+  return Math.round(100 * Math.cbrt(Math.max(0, px) / BG_BLUR_MAX));
+}
+function bgBlurFromSliderPos(pos: number): number {
+  return Math.round(BG_BLUR_MAX * (pos / 100) ** 3 * 10) / 10;
+}
 
 /**
  * Sample content for the preview card. One static sentence only tells you whether
@@ -190,7 +210,17 @@ export function ThemeStudio({
     setName("");
   };
 
-  return (
+  // Portalled to <body> rather than returned in place: this is opened from deep
+  // inside Settings, nested under AppearancePanel's own `.panel`. `.panel` now
+  // always carries a `backdrop-filter` (glass tracks the sliders unconditionally
+  // — see styles.css), and backdrop-filter creates a new containing block for
+  // position:fixed descendants exactly like `filter`/`transform` do. Left in
+  // place, `.studio`'s `top: 50%; left: 50%` resolved against that nearby panel
+  // instead of the viewport, so the whole modal collapsed to its top-left corner
+  // instead of centering on screen. A portal sidesteps the ancestor chain
+  // entirely, which is the only fix that stays correct regardless of what a
+  // future ancestor's CSS does.
+  return createPortal(
     <>
       <div className="scrim studio-scrim" onClick={onClose} />
       <div className="studio" role="dialog" aria-modal="true" aria-label="Theme studio">
@@ -293,54 +323,71 @@ export function ThemeStudio({
                   <span>Hover lift, button press feedback, streaming cursor</span>
                 </label>
               </div>
-              <div className="studio-row">
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={a.glassFx}
-                    onChange={(e) => onChange({ glassFx: e.target.checked })}
-                  />
-                  <span>Frosted blur behind the drawer and dialogs</span>
-                </label>
-              </div>
-              {a.glassFx && (
-                <>
-                  <label className="studio-slider">
-                    <span className="studio-slider-label">
-                      Blur · {a.theme}
-                      <span className="studio-slider-help">How much of what's behind smears</span>
-                    </span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={30}
-                      step={1}
-                      value={a.glassBlur[a.theme]}
-                      onChange={(e) =>
-                        onChange({ glassBlur: { ...a.glassBlur, [a.theme]: Number(e.target.value) } })
-                      }
-                    />
-                    <span className="studio-slider-value">{a.glassBlur[a.theme]}px</span>
-                  </label>
-                  <label className="studio-slider">
-                    <span className="studio-slider-label">
-                      Panel opacity · {a.theme}
-                      <span className="studio-slider-help">Lower is more see-through glass</span>
-                    </span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={95}
-                      step={1}
-                      value={a.glassOpacity[a.theme]}
-                      onChange={(e) =>
-                        onChange({ glassOpacity: { ...a.glassOpacity, [a.theme]: Number(e.target.value) } })
-                      }
-                    />
-                    <span className="studio-slider-value">{a.glassOpacity[a.theme]}%</span>
-                  </label>
-                </>
-              )}
+              {/* Always mounted and always live, matching the two below: dialing
+                  one in ahead of wanting it (or leaving it set from before)
+                  should work without fighting a disabled slider, and keeping
+                  the DOM shape constant regardless of the value is what
+                  actually fixed the modal jumping/resizing on every change —
+                  worth keeping regardless of there being no checkbox left to
+                  toggle. */}
+              <label className="studio-slider">
+                <span className="studio-slider-label">
+                  Background blur · {a.theme}
+                  <span className="studio-slider-help">
+                    Blurs the page behind an open drawer or dialog — 0 is off
+                  </span>
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={bgBlurSliderPos(a.backgroundBlur[a.theme])}
+                  onChange={(e) =>
+                    onChange({
+                      backgroundBlur: {
+                        ...a.backgroundBlur,
+                        [a.theme]: bgBlurFromSliderPos(Number(e.target.value)),
+                      },
+                    })
+                  }
+                />
+                <span className="studio-slider-value">{a.backgroundBlur[a.theme]}px</span>
+              </label>
+              <label className="studio-slider">
+                <span className="studio-slider-label">
+                  Blur · {a.theme}
+                  <span className="studio-slider-help">How much of what's behind smears</span>
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={30}
+                  step={1}
+                  value={a.glassBlur[a.theme]}
+                  onChange={(e) =>
+                    onChange({ glassBlur: { ...a.glassBlur, [a.theme]: Number(e.target.value) } })
+                  }
+                />
+                <span className="studio-slider-value">{a.glassBlur[a.theme]}px</span>
+              </label>
+              <label className="studio-slider">
+                <span className="studio-slider-label">
+                  Panel opacity · {a.theme}
+                  <span className="studio-slider-help">Lower is more see-through glass</span>
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={95}
+                  step={1}
+                  value={a.glassOpacity[a.theme]}
+                  onChange={(e) =>
+                    onChange({ glassOpacity: { ...a.glassOpacity, [a.theme]: Number(e.target.value) } })
+                  }
+                />
+                <span className="studio-slider-value">{a.glassOpacity[a.theme]}%</span>
+              </label>
               <span className="studio-note">
                 The hover and cursor motion stays off under your system's reduced-motion
                 setting regardless of this toggle.
@@ -486,13 +533,14 @@ export function ThemeStudio({
           <div className="studio-preview" style={{ ...asVars(s), background: s["surface-0"] }}>
             {/* Nothing else in this mock sits behind the card, so a backdrop blur has
                 nothing to smear and a slider drag looked like it did nothing. This
-                is purely a demo prop for that — nudged behind the card on purpose. */}
-            {a.glassFx && (
-              <div
-                className="studio-preview-glow"
-                style={{ background: `linear-gradient(135deg, ${accent}, ${s["surface-2"]})` }}
-              />
-            )}
+                is purely a demo prop for that — nudged behind the card on purpose.
+                Unconditional now: the window's own glass is always on (see
+                .drawer/.tile-window/.modal/.studio in styles.css), so the preview
+                should never look like it's showing a state the app can't reach. */}
+            <div
+              className="studio-preview-glow"
+              style={{ background: `linear-gradient(135deg, ${accent}, ${s["surface-2"]})` }}
+            />
             <div className="studio-preview-bar">
               <img src={faviconFor(a, false, phase)} alt="" width={16} height={16} />
               <span style={{ color: s["text-primary"] }}>Claude Sessions</span>
@@ -503,19 +551,14 @@ export function ThemeStudio({
               className="studio-preview-card"
               style={{
                 // Painted from the generated variables rather than the live
-                // data-glass-fx attribute, for the same reason the surface colours
+                // CSS custom properties, for the same reason the surface colours
                 // are: this has to stay honest while a slider is mid-drag, before
-                // applyAppearance has run.
-                background: a.glassFx
-                  ? `color-mix(in oklab, ${s["surface-1"]} ${a.glassOpacity[a.theme]}%, transparent)`
-                  : s["surface-1"],
+                // applyAppearance has run. Unconditional to match the window's
+                // own glass always being on — see the note above.
+                background: `color-mix(in oklab, ${s["surface-1"]} ${a.glassOpacity[a.theme]}%, transparent)`,
                 borderColor: s.border,
-                backdropFilter: a.glassFx
-                  ? `blur(${a.glassBlur[a.theme] / 2}px) saturate(1.2)`
-                  : undefined,
-                WebkitBackdropFilter: a.glassFx
-                  ? `blur(${a.glassBlur[a.theme] / 2}px) saturate(1.2)`
-                  : undefined,
+                backdropFilter: `blur(${a.glassBlur[a.theme] / 2}px) saturate(1.2)`,
+                WebkitBackdropFilter: `blur(${a.glassBlur[a.theme] / 2}px) saturate(1.2)`,
               }}
             >
               <div style={{ color: s["text-primary"], fontWeight: 600 }}>{scenario.title}</div>
@@ -605,7 +648,8 @@ export function ThemeStudio({
           </button>
         </footer>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 

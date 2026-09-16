@@ -106,10 +106,23 @@ export type Settings = {
      */
     hideToolCalls: boolean;
     /**
-     * What clicking a session card does. The drawer keeps you on the list; the page
-     * gives the transcript, the git panel and the review room to breathe.
+     * What a plain click, a ⌘/Ctrl-click and an ⌥/Option-click each do with a
+     * session. The drawer keeps you on the list; the page gives the transcript,
+     * the git panel and the review room to breathe; a tile is a movable,
+     * resizable floating window. Three independent settings rather than one,
+     * because a click and its modified forms are three different intents
+     * ("glance", "commit to it", "keep an eye on it alongside something else")
+     * that used to only have two configurable destinations between them.
      */
-    openSessionsIn: "drawer" | "page";
+    clickOpensIn: "drawer" | "page" | "tile";
+    cmdClickOpensIn: "drawer" | "page" | "tile";
+    optionClickOpensIn: "drawer" | "page" | "tile";
+    /**
+     * @deprecated Replaced by `clickOpensIn`. Kept only so `loadSettings` can
+     * carry an existing choice forward the first time an old settings.json is
+     * read; never written after that.
+     */
+    openSessionsIn?: "drawer" | "page";
     /**
      * Theme, accent hue and tab icon. The daemon only stores it — the browser owns
      * the rendering, and keeps its own localStorage copy so the first paint is
@@ -179,7 +192,11 @@ const DEFAULTS: Settings = {
     diffMode: "unified",
     diffIgnoreWhitespace: false,
     hideToolCalls: false,
-    openSessionsIn: "drawer",
+    // Match the old hardcoded behavior exactly, so nobody's click behavior
+    // changes just because these settings now exist.
+    clickOpensIn: "drawer",
+    cmdClickOpensIn: "page",
+    optionClickOpensIn: "tile",
     worktreeRoot: "",
     worktreeProvision: DEFAULT_PROVISION,
     worktreeProvisionByRepo: {},
@@ -228,6 +245,12 @@ export function loadSettings(): Settings {
   try {
     const user = JSON.parse(readFileSync(SETTINGS_PATH, "utf8")) as DeepPartial<Settings>;
     current = merge(DEFAULTS, user);
+    // One-time carry-forward: a settings.json from before `clickOpensIn` existed
+    // has the old two-value `openSessionsIn` instead. Respect it rather than
+    // silently reverting an existing choice back to the "drawer" default.
+    if (user.ui?.openSessionsIn && !user.ui?.clickOpensIn) {
+      current = { ...current, ui: { ...current.ui, clickOpensIn: user.ui.openSessionsIn } };
+    }
   } catch {
     // A hand-edited file with a syntax error should not stop the daemon booting.
     current = DEFAULTS;

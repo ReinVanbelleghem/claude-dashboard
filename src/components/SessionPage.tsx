@@ -17,7 +17,7 @@ import { GitBadge, GitPanel } from "./GitPanel.tsx";
 import { MuteMenu } from "./MuteMenu.tsx";
 import { useGitRepo } from "./useGitRepo.ts";
 import { hasWorktreeSupport, WorktreesPanel } from "./WorktreesPanel.tsx";
-import { ExternalNotice, turnsOf } from "./SessionDrawer.tsx";
+import { ExternalNotice, turnsOf } from "./SessionPanelContent.tsx";
 import { Transcript } from "./Transcript.tsx";
 
 /**

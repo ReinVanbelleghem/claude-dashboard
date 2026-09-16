@@ -4,6 +4,7 @@ import type { Appearance } from "../appearance.ts";
 import { AppearancePanel } from "./AppearancePanel.tsx";
 import { CheckIcon } from "./Icons.tsx";
 import { McpPanel } from "./McpPanel.tsx";
+import { OpenTargetPicker } from "./OpenTargetPicker.tsx";
 
 /**
  * Preferences, saved on change.
@@ -450,23 +451,31 @@ export function SettingsView({
           <div className="panel">
             <h2>Sessions</h2>
             <p className="hint">
-              Every card also carries an ↗ that always opens the full page, whatever this is set to.
+              Every card also carries an ↗ that always opens the full page, whatever these are set to.
             </p>
-            <label className="field" style={{ maxWidth: 280 }}>
-              <span>Clicking a session opens</span>
-              <span className="select-wrap">
-                <select
-                  className="search select"
-                  value={settings.ui.openSessionsIn}
-                  onChange={(e) =>
-                    save({ ui: { openSessionsIn: e.target.value as "drawer" | "page" } })
-                  }
-                >
-                  <option value="drawer">The side drawer</option>
-                  <option value="page">The full page</option>
-                </select>
-              </span>
-            </label>
+            <div className="open-target-grid">
+              <label className="field">
+                <span>Click</span>
+                <OpenTargetPicker
+                  value={settings.ui.clickOpensIn}
+                  onChange={(v) => save({ ui: { clickOpensIn: v } })}
+                />
+              </label>
+              <label className="field">
+                <span>⌘/Ctrl-click</span>
+                <OpenTargetPicker
+                  value={settings.ui.cmdClickOpensIn}
+                  onChange={(v) => save({ ui: { cmdClickOpensIn: v } })}
+                />
+              </label>
+              <label className="field">
+                <span>⌥/Option-click</span>
+                <OpenTargetPicker
+                  value={settings.ui.optionClickOpensIn}
+                  onChange={(v) => save({ ui: { optionClickOpensIn: v } })}
+                />
+              </label>
+            </div>
           </div>
         )}
 

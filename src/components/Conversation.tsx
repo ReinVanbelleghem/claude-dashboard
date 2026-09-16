@@ -182,11 +182,18 @@ export function LiveConversation({
   settings,
   onSettings,
   onGone,
+  scrollJumpVariant = "float",
 }: {
   agentKey: string;
   settings?: Settings | null;
   onSettings?: (s: Settings) => void;
   onGone?: () => void;
+  /**
+   * "float" assumes the drawer/full page's room to work with; a tile passes
+   * "compact" so the jump buttons stay sized and positioned for a window
+   * that might only be a few hundred pixels tall, instead of overflowing it.
+   */
+  scrollJumpVariant?: "float" | "compact";
 }) {
   const [data, setData] = useState<AgentDetail | null>(null);
   const [streaming, setStreaming] = useState("");
@@ -966,7 +973,7 @@ export function LiveConversation({
         )}
         {busy && !streaming && tab === null && <div className="chat-working">working…</div>}
       </div>
-      <ScrollJump target={scroller} {...edges} />
+      <ScrollJump target={scroller} {...edges} variant={scrollJumpVariant} />
       </div>
 
       {ended && (

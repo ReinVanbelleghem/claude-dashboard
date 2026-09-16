@@ -117,16 +117,28 @@ export type Appearance = {
   /** Hover lift on cards/tiles, button press feedback, the streaming cursor blink,
    *  chart draw-in. Ignored under reduced motion regardless of this setting. */
   hoverFx: boolean;
-  /** Frosted blur behind the drawer/modal scrim. Off is plainer but cheaper to paint. */
-  glassFx: boolean;
+  /**
+   * @deprecated Replaced by `backgroundBlur` (0 is "off"). Kept only so
+   * `normalizeAppearance` can migrate an old on/off choice the first time it
+   * sees one; never read anywhere else.
+   */
+  glassFx?: boolean;
   /** Backdrop blur radius, in px, on the drawer/modal/palette panels themselves —
-   *  not just the scrim behind them. Only visible while glassFx is on. One value per
-   *  mode: a blur that reads as a light frost on a dark ground can look like fog on
-   *  a pale one, so the two columns are allowed to disagree like every other slider. */
+   *  always on, independent of the toggle below. One value per mode: a blur
+   *  that reads as a light frost on a dark ground can look like fog on a pale
+   *  one, so the two columns are allowed to disagree like every other slider. */
   glassBlur: { dark: number; light: number };
   /** How much of the panel's surface colour shows through, 0–100, one value per
    *  mode. Lower reads as more see-through; higher is closer to the old solid panel. */
   glassOpacity: { dark: number; light: number };
+  /**
+   * Blur radius, in px, applied to whatever's *behind* an open drawer/modal —
+   * the scrim, not the window. 0 means off; there's no separate switch for
+   * this anymore, just drag the slider down. Also gates the general "frosted
+   * chrome" look on cards/panels/buttons elsewhere in the app, since that
+   * shared the same on/off flag from the start.
+   */
+  backgroundBlur: { dark: number; light: number };
 };
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -145,9 +157,9 @@ export const DEFAULT_APPEARANCE: Appearance = {
   faviconColor: "clay",
   motion: true,
   hoverFx: true,
-  glassFx: true,
   glassBlur: { dark: 18, light: 18 },
   glassOpacity: { dark: 70, light: 78 },
+  backgroundBlur: { dark: 3, light: 3 },
 };
 
 export const ACCENTS: { name: AccentName; label: string; dark: string; light: string }[] = [
@@ -1083,6 +1095,14 @@ export function normalizeAppearance(partial: Partial<Appearance> | null | undefi
     customAccentInk: { ...DEFAULT_APPEARANCE.customAccentInk, ...(p.customAccentInk ?? {}) },
     glassBlur: { ...DEFAULT_APPEARANCE.glassBlur, ...(p.glassBlur ?? {}) },
     glassOpacity: { ...DEFAULT_APPEARANCE.glassOpacity, ...(p.glassOpacity ?? {}) },
+    // A saved appearance with the old on/off `glassFx` but no `backgroundBlur`
+    // yet gets one derived from it — off stays off (0), on gets the default
+    // amount — so upgrading doesn't silently turn background blur on for
+    // someone who'd switched it off, or off for someone who never touched it.
+    backgroundBlur: {
+      dark: p.backgroundBlur?.dark ?? (p.glassFx === false ? 0 : DEFAULT_APPEARANCE.backgroundBlur.dark),
+      light: p.backgroundBlur?.light ?? (p.glassFx === false ? 0 : DEFAULT_APPEARANCE.backgroundBlur.light),
+    },
   };
 }
 
@@ -1154,9 +1174,13 @@ export function applyAppearance(a: Appearance) {
   const root = document.documentElement;
   root.dataset.theme = a.theme;
   root.dataset.hoverFx = a.hoverFx ? "on" : "off";
-  root.dataset.glassFx = a.glassFx ? "on" : "off";
+  // Driven by the slider now rather than a separate switch: 0 is "off", same
+  // as the checkbox used to mean, and also still what gates the general
+  // frosted-chrome look on cards/panels/buttons that shared this flag.
+  root.dataset.glassFx = a.backgroundBlur[a.theme] > 0 ? "on" : "off";
   root.style.setProperty("--glass-blur", `${a.glassBlur[a.theme]}px`);
   root.style.setProperty("--glass-opacity", `${a.glassOpacity[a.theme]}%`);
+  root.style.setProperty("--bg-blur", `${a.backgroundBlur[a.theme]}px`);
   root.style.setProperty("--accent", accentColor(a));
   // What goes on top of the accent, not beside it. A user-chosen accent spans the
   // whole lightness range, so anything filled with --accent needs a measured label

@@ -118,20 +118,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
  */
 .shell { max-width: 2100px; margin: 0 auto; padding: 20px clamp(16px, 2vw, 40px) 64px; }
 
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding-bottom: 18px;
-}
-
 .brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
-  font-size: 17px;
+  font-size: 14px;
   font-weight: 620;
   letter-spacing: -0.01em;
+  flex: 0 0 auto;
 }
 /* The mark and the title are one target back to Live, so the whole thing looks
    and behaves like a home link rather than the header text happening to be clickable. */
@@ -207,26 +201,37 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); }
 .conn.off .dot { background: var(--critical); }
 
-.spacer { flex: 1; }
-
-.tabs { display: flex; gap: 4px; background: var(--surface-2); padding: 3px; border-radius: 8px; }
-.tabs button {
-  border: 0;
-  background: transparent;
-  padding: 6px 14px;
-  border-radius: 6px;
-  font-size: 13px;
+/* The page switcher, folded into the dock as its own row of text bubbles —
+   one pill per page, same idiom as a session chip rather than a segmented
+   control, so the whole bar reads as one family of controls. */
+.dock-nav { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.dock-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: 6px 12px;
+  border-radius: 9px;
+  font-size: 12px;
   font-weight: 520;
   color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
-.tabs button[aria-selected="true"] {
+.dock-nav-btn:hover { border-color: var(--accent); }
+.dock-nav-btn[aria-selected="true"] {
   background: var(--surface-0);
   color: var(--text-primary);
+  border-color: var(--accent);
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
 }
-.tabs button .badge {
+.dock-nav-btn .icon { width: 14px; height: 14px; vertical-align: -2px; }
+.dock-nav-btn-icon { padding: 6px 10px; }
+.dock-nav-btn-icon .icon { width: 15px; height: 15px; }
+.dock-nav-btn .badge {
   display: inline-block;
-  margin-left: 6px;
   min-width: 16px;
   padding: 0 4px;
   border-radius: 8px;
@@ -253,7 +258,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 /* Not .primary: a solid accent fill is a call to action, and a glass CTA is
    harder to read at exactly the moment legibility matters most. */
-:root[data-glass-fx="on"] .icon-btn:not(.primary) {
+.icon-btn:not(.primary) {
   background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
@@ -273,7 +278,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border-radius: var(--radius);
   padding: 14px 16px 15px;
 }
-:root[data-glass-fx="on"] .tile {
+/* Unconditional, same as .drawer/.tile-window/.modal/.studio: a stat tile's own
+   material tracks the sliders regardless of whether the "glass panels" checkbox
+   (which is specifically about blurring the page behind an open drawer/dialog)
+   is on. */
+.tile {
   background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 2)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 2)) saturate(1.2);
@@ -359,7 +368,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* Interface effects → glass, surface-1 group: raised chrome (cards, tiles, buttons,
    selects) gets a lighter blur than a full-screen modal — it is sitting in the page
    flow, not floating over it, so a heavy smear would fight the content around it. */
-:root[data-glass-fx="on"] .card {
+.card {
   background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 2)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 2)) saturate(1.2);
@@ -400,14 +409,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .card.dead { border-left-color: var(--critical); opacity: 0.72; }
 /* The state tint has to survive glass mode too, or "something is happening here"
    disappears the moment the background goes translucent. */
-:root[data-glass-fx="on"] .card.busy {
+.card.busy {
   background: color-mix(
     in oklab,
     var(--accent) 8%,
     color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent)
   );
 }
-:root[data-glass-fx="on"] .card.attention {
+.card.attention {
   background: color-mix(
     in oklab,
     var(--warning) 7%,
@@ -465,7 +474,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font: 600 11px/16px var(--mono);
   text-transform: lowercase;
 }
-:root[data-glass-fx="on"] .pill {
+.pill {
   background: color-mix(in oklab, var(--surface-2) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
@@ -555,7 +564,7 @@ tr.click:hover td { background: var(--surface-2); }
   margin-bottom: 14px;
 }
 .search:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
-:root[data-glass-fx="on"] .search {
+.search {
   background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
@@ -619,8 +628,20 @@ tr.click:hover td { background: var(--surface-2); }
 }
 
 /* ── drawer ────────────────────────────────────────────────────────────────── */
-.scrim { position: fixed; inset: 0; background: rgb(0 0 0 / 0.5); z-index: 20; }
-:root[data-glass-fx="on"] .scrim { backdrop-filter: blur(calc(var(--glass-blur, 18px) / 6)); }
+/* No dim at all, ever — a tile has no scrim behind it and reads perfectly
+   fine on its own translucent material, so a drawer/file-picker/new-session
+   dialog doesn't need one either. This used to darken (unconditionally, then
+   only when the toggle was on) and bled through the window's own always-on
+   translucency as an unwanted dark tint. The toggle's job is purely "blur
+   what's behind an open window or not" — never "darken the page" — so only
+   the blur is conditional here. */
+.scrim { position: fixed; inset: 0; background: transparent; z-index: 20; }
+:root[data-glass-fx="on"] .scrim {
+  /* Its own slider (Background blur), not a fraction of the window's own —
+     the two used to be tied together at 1/6 of the window's blur, which is
+     exactly the "why can't I turn this up more" ceiling this var removes. */
+  backdrop-filter: blur(var(--bg-blur, 3px));
+}
 .drawer {
   position: fixed;
   top: 0; right: 0; bottom: 0;
@@ -665,11 +686,11 @@ tr.click:hover td { background: var(--surface-2); }
   border-color: var(--accent);
   background-color: var(--accent);
 }
-/* Interface effects → glass panels: the surface itself turns translucent and blurs
-   whatever is behind it (the page, scrolled underneath a fixed drawer), on top of
-   the flat blurred scrim already dimming the rest of the page. Blur radius and how
-   much of the surface colour shows through are both sliders in the theme studio. */
-:root[data-glass-fx="on"] .drawer {
+/* The window's own glass look — unconditional, not gated by the "glass panels"
+   checkbox: that toggle is specifically about whether opening this dims/blurs
+   the *page behind it* (the scrim, below); how translucent and blurred the
+   window itself is is just "whatever the sliders currently say", on or off. */
+.drawer {
   background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
   -webkit-backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
@@ -687,6 +708,334 @@ tr.click:hover td { background: var(--surface-2); }
 }
 .drawer-actions { flex: 0 0 auto; display: flex; gap: 8px; padding-top: 1px; }
 .drawer-actions a { text-decoration: none; }
+
+/* ── tiles ─────────────────────────────────────────────────────────────────── */
+/* Sits behind the scrim (20) and the drawer (21) — so opening something in the
+   drawer is never lost behind a tile — but above the ordinary page. Individual
+   tiles opt back into pointer-events since the layer itself must not swallow
+   clicks on the app underneath it when nothing is open.
+   Named `.tile-window` rather than `.tile` on purpose — `.tile` is already the
+   small KPI/stat box used in the budget row and the drawer's stat panels, and
+   reusing it here once clobbered that layout instead of styling a window. */
+.tile-layer { position: fixed; inset: 0; z-index: 10; pointer-events: none; }
+.tile-window {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-0);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgb(0 0 0 / 0.35);
+  overflow: hidden;
+  pointer-events: auto;
+}
+/* Unconditional for the same reason .drawer's is: a tile's own glass look
+   tracks the sliders regardless of whether the "glass panels" checkbox is on,
+   since that checkbox is about the page behind an open drawer/dialog, not
+   about this window's own material. */
+.tile-window {
+  background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+}
+.tile-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 24px;
+}
+
+/* The real session header doubles as the drag handle in a tile — its own
+   buttons and links opt back out via the pointer-target check in TileLayer —
+   so no second header bar is needed just to hold a grip.
+   A grid rather than the base rule's flex + space-between: with lights on
+   one side and Notify/pop-out on the other being different widths, the
+   flex version "centered" the title only by accident, and drifted off
+   centre — visibly, distractingly — as soon as those widths differed by
+   more than a few px. Grid's 1fr middle column centers it for real, and
+   `align-items: center` (the base rule uses flex-start, for the drawer's own
+   long-title wrapping) keeps a 12px dot level with the title text next to it
+   instead of stranded against the top of the row. This has to come before
+   the `.tile-body-live` rules below: same specificity, so whichever is later
+   in the file wins, and the live variant's tighter padding needs to win for
+   live tiles specifically. */
+.tile-window .drawer-head {
+  cursor: grab;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  padding: 10px 16px;
+  gap: 8px;
+}
+.tile-window .drawer-head:active { cursor: grabbing; }
+.tile-window .drawer-head h3 {
+  font-size: 14px;
+  margin: 0;
+  text-align: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tile-window .drawer-meta { padding: 0 20px; }
+.tile-window .drawer-meta .drawer-sub { font-size: 12px; }
+
+/* A live agent gets the same flex-column treatment `.drawer-live` gives the
+   drawer: header stays put, `.chat-scroll` becomes the one thing that
+   scrolls, and the composer — the last flex child, nothing after it — simply
+   never moves instead of needing `position: sticky` to fake staying put.
+   Padding is reset to 0 here rather than kept and re-shrunk per child: the
+   base `.tile-body` padding (16/20/24px) was stacking with each child's own
+   — a chat-scroll with 10px of its own sitting inside a parent already 20px
+   padded reads as a 30px gutter, not 10 — which is the "why is there so
+   much dead space on the sides" the compact rules below were fighting. */
+.tile-body-live { display: flex; flex-direction: column; padding: 0; overflow-y: hidden; }
+.tile-body-live .drawer-head { flex: 0 0 auto; }
+.tile-body-live .chat-scroll-wrap { flex: 1 1 auto; min-height: 0; }
+.tile-body-live .chat-scroll { min-height: 0; }
+
+/* A tile is a glance, not the control surface — the path, the model/mode
+   pickers and the hide-tools/End row are all one tap away on the full page,
+   and repeating them here was more chrome than a small window has room for. */
+.tile-body-live .drawer-meta,
+.tile-body-live .live-controls { display: none; }
+
+.tile-body-live .drawer-head { padding: 8px 13px; gap: 8px; }
+.tile-body-live .drawer-head h3 { font-size: 13px; }
+.tile-body-live .agent-tabs { padding: 5px 13px; }
+.tile-body-live .chat-scroll { padding: 10px 13px 5px; }
+.tile-body-live .composer-wrap { padding: 0 13px 10px; }
+/* The placeholder sentence ("Message Claude... ↵ to send, ⇧↵ for a new
+   line…") was written for the drawer's width. At a tile's width it wrapped
+   onto a second line with nothing there to break on — `pre-wrap` plus
+   `break-word` will force a line break even mid-word once nothing fits —
+   which then got clipped by the column below it. Truncating just the
+   placeholder (not real typed text, which still needs to wrap to stay
+   readable while composing) is a one-line fix scoped to exactly that. */
+.tile-body-live .composer-box::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── traffic lights ───────────────────────────────────────────────────────── */
+.tile-lights { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; padding-top: 2px; }
+.tile-light {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid rgb(0 0 0 / 0.25);
+  box-shadow: none;
+  outline: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  position: relative;
+  flex: 0 0 auto;
+}
+.tile-light-red { background: #ff5f57; }
+.tile-light-yellow { background: #febc2e; }
+.tile-light-green { background: #28c840; }
+.tile-light:hover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.18);
+}
+.tile-light-green-wrap { position: relative; display: inline-flex; }
+
+.tile-snap-menu {
+  /* position/top/left are set inline — computed off the green light's own
+     on-screen rect, since the menu is portaled to <body> to always paint
+     above every tile regardless of which one it was opened from. */
+  z-index: 30;
+  width: 200px;
+  max-height: min(480px, 80vh);
+  overflow-y: auto;
+  padding: 10px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.4);
+  cursor: default;
+}
+.tile-snap-menu-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 2px 2px 6px;
+}
+.tile-snap-menu-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
+.tile-snap-menu-row.thirds { grid-template-columns: repeat(3, 1fr); }
+.tile-snap-menu-row:last-child { margin-bottom: 0; }
+.tile-snap-menu-btn {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 7px;
+  padding: 6px;
+  cursor: pointer;
+}
+.tile-snap-menu-btn:hover { border-color: var(--accent); }
+.snap-icon {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--surface-0);
+  overflow: hidden;
+}
+.snap-icon-fill { position: absolute; background: var(--accent); }
+
+.tile-resize { position: absolute; z-index: 1; }
+.tile-resize-n, .tile-resize-s { left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+.tile-resize-n { top: -3px; }
+.tile-resize-s { bottom: -3px; }
+.tile-resize-e, .tile-resize-w { top: 6px; bottom: 6px; width: 6px; cursor: ew-resize; }
+.tile-resize-e { right: -3px; }
+.tile-resize-w { left: -3px; }
+.tile-resize-ne, .tile-resize-nw, .tile-resize-se, .tile-resize-sw {
+  width: 14px;
+  height: 14px;
+  z-index: 2;
+}
+.tile-resize-ne { top: -4px; right: -4px; cursor: nesw-resize; }
+.tile-resize-nw { top: -4px; left: -4px; cursor: nwse-resize; }
+.tile-resize-se { bottom: -4px; right: -4px; cursor: nwse-resize; }
+.tile-resize-sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
+
+.tile-snap-preview {
+  position: fixed;
+  z-index: 11;
+  border: 2px dashed var(--accent);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 13px/1 var(--mono);
+  color: var(--accent);
+  pointer-events: none;
+}
+
+/* ── dock ──────────────────────────────────────────────────────────────────── */
+/* Bottom-center floating pill, same as before — it just carries more now:
+   brand, page nav and theme toggle joined the session chips as one row of
+   flexed groups, all on a single line that never wraps. Mounted once at the
+   app's top level regardless of which tab is active, so it's reachable no
+   matter where you navigate to next. */
+.tile-dock {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 19;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 10px;
+  padding: 8px 12px;
+  max-width: min(1100px, 94vw);
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.35);
+  pointer-events: auto;
+}
+.tile-dock {
+  background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+}
+.tile-dock-all {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.tile-dock-all:hover { background: var(--surface-2); color: var(--text-primary); }
+.tile-dock-sep { width: 1px; align-self: stretch; background: var(--border); flex: 0 0 auto; }
+/* The pill hugs its content — brand, nav, utility button and theme toggle
+   each keep their natural width, and only this strip of session chips ever
+   scrolls, capped so a long chip list can't stretch the whole pill wide. */
+.dock-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 420px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.tile-dock-chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px 6px 10px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.tile-dock-chip:hover { border-color: var(--accent); }
+.tile-dock-chip.dragging { opacity: 0.45; }
+.tile-dock-chip.drag-over { border-color: var(--accent); box-shadow: -3px 0 0 0 var(--accent); }
+/* The same "a lit dot under a running app" cue a real dock uses, so a chip
+   answers "is this actually open right now, or just parked" at a glance —
+   clicking it either way is the same toggle either state answers to. */
+.tile-dock-chip.open::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  transform: translateX(-50%);
+}
+.tile-dock-chip-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+
+/* Same read as a live card's status pill, condensed to one dot — a session
+   dropped to the dock still owes you "is it waiting on me" at a glance. */
+.tile-dock-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex: 0 0 auto; }
+.tile-dock-chip.attention .dot { background: var(--warning); animation: pulse 1.6s ease-in-out infinite; }
+.tile-dock-chip.busy .dot { background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+.tile-dock-chip.stalled .dot, .tile-dock-chip.dead .dot { background: var(--critical); }
+.tile-dock-chip.idle .dot { background: var(--good); }
+@media (prefers-reduced-motion: reduce) {
+  .tile-dock-chip.attention .dot, .tile-dock-chip.busy .dot { animation: none; }
+}
+.tile-dock-chip-close {
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 5px;
+}
+.tile-dock-chip-close:hover { color: var(--critical); background: var(--surface-1); }
 
 /* ── transcript ────────────────────────────────────────────────────────────── */
 /* On the full page the transcript is bounded and scrolls inside its panel, so a
@@ -744,7 +1093,7 @@ tr.click:hover td { background: var(--surface-2); }
   font-size: 12px;
   flex-wrap: wrap;
 }
-:root[data-glass-fx="on"] .cmd {
+.cmd {
   background: color-mix(in oklab, var(--surface-2) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
@@ -772,7 +1121,7 @@ tr.click:hover td { background: var(--surface-2); }
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
-:root[data-glass-fx="on"] .md code {
+.md code {
   background: color-mix(in oklab, var(--surface-2) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
@@ -786,7 +1135,7 @@ tr.click:hover td { background: var(--surface-2); }
   background: var(--surface-0);
   overflow-x: auto;
 }
-:root[data-glass-fx="on"] .md-code {
+.md-code {
   background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 2)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 2)) saturate(1.2);
@@ -795,7 +1144,7 @@ tr.click:hover td { background: var(--surface-2); }
 /* The glass rule above targets every `.md code`, which also matches a code block's
    own `<code>` — undoing the plain override just above unless this repeats it at
    matching specificity, placed after so the tie breaks its way. */
-:root[data-glass-fx="on"] .md-code code {
+.md-code code {
   background: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -907,7 +1256,7 @@ tr.click:hover td { background: var(--surface-2); }
   font-size: 12px;
   max-width: 150px;
 }
-:root[data-glass-fx="on"] .mini-select {
+.mini-select {
   background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
@@ -988,7 +1337,8 @@ tr.click:hover td { background: var(--surface-2); }
   background: var(--surface-1);
   box-shadow: 0 18px 50px rgb(0 0 0 / 0.45);
 }
-:root[data-glass-fx="on"] .modal {
+/* Unconditional — see .drawer above for why. */
+.modal {
   background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
   -webkit-backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
@@ -1126,7 +1476,7 @@ tr.click:hover td { background: var(--surface-2); }
   background: var(--surface-0);
 }
 .composer-field:focus-within { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
-:root[data-glass-fx="on"] .composer-field {
+.composer-field {
   background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
@@ -1515,7 +1865,13 @@ a { color: var(--accent); }
 .icon-btn.ghost:hover { border-color: var(--critical); color: var(--critical); background: var(--surface-1); }
 
 /* ── slash-command menu ────────────────────────────────────────────────────── */
-.composer-wrap { position: relative; }
+/* Its flex-column siblings (.live-controls, .agent-tabs) both pin themselves
+   with flex: 0 0 auto; this one didn't, so its default flex-shrink: 1 let a
+   short column (a tile, mainly) squeeze it below its own content height —
+   and since the column hides overflow at that level (chat-scroll does the
+   scrolling), the squeeze just clipped the composer instead of the layout
+   making room for it. */
+.composer-wrap { position: relative; flex-shrink: 0; }
 .cmd-menu {
   position: absolute;
   left: 0; right: 0; bottom: 100%;
@@ -1643,6 +1999,58 @@ a { color: var(--accent); }
 .set-ok { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--good); }
 .set-warn { font-size: 11px; color: var(--critical); }
 .set-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+
+/* ── open-target picker ───────────────────────────────────────────────────── */
+.open-target-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.open-target-picker { position: relative; }
+.open-target-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.open-target-trigger:hover { border-color: var(--border-strong); }
+.open-target-trigger .icon { width: 18px; height: 18px; flex: 0 0 auto; color: var(--text-secondary); }
+.open-target-trigger span:not(.icon) { flex: 1 1 auto; text-align: left; }
+.open-target-caret { flex: 0 0 auto; font-size: 10px; color: var(--text-muted); }
+.open-target-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: max(100%, 260px);
+  padding: 6px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.3);
+}
+.open-target-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.open-target-option:hover { background: var(--surface-2); }
+.open-target-option.on { background: color-mix(in oklab, var(--accent) 14%, var(--surface-2)); }
+.open-target-option .icon { width: 20px; height: 20px; flex: 0 0 auto; color: var(--text-secondary); }
+.open-target-option-text { display: flex; flex-direction: column; gap: 1px; }
+.open-target-option-label { font-size: 13px; }
+.open-target-option-hint { font-size: 11px; color: var(--text-muted); }
 .set-actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
 .indented { margin-left: 25px; }
 .with-unit { display: flex; align-items: center; gap: 8px; }
@@ -1966,7 +2374,7 @@ a { color: var(--accent); }
   color: var(--text-secondary);
   max-width: 100%;
 }
-:root[data-glass-fx="on"] .git-badge {
+.git-badge {
   background: color-mix(in oklab, var(--surface-2) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
@@ -2182,7 +2590,7 @@ a { color: var(--accent); }
 .chat-scroll-wrap > .chat-scroll { flex: 1; }
 .scroll-jump {
   position: absolute;
-  right: 14px;
+  right: 24px;
   bottom: 12px;
   z-index: 4;
   display: flex;
@@ -2240,13 +2648,13 @@ a { color: var(--accent); }
 }
 .agent-tab:hover { background: var(--surface-1); }
 .agent-tab.active { border-bottom-color: var(--accent); background: var(--surface-1); }
-:root[data-glass-fx="on"] .agent-tab {
+.agent-tab {
   background: color-mix(in oklab, var(--surface-2) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
 }
-:root[data-glass-fx="on"] .agent-tab:hover,
-:root[data-glass-fx="on"] .agent-tab.active {
+.agent-tab:hover,
+.agent-tab.active {
   background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
 }
 .agent-tab-top { display: flex; align-items: center; gap: 6px; }
@@ -2301,7 +2709,33 @@ a { color: var(--accent); }
   color: var(--warning);
 }
 /* Anchored to the viewport, over the drawer, clear of its edge. */
-.scroll-jump.fixed { position: fixed; right: 26px; bottom: 26px; z-index: 22; }
+.scroll-jump.fixed { position: fixed; right: 26px; bottom: 78px; z-index: 22; }
+/* Anchored to the tile's own body instead — a tile can be anywhere on screen,
+   so a viewport corner is the wrong reference point for it. Smaller too: the
+   full-size pill (28px tall, 13px side padding) was sized for the drawer and
+   full page, and at a tile's scale that was big enough to overlap the last
+   line of the transcript instead of floating clear above the composer. */
+.scroll-jump.compact { position: absolute; right: 20px; bottom: 8px; z-index: 5; gap: 4px; }
+/* No shadow at all here, unlike the base button: against a light surface
+   even a small one reads as a solid rectangle sitting behind the pill
+   rather than a lift, which is the opposite of "floating" this is meant to
+   be — the border alone is enough to read as a control. */
+.scroll-jump.compact .jump-btn {
+  height: 22px;
+  padding: 0 9px;
+  font-size: 11px;
+  gap: 3px;
+  box-shadow: none;
+}
+/* Glass effects put a backdrop-filter blur on every .jump-btn — at the usual
+   28px size it's a subtle frost, but on this 22px one the same blur radius
+   is disproportionately large and reads as a hazy glow around the button
+   rather than a material. A solid background reads correctly at this size. */
+.scroll-jump.compact .jump-btn {
+  background: var(--surface-1);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 
 /* ── subagent report ───────────────────────────────────────────────────────── */
 .agent-report {
@@ -2406,6 +2840,12 @@ a { color: var(--accent); }
   padding: 2px 4px;
   border-radius: 5px;
   color: var(--text-muted);
+  /* Shared by the "open full page" link and the "open as a tile" button — the
+     latter needs the reset the former gets for free from not being a button. */
+  border: 0;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
 }
 .card-open:hover { color: var(--accent); background: var(--surface-2); }
 .review-elsewhere { color: var(--text-muted); font-weight: 500; }
@@ -2748,7 +3188,7 @@ a { color: var(--accent); }
   z-index: 32;
   overflow: hidden;
 }
-:root[data-glass-fx="on"] .palette {
+.palette {
   background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
   -webkit-backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
@@ -3127,7 +3567,8 @@ a { color: var(--accent); }
   box-shadow: 0 28px 70px rgb(0 0 0 / 0.55);
   overflow: hidden;
 }
-:root[data-glass-fx="on"] .studio {
+/* Unconditional — see .drawer above for why. */
+.studio {
   background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
   -webkit-backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
@@ -3152,6 +3593,10 @@ a { color: var(--accent); }
   gap: 14px;
   padding: 14px;
   overflow-y: auto;
+  /* Reserves the scrollbar's width whether or not content is currently tall
+     enough to need it, so a scrollbar appearing/disappearing (any content in
+     here can toggle it) never reflows these fr-based columns. */
+  scrollbar-gutter: stable;
 }
 .studio-span { grid-column: 1 / -1; }
 .studio-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
@@ -3163,7 +3608,7 @@ a { color: var(--accent); }
   border-radius: 12px;
   background: var(--surface-0);
 }
-:root[data-glass-fx="on"] .studio-group {
+.studio-group {
   background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
@@ -4034,7 +4479,7 @@ a { color: var(--accent); }
    colour pickers. */
 .icon-btn:focus-visible,
 .link-btn:focus-visible,
-.tabs button:focus-visible,
+.dock-nav-btn:focus-visible,
 .card:focus-visible,
 .palette-row:focus-visible,
 .card-open:focus-visible,
@@ -4171,17 +4616,19 @@ tr.click:focus-visible {
 .top-session-name, .top-session-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── answer-next bar ──────────────────────────────────────────────────────── */
-/* Sticky rather than in the header: it is the one thing that should follow you
-   down a long transcript, and the header already holds five other jobs. */
+/* A floating toast in the corner rather than inline in the header: it needs
+   to follow you everywhere — including over an open tile — without sitting
+   on top of whatever you're actually looking at mid-page. */
 .answer-bar {
-  position: sticky;
-  top: 0;
-  z-index: 20;
+  position: fixed;
+  right: 24px;
+  bottom: 76px;
+  z-index: 25;
   display: flex;
   align-items: center;
   gap: 9px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
+  max-width: 420px;
   padding: 9px 14px;
   border: 1px solid color-mix(in oklab, var(--warning) 42%, var(--border));
   border-radius: var(--radius);
@@ -4189,6 +4636,12 @@ tr.click:focus-visible {
   font-size: 12px;
   color: var(--text-secondary);
   backdrop-filter: blur(6px);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+  animation: answer-bar-in 0.18s ease-out;
+}
+@keyframes answer-bar-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .answer-dot {
   width: 8px;
@@ -4213,6 +4666,7 @@ tr.click:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   .answer-dot { animation: none; }
+  .answer-bar { animation: none; }
 }
 
 /* Inside the field, pinned to its bottom-right corner rather than stacked beside
@@ -4442,125 +4896,154 @@ tr.click:focus-visible {
    that was not already hand-tuned above, grouped by surface tier so the fill
    colour and its comma list live together instead of five lines repeated a
    hundred times. Excludes decorative bars/tracks and the page canvas, where
-   translucency has nothing meaningful to blend with. */
-:root[data-glass-fx="on"] .tabs button[aria-selected="true"],
-:root[data-glass-fx="on"] .pager-size select,
-:root[data-glass-fx="on"] .tool pre,
-:root[data-glass-fx="on"] .perm-input,
-:root[data-glass-fx="on"] .seg button.active,
-:root[data-glass-fx="on"] .fav-label-input:focus,
-:root[data-glass-fx="on"] .diff-file,
-:root[data-glass-fx="on"] .bash-line,
-:root[data-glass-fx="on"] .attach-chip img,
-:root[data-glass-fx="on"] .turn-thumb {
+   translucency has nothing meaningful to blend with.
+
+   `:not(:has(.scrim))` on every selector here: these elements are ordinary
+   page chrome that blurs *itself* against whatever's scrolled behind it —
+   correct with nothing else going on. But a `backdrop-filter` opens its own
+   compositing layer, and browsers don't reliably re-composite an ancestor's
+   blur (the modal scrim's) over a descendant that already has one of its
+   own — so behind an open modal, this element's independent self-blur was
+   winning and it read as a sharp patch in an otherwise blurred backdrop.
+   Suppressing it whenever any `.scrim` exists in the document leaves the
+   scrim as the single compositor for everything behind the modal, which is
+   the same model `.drawer` / `.tile-window` / `.modal` already use for
+   their own (untouched, still-active) glass backgrounds below. */
+.dock-nav-btn[aria-selected="true"],
+.pager-size select,
+.tool pre,
+.perm-input,
+.seg button.active,
+.fav-label-input:focus,
+.diff-file,
+.bash-line,
+.attach-chip img,
+.turn-thumb {
   background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
 }
 
-:root[data-glass-fx="on"] .panel,
-:root[data-glass-fx="on"] .md-copy:hover,
-:root[data-glass-fx="on"] .seg,
-:root[data-glass-fx="on"] .modal.wide.scroll .modal-head,
-:root[data-glass-fx="on"] .folder-card:hover,
-:root[data-glass-fx="on"] .icon-btn.ghost:hover,
-:root[data-glass-fx="on"] .cmd-menu,
-:root[data-glass-fx="on"] .branch-trigger,
-:root[data-glass-fx="on"] .branch-pop,
-:root[data-glass-fx="on"] .git-commit-box textarea,
-:root[data-glass-fx="on"] .commit-body,
-:root[data-glass-fx="on"] .diff-file-head:hover,
-:root[data-glass-fx="on"] .diff-act:hover,
-:root[data-glass-fx="on"] .diff-act.on,
-:root[data-glass-fx="on"] .file-editor-code,
-:root[data-glass-fx="on"] .jump-btn,
-:root[data-glass-fx="on"] .line-review,
-:root[data-glass-fx="on"] .file-review,
-:root[data-glass-fx="on"] .settings-nav,
-:root[data-glass-fx="on"] .palette-card,
-:root[data-glass-fx="on"] .find-bar,
-:root[data-glass-fx="on"] .saved-theme-apply,
-:root[data-glass-fx="on"] .cp-pop,
-:root[data-glass-fx="on"] .ink-pick,
-:root[data-glass-fx="on"] .ask-option,
-:root[data-glass-fx="on"] .mute-menu,
-:root[data-glass-fx="on"] .mute-item,
-:root[data-glass-fx="on"] .pv-list,
-:root[data-glass-fx="on"] .wt-row,
-:root[data-glass-fx="on"] .new-wt,
-:root[data-glass-fx="on"] .scope-btn.on,
-:root[data-glass-fx="on"] .mcp-connect {
+.panel,
+.md-copy:hover,
+.seg,
+.modal.wide.scroll .modal-head,
+.folder-card:hover,
+.icon-btn.ghost:hover,
+.cmd-menu,
+.branch-trigger,
+.branch-pop,
+.git-commit-box textarea,
+.commit-body,
+.diff-file-head:hover,
+.diff-act:hover,
+.diff-act.on,
+.file-editor-code,
+.jump-btn,
+.line-review,
+.file-review,
+.settings-nav,
+.palette-card,
+.find-bar,
+.saved-theme-apply,
+.cp-pop,
+.ink-pick,
+.ask-option,
+.mute-menu,
+.mute-item,
+.pv-list,
+.wt-row,
+.new-wt,
+.scope-btn.on,
+.mcp-connect {
   background: color-mix(in oklab, var(--surface-1) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 3)) saturate(1.2);
 }
 
-:root[data-glass-fx="on"] .tabs,
-:root[data-glass-fx="on"] .ended-note,
-:root[data-glass-fx="on"] .external-note,
-:root[data-glass-fx="on"] .tool > summary,
-:root[data-glass-fx="on"] .modal.wide .modal-actions,
-:root[data-glass-fx="on"] .folder-card,
-:root[data-glass-fx="on"] .folder-card.locked:hover,
-:root[data-glass-fx="on"] .browser-foot,
-:root[data-glass-fx="on"] .ftype,
-:root[data-glass-fx="on"] .file-picker-row:hover,
-:root[data-glass-fx="on"] .fav-row-item,
-:root[data-glass-fx="on"] .cmd-option.active,
-:root[data-glass-fx="on"] .branch-trigger:hover,
-:root[data-glass-fx="on"] .branch-trigger.open,
-:root[data-glass-fx="on"] .branch-warn,
-:root[data-glass-fx="on"] .branch-error,
-:root[data-glass-fx="on"] .branch-row:hover:not(:disabled),
-:root[data-glass-fx="on"] .branch-row.current,
-:root[data-glass-fx="on"] .git-act:hover,
-:root[data-glass-fx="on"] .git-file:hover,
-:root[data-glass-fx="on"] .git-file.active,
-:root[data-glass-fx="on"] .git-status,
-:root[data-glass-fx="on"] .diff-file-head,
-:root[data-glass-fx="on"] .diff-hunk,
-:root[data-glass-fx="on"] .commit-head,
-:root[data-glass-fx="on"] .diff-file-head-row,
-:root[data-glass-fx="on"] .file-editor-gutter,
-:root[data-glass-fx="on"] .queued-chip,
-:root[data-glass-fx="on"] .agent-report,
-:root[data-glass-fx="on"] .review-bar,
-:root[data-glass-fx="on"] .comment,
-:root[data-glass-fx="on"] .card-open:hover,
-:root[data-glass-fx="on"] .branch-picked,
-:root[data-glass-fx="on"] .git-msg,
-:root[data-glass-fx="on"] .review-orphans,
-:root[data-glass-fx="on"] .fav-pick,
-:root[data-glass-fx="on"] .tab-preview,
-:root[data-glass-fx="on"] .settings-nav-item:hover,
-:root[data-glass-fx="on"] .palette-clear,
-:root[data-glass-fx="on"] .palette-count,
-:root[data-glass-fx="on"] .palette-meta,
-:root[data-glass-fx="on"] .palette-foot kbd,
-:root[data-glass-fx="on"] .cp-hex,
-:root[data-glass-fx="on"] .studio-h-tag,
-:root[data-glass-fx="on"] .custom-summary,
-:root[data-glass-fx="on"] .theme-hero,
-:root[data-glass-fx="on"] .studio-seed,
-:root[data-glass-fx="on"] .studio-glyph,
-:root[data-glass-fx="on"] .mute-row:hover,
-:root[data-glass-fx="on"] .pv-count,
-:root[data-glass-fx="on"] .pv-rule:hover,
-:root[data-glass-fx="on"] .pv-chip:hover,
-:root[data-glass-fx="on"] .wt-row.current,
-:root[data-glass-fx="on"] .wt-tile.current > .folder-card,
-:root[data-glass-fx="on"] .scope,
-:root[data-glass-fx="on"] .snip-tag,
-:root[data-glass-fx="on"] .top-session:hover,
-:root[data-glass-fx="on"] .composer-attach:hover:not(:disabled),
-:root[data-glass-fx="on"] .composer-tip,
-:root[data-glass-fx="on"] .mcp-tab:hover,
-:root[data-glass-fx="on"] .mcp-tab.on,
-:root[data-glass-fx="on"] .mcp-group-n,
-:root[data-glass-fx="on"] .mcp-card,
-:root[data-glass-fx="on"] .mcp-chip {
+.dock-nav-btn,
+.ended-note,
+.external-note,
+.tool > summary,
+.modal.wide .modal-actions,
+.folder-card,
+.folder-card.locked:hover,
+.browser-foot,
+.ftype,
+.file-picker-row:hover,
+.fav-row-item,
+.cmd-option.active,
+.branch-trigger:hover,
+.branch-trigger.open,
+.branch-warn,
+.branch-error,
+.branch-row:hover:not(:disabled),
+.branch-row.current,
+.git-act:hover,
+.git-file:hover,
+.git-file.active,
+.git-status,
+.diff-file-head,
+.diff-hunk,
+.commit-head,
+.diff-file-head-row,
+.file-editor-gutter,
+.queued-chip,
+.agent-report,
+.review-bar,
+.comment,
+.card-open:hover,
+.branch-picked,
+.git-msg,
+.review-orphans,
+.fav-pick,
+.tab-preview,
+.settings-nav-item:hover,
+.palette-clear,
+.palette-count,
+.palette-meta,
+.palette-foot kbd,
+.cp-hex,
+.studio-h-tag,
+.custom-summary,
+.theme-hero,
+.studio-seed,
+.studio-glyph,
+.mute-row:hover,
+.pv-count,
+.pv-rule:hover,
+.pv-chip:hover,
+.wt-row.current,
+.wt-tile.current > .folder-card,
+.scope,
+.snip-tag,
+.top-session:hover,
+.composer-attach:hover:not(:disabled),
+.composer-tip,
+.mcp-tab:hover,
+.mcp-tab.on,
+.mcp-group-n,
+.mcp-card,
+.mcp-chip {
   background: color-mix(in oklab, var(--surface-2) var(--glass-opacity, 70%), transparent);
   backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur, 18px) / 4)) saturate(1.2);
 }
 
+
+/* ── desktop tab ───────────────────────────────────────────────────────────── */
+/* A tall, mostly-empty canvas rather than a fixed-height block — it needs to
+   fill whatever room is left below the header so tiles have real space to
+   spread out over, not just the height of a centered hint. */
+.desktop-view { min-height: calc(100vh - 160px); display: flex; align-items: center; justify-content: center; }
+.desktop-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  text-align: center;
+  opacity: 0.6;
+}
+.desktop-hint .icon { width: 28px; height: 28px; }
+.desktop-hint p { margin: 0; font-size: 13px; line-height: 1.6; }

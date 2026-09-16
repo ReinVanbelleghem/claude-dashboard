@@ -314,8 +314,12 @@ export type Settings = {
     diffIgnoreWhitespace: boolean;
     /** Hide tool calls and thinking in conversations. */
     hideToolCalls: boolean;
-    /** Where a click on a session card lands. */
-    openSessionsIn: "drawer" | "page";
+    /** Where a plain click on a session card lands. */
+    clickOpensIn: "drawer" | "page" | "tile";
+    /** Where ⌘/Ctrl-click lands. */
+    cmdClickOpensIn: "drawer" | "page" | "tile";
+    /** Where ⌥/Option-click lands. */
+    optionClickOpensIn: "drawer" | "page" | "tile";
     /** Theme, accent hue and tab icon. Mirrored in localStorage for first paint. */
     appearance?: Appearance;
     /** Named looks the user saved, newest first. Each covers both dark and light. */

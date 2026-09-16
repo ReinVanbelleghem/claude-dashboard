@@ -71,9 +71,15 @@ export function ScrollJump({
    * "float" positions inside a wrapper that does not scroll. Use "fixed" when the
    * scroll container *is* the element the control lives in — an absolutely placed
    * child of a scroller is laid out against the scrolled content, so it rides up
-   * and down with it instead of staying put.
+   * and down with it instead of staying put. "compact" is the same idea as "fixed"
+   * but anchored to a floating tile's own body instead of the viewport corner
+   * (a tile can be anywhere on screen) and sized down to fit one. Named
+   * "compact" rather than "tile": the CSS class `.tile` already belongs to the
+   * KPI/stat box, and `variant="tile"` would render `class="scroll-jump tile"`
+   * — matching that unrelated rule and pulling in its background/border/radius,
+   * exactly the "why is there a box behind my button" bug that happened here.
    */
-  variant?: "float" | "fixed";
+  variant?: "float" | "fixed" | "compact";
 }) {
   if (!scrollable || (atTop && atBottom)) return null;
   const to = (top: number) => target.current?.scrollTo({ top, behavior: "smooth" });

@@ -376,3 +376,119 @@ export function TerminalIcon() {
     </svg>
   );
 }
+
+/** The side drawer: a panel docked to the right edge of the screen. */
+export function DrawerOpenIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <rect x="2.5" y="3.5" width="15" height="13" rx="1.8" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="11.5" y="3.5" width="6" height="13" rx="1" fill="currentColor" opacity="0.85" />
+    </svg>
+  );
+}
+
+/** The full page: the whole screen taken over by one surface. */
+export function FullPageIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <rect x="2.5" y="3.5" width="15" height="13" rx="1.8" fill="currentColor" opacity="0.85" />
+      <rect x="2.5" y="3.5" width="15" height="13" rx="1.8" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+/** A floating tile: its own small window over the rest of the screen. */
+export function TileWindowIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <rect x="2.5" y="3.5" width="15" height="13" rx="1.8" fill="none" stroke="currentColor" strokeWidth="1.4" opacity="0.6" />
+      <rect x="8" y="8" width="9" height="7" rx="1.3" fill="currentColor" opacity="0.85" />
+      <rect x="8" y="8" width="9" height="7" rx="1.3" fill="none" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
+/** Live: a heartbeat trace, since this tab is what's happening right now. */
+export function PulseIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <path
+        d="M2.5 10.5h3.2l1.6-4.2 3 8 1.7-6.4 1.3 2.6h4.2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** History: a clock face, for looking back over past sessions. */
+export function ClockIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="10" cy="10.5" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M10 7v3.7l2.6 1.6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** Usage: a small bar chart, for the tab that totals up tokens and cost. */
+export function ChartIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <path
+        d="M3.5 16.5v-5.2M8.2 16.5V6.3M12.9 16.5v-8.6M17.5 16.5V3.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+/** Settings: a gear, for the tab that adjusts everything else. */
+export function GearIcon() {
+  const teeth = Array.from({ length: 8 }, (_, i) => {
+    const angle = (i * Math.PI) / 4;
+    const at = (r: number) => [10 + Math.cos(angle) * r, 10 + Math.sin(angle) * r] as const;
+    const [x1, y1] = at(6.1);
+    const [x2, y2] = at(8);
+    return { x1, y1, x2, y2 };
+  });
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <g stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+        {teeth.map((t, i) => (
+          <line key={i} x1={t.x1.toFixed(2)} y1={t.y1.toFixed(2)} x2={t.x2.toFixed(2)} y2={t.y2.toFixed(2)} />
+        ))}
+      </g>
+      <circle cx="10" cy="10" r="4.4" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="10" cy="10" r="1.6" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** The nine-dot "app grid" glyph — here, minimize/restore every open tile at once. */
+export function NineDotsIcon() {
+  const positions = [3, 9.5, 16];
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      {positions.flatMap((cy) => positions.map((cx) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="1.5" fill="currentColor" />))}
+    </svg>
+  );
+}
+
+/** Every open tile dropping into the dock at once — a window frame with an
+ * arrow tucking down into it, distinct from the nine-dot page-grid glyph now
+ * that both live in the same bar. */
+export function ShowDesktopIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+      <rect x="2.5" y="3" width="15" height="9" rx="1.4" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M10 8v6M7 11.5l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}

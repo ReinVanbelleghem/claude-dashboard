@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { fileApi, type Browse } from "../api.ts";
 import { FileTypeIcon, FolderIcon } from "./Icons.tsx";
 
@@ -61,7 +62,11 @@ export function FilePicker({
   const searching = !!query.trim();
   const here = listing?.path ? `${repoName(listing.root)}/${listing.path}` : repoName(listing?.root);
 
-  return (
+  // Portalled to <body>: this opens nested inside GitPanel's own `.panel`, which
+  // (like every `.panel`) now always carries a `backdrop-filter`, and that creates
+  // a containing block for `.modal`'s `position: fixed` — the same bug fixed in
+  // ThemeStudio, avoided here the same way.
+  return createPortal(
     <>
       <div className="scrim" onClick={onClose} />
       <div className="modal wide" role="dialog" aria-modal="true">
@@ -149,7 +154,8 @@ export function FilePicker({
           )}
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 

@@ -15,9 +15,11 @@ import {
 import { EditableTitle } from "./EditableTitle.tsx";
 import { GitBadge } from "./GitPanel.tsx";
 import { MODE_LABEL } from "./Conversation.tsx";
-import { FolderIcon, PlusIcon } from "./Icons.tsx";
+import { DrawerOpenIcon, FolderIcon, PlusIcon } from "./Icons.tsx";
 import { MuteMenu } from "./MuteMenu.tsx";
 import { openable, type OpenOpts } from "./openable.ts";
+import { SESSION_DRAG_MIME } from "../tiles.ts";
+import type { DragEvent } from "react";
 
 /** Always opens the full page, whatever the click preference is set to. */
 function PageLink({ id }: { id: string }) {
@@ -31,6 +33,59 @@ function PageLink({ id }: { id: string }) {
       ↗
     </a>
   );
+}
+
+/**
+ * Always opens as a floating tile — the discoverable form of the same thing
+ * ⌥-click already does, for the card-head row of icon-only actions that are
+ * never described in a sentence anywhere in the UI.
+ */
+function TileLink({ id, onOpen }: { id: string; onOpen: (opts: OpenOpts) => void }) {
+  return (
+    <button
+      className="card-open"
+      title="Open as a tile (⌥-click also works)"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen({ tile: true });
+      }}
+    >
+      ⧉
+    </button>
+  );
+}
+
+/**
+ * Always opens in the side drawer. Added once Click/⌘-click/⌥-click each
+ * became independently reconfigurable in Settings → Sessions — before that,
+ * a plain click was guaranteed to reach the drawer if you wanted it; once
+ * all three can point anywhere, the drawer needs its own explicit way in
+ * too, the same as the tile and full-page buttons already have.
+ */
+function DrawerLink({ id, onOpen }: { id: string; onOpen: (opts: OpenOpts) => void }) {
+  return (
+    <button
+      className="card-open"
+      title="Open in the side drawer"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen({ drawer: true });
+      }}
+    >
+      <DrawerOpenIcon />
+    </button>
+  );
+}
+
+/** Session cards double as the source of a "drag onto a tile to split" gesture. */
+function dragSessionProps(id: string) {
+  return {
+    draggable: true,
+    onDragStart: (e: DragEvent) => {
+      e.dataTransfer?.setData(SESSION_DRAG_MIME, id);
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
+    },
+  } as const;
 }
 
 /** Registry status → visual class. Anything unrecognised falls through to idle. */
@@ -258,6 +313,7 @@ function AgentCards({
             style={{ cursor: "pointer" }}
             aria-label={`Open ${a.title ?? shortPath(a.cwd, 1)}`}
             {...openable((opts) => onOpen(a, opts))}
+            {...dragSessionProps(a.sessionId ?? a.key)}
           >
             <div className="card-head">
               {/* Double-click, not click: the whole card opens the session. */}
@@ -279,6 +335,8 @@ function AgentCards({
                 onSettings={onSettings}
                 compact
               />
+              <DrawerLink id={a.sessionId ?? a.key} onOpen={(opts) => onOpen(a, opts)} />
+              <TileLink id={a.sessionId ?? a.key} onOpen={(opts) => onOpen(a, opts)} />
               <PageLink id={a.sessionId ?? a.key} />
               <span className={`pill ${cls}`} title={stalled ?? undefined}>
                 <i className="dot" />
@@ -366,10 +424,13 @@ function Cards({
             style={{ cursor: "pointer" }}
             aria-label={`Open ${s.name ?? s.sessionId.slice(0, 8)}`}
             {...openable((opts) => onOpen(s.sessionId, opts))}
+            {...dragSessionProps(s.sessionId)}
           >
             <div className="card-head">
               <span className="card-name">{s.name ?? s.sessionId.slice(0, 8)}</span>
               <span className="spacer" style={{ flex: 1 }} />
+              <DrawerLink id={s.sessionId} onOpen={(opts) => onOpen(s.sessionId, opts)} />
+              <TileLink id={s.sessionId} onOpen={(opts) => onOpen(s.sessionId, opts)} />
               <PageLink id={s.sessionId} />
               <span className={`pill ${cls}`}>
                 <i className="dot" />

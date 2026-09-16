@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { gitApi, shortPath, type RepoStatus, type Worktree } from "../api.ts";
 import { BranchPicker, type BranchChoice } from "./BranchPicker.tsx";
 import { CheckIcon, FolderIcon, PlusIcon, RefreshIcon, TrashIcon, WorktreeIcon } from "./Icons.tsx";
@@ -299,30 +300,37 @@ export const WorktreesPanel = memo(function WorktreesPanel({
         )}
       </div>
 
-      {layout === "tiles" && adding && (
-        <>
-          <div className="scrim" onClick={() => setAdding(false)} />
-          <div
-            className="modal wt-new"
-            role="dialog"
-            aria-modal="true"
-            aria-label={`New worktree in ${title ?? "this repository"}`}
-          >
-            <h3>New worktree</h3>
-            <p className="hint">
-              Another checkout of {title ?? "this repository"}, on its own branch, in its own
-              directory. Nothing in the checkouts you already have moves.
-            </p>
-            <div className="wt-add">{picker}</div>
-            <div className="modal-actions">
-              <button className="icon-btn" onClick={() => setAdding(false)} disabled={!!busy}>
-                Cancel
-              </button>
-              {createBtn}
+      {layout === "tiles" &&
+        adding &&
+        // Portalled to <body>: this panel's own top-level element is `.panel`, which
+        // now always carries a `backdrop-filter`, and that creates a containing block
+        // for `.modal`'s `position: fixed` — the modal would center on this panel
+        // instead of the viewport. Same bug and fix as ThemeStudio.
+        createPortal(
+          <>
+            <div className="scrim" onClick={() => setAdding(false)} />
+            <div
+              className="modal wt-new"
+              role="dialog"
+              aria-modal="true"
+              aria-label={`New worktree in ${title ?? "this repository"}`}
+            >
+              <h3>New worktree</h3>
+              <p className="hint">
+                Another checkout of {title ?? "this repository"}, on its own branch, in its own
+                directory. Nothing in the checkouts you already have moves.
+              </p>
+              <div className="wt-add">{picker}</div>
+              <div className="modal-actions">
+                <button className="icon-btn" onClick={() => setAdding(false)} disabled={!!busy}>
+                  Cancel
+                </button>
+                {createBtn}
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          </>,
+          document.body,
+        )}
 
       {/*
         Only in tiles, which is the Worktrees page. In a session the panel is one of
