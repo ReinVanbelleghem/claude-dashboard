@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { stalledReason, type AgentSummary, type Settings } from "../api.ts";
 import {
+  applyEdgeMagnetism,
   clampRect,
   DOCK_DRAG_MIME,
   readDockOrder,
@@ -156,6 +157,12 @@ export function TileLayer({
   const snapZoneRef = useRef<SnapZone | null>(null);
   const onRectChangeRef = useRef(onRectChange);
   onRectChangeRef.current = onRectChange;
+  // Read fresh inside the one-time pointermove effect below, the same reason
+  // onRectChangeRef exists: a `[]`-deps effect closes over whatever `tiles`
+  // was at mount, and a resize needs this render's neighbor rects, not that
+  // one's.
+  const tilesRef = useRef(tiles);
+  tilesRef.current = tiles;
   const [dockOrder, setDockOrder] = useState<string[]>(readDockOrder);
   useEffect(() => writeDockOrder(dockOrder), [dockOrder]);
 
@@ -172,7 +179,13 @@ export function TileLayer({
         snapZoneRef.current = zone;
         setSnapZone(zone);
       } else {
-        onRectChangeRef.current(d.id, resizeRect(d.startRect, d.dir, dx, dy));
+        const resized = resizeRect(d.startRect, d.dir, dx, dy);
+        // Snap against every other open tile, minimized ones excluded since
+        // they have no on-screen edge to align with right now.
+        const neighbors = tilesRef.current
+          .filter((t) => t.id !== d.id && !t.minimized)
+          .map((t) => t.rect);
+        onRectChangeRef.current(d.id, applyEdgeMagnetism(resized, d.dir, neighbors));
       }
     }
     function onUp() {

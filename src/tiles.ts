@@ -155,6 +155,92 @@ export function resizeRect(start: TileRect, dir: ResizeDir, dx: number, dy: numb
   return { x, y, w, h };
 }
 
+/** How close a dragged edge has to land next to a neighbor's before it snaps
+ * to it exactly, in screen pixels. Loose enough to catch a "roughly lined
+ * up" drag, tight enough that closing in on a target rect for its own sake
+ * (not near anyone else's edge) doesn't fight you. */
+export const EDGE_SNAP_THRESHOLD = 8;
+
+/** True where [aStart, aEnd) and [bStart, bEnd) share any span at all —
+ * "these two tiles are at least partly side by side," the condition for one
+ * tile's edge to be a meaningful alignment target for the other's. Without
+ * it, resizing one tile's right edge could snap to some unrelated tile's
+ * left edge two screens away just because the x values happened to match. */
+function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+/** The candidate value closest to `value`, if any lands within `threshold` — otherwise `value` itself, unsnapped. */
+function nearest(value: number, candidates: number[], threshold: number): number {
+  let best = value;
+  let bestDist = threshold;
+  for (const c of candidates) {
+    const dist = Math.abs(c - value);
+    if (dist <= bestDist) {
+      bestDist = dist;
+      best = c;
+    }
+  }
+  return best;
+}
+
+/**
+ * Edge-to-edge magnetism: nudges whichever edge `dir` just dragged to line
+ * up exactly with a neighboring tile's edge, the same "snap assist" feel as
+ * the screen-edge/thirds grid in `snapZoneAt`, just against other tiles
+ * instead of the screen. Takes an already-`resizeRect`'d rect and only
+ * further adjusts the edge `dir` moved: `resizeRect` already anchored the
+ * opposite edge, so preserving that anchor here is what keeps a snap from
+ * also silently resizing the fixed side.
+ */
+export function applyEdgeMagnetism(
+  rect: TileRect,
+  dir: ResizeDir,
+  neighbors: TileRect[],
+  threshold = EDGE_SNAP_THRESHOLD,
+): TileRect {
+  // Overlap eligibility is checked against the rect as it came in, not as
+  // this function reshapes it: a corner drag (say "nw") snapping x flush
+  // against a neighbor first would otherwise leave x and that neighbor's
+  // edge merely touching rather than overlapping by the time the y check
+  // runs — failing `overlaps` on a technicality and silently dropping the
+  // second axis's snap.
+  const { x: x0, y: y0, w: w0, h: h0 } = rect;
+  let { x, y, w, h } = rect;
+
+  if (dir.includes("e") || dir.includes("w")) {
+    const xCandidates: number[] = [];
+    for (const n of neighbors) {
+      if (overlaps(y0, y0 + h0, n.y, n.y + n.h)) xCandidates.push(n.x, n.x + n.w);
+    }
+    if (dir.includes("e")) {
+      const right = nearest(x + w, xCandidates, threshold);
+      w = Math.max(TILE_MIN_WIDTH, right - x);
+    } else if (dir.includes("w")) {
+      const left = nearest(x, xCandidates, threshold);
+      w = Math.max(TILE_MIN_WIDTH, w + (x - left));
+      x = left;
+    }
+  }
+
+  if (dir.includes("n") || dir.includes("s")) {
+    const yCandidates: number[] = [];
+    for (const n of neighbors) {
+      if (overlaps(x0, x0 + w0, n.x, n.x + n.w)) yCandidates.push(n.y, n.y + n.h);
+    }
+    if (dir.includes("s")) {
+      const bottom = nearest(y + h, yCandidates, threshold);
+      h = Math.max(TILE_MIN_HEIGHT, bottom - y);
+    } else if (dir.includes("n")) {
+      const top = nearest(y, yCandidates, threshold);
+      h = Math.max(TILE_MIN_HEIGHT, h + (y - top));
+      y = top;
+    }
+  }
+
+  return { x, y, w, h };
+}
+
 export type SnapZone =
   | "left"
   | "right"
