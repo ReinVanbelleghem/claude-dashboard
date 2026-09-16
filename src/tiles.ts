@@ -48,8 +48,20 @@ export function popOutSession(id: string) {
   window.open(url, `claude-dashboard-session-${id}`, "width=760,height=920,noopener");
 }
 
+/**
+ * `documentElement.clientWidth`/`clientHeight`, not `window.innerWidth`/
+ * `innerHeight`: `<html>` keeps a permanently reserved 12px scrollbar
+ * gutter (`scrollbar-gutter: stable`, in styles.css, so the layout doesn't
+ * jump sideways between a short settings page and a long one) whether or
+ * not the page actually needs to scroll right now. `innerWidth` counts that
+ * gutter as part of the viewport; `clientWidth` — the visible content box,
+ * gutter excluded — is what a tile snapping "to the edge" should actually
+ * mean, or every right-edge snap in this file overshoots into the
+ * scrollbar's own track by the gutter's width.
+ */
 function viewport() {
-  return { w: window.innerWidth, h: window.innerHeight };
+  const el = document.documentElement;
+  return { w: el.clientWidth, h: el.clientHeight };
 }
 
 /** The vertical span actually free for a tile — the viewport height, minus
