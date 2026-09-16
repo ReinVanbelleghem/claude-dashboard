@@ -52,6 +52,16 @@ function viewport() {
   return { w: window.innerWidth, h: window.innerHeight };
 }
 
+/** The vertical span actually free for a tile — the viewport height, minus
+ * the dock's clearance at the bottom. Shared by `rectForZone` and the
+ * screen-edge magnetism below so a manually dragged tile's bottom stops at
+ * the same line a zone-snapped one's does, rather than drifting toward the
+ * dock independently. */
+function usableHeight(): number {
+  const { h: vh } = viewport();
+  return Math.max(TILE_MIN_HEIGHT, vh - DOCK_CLEARANCE);
+}
+
 /**
  * Keeps a tile mostly reachable rather than strictly on screen: a saved
  * position from a bigger monitor, or a window shrunk after the fact, should
@@ -202,6 +212,11 @@ function nearest(value: number, candidates: number[], threshold: number): number
  * of it instead, matching the breathing room every other snap in this file
  * already leaves between adjacent tiles — resizing shouldn't be the one path
  * that butts them up flush against each other.
+ *
+ * The screen's own edges are always in play too, at the same `SNAP_EDGE_GAP`
+ * a zone-snapped tile stops short of them by — resizing right up against the
+ * window edge should feel like the deliberate halves/thirds grid, not a
+ * separate, unrelated "how close is close enough" of its own.
  */
 export function applyEdgeMagnetism(
   rect: TileRect,
@@ -216,6 +231,7 @@ export function applyEdgeMagnetism(
   // runs — failing `overlaps` on a technicality and silently dropping the
   // second axis's snap.
   const { x: x0, y: y0, w: w0, h: h0 } = rect;
+  const { w: vw } = viewport();
   let { x, y, w, h } = rect;
 
   if (dir.includes("e") || dir.includes("w")) {
@@ -228,6 +244,7 @@ export function applyEdgeMagnetism(
         xCandidates.push(n.x, n.x + n.w + SNAP_EDGE_GAP);
       }
     }
+    xCandidates.push(dir.includes("e") ? vw - SNAP_EDGE_GAP : SNAP_EDGE_GAP);
     if (dir.includes("e")) {
       const right = nearest(x + w, xCandidates, threshold);
       w = Math.max(TILE_MIN_WIDTH, right - x);
@@ -248,6 +265,7 @@ export function applyEdgeMagnetism(
         yCandidates.push(n.y, n.y + n.h + SNAP_EDGE_GAP);
       }
     }
+    yCandidates.push(dir.includes("s") ? usableHeight() - SNAP_EDGE_GAP : SNAP_EDGE_GAP);
     if (dir.includes("s")) {
       const bottom = nearest(y + h, yCandidates, threshold);
       h = Math.max(TILE_MIN_HEIGHT, bottom - y);
@@ -274,6 +292,14 @@ export function applyEdgeMagnetism(
  * already-snapped x or y keeps a flush x-snap from silently failing the
  * y-overlap check on the technicality of no longer overlapping, only
  * touching.
+ *
+ * The screen's own edges are candidates here too, for the same reason as in
+ * `applyEdgeMagnetism`: a dragged tile settling `SNAP_EDGE_GAP` from the
+ * window edge should feel like one snap system, not this magnetism plus a
+ * separately-tuned "how close to the edge" rule of its own. This is a soft
+ * pull, not a wall — it only fires within `threshold`, so dragging well past
+ * the edge on purpose (say, to reach for a tile that scrolled off after the
+ * window shrank) still works exactly as before.
  */
 export function applyMoveMagnetism(
   rect: TileRect,
@@ -281,8 +307,9 @@ export function applyMoveMagnetism(
   threshold = EDGE_SNAP_THRESHOLD,
 ): TileRect {
   const { x: x0, y: y0, w, h } = rect;
-  const xCandidates: number[] = [];
-  const yCandidates: number[] = [];
+  const { w: vw } = viewport();
+  const xCandidates: number[] = [SNAP_EDGE_GAP, vw - SNAP_EDGE_GAP - w];
+  const yCandidates: number[] = [SNAP_EDGE_GAP, usableHeight() - SNAP_EDGE_GAP - h];
   for (const n of neighbors) {
     if (overlaps(y0, y0 + h, n.y, n.y + n.h)) {
       xCandidates.push(n.x, n.x + n.w - w, n.x + n.w + SNAP_EDGE_GAP, n.x - SNAP_EDGE_GAP - w);
@@ -354,8 +381,8 @@ function splitAxis(start: number, end: number, count: number, gap: number): { po
 }
 
 export function rectForZone(zone: SnapZone): TileRect {
-  const { w: vw, h: vh } = viewport();
-  const usableH = Math.max(TILE_MIN_HEIGHT, vh - DOCK_CLEARANCE);
+  const { w: vw } = viewport();
+  const usableH = usableHeight();
   const x0 = SNAP_EDGE_GAP;
   const y0 = SNAP_EDGE_GAP;
   const x1 = vw - SNAP_EDGE_GAP;
