@@ -157,9 +157,10 @@ export function resizeRect(start: TileRect, dir: ResizeDir, dx: number, dy: numb
 
 /** How close a dragged edge has to land next to a neighbor's before it snaps
  * to it exactly, in screen pixels. Loose enough to catch a "roughly lined
- * up" drag, tight enough that closing in on a target rect for its own sake
- * (not near anyone else's edge) doesn't fight you. */
-export const EDGE_SNAP_THRESHOLD = 8;
+ * up" drag — a mouse resize overshoots a razor-thin target more often than
+ * it lands on one — tight enough that closing in on a target rect for its
+ * own sake (not near anyone else's edge) doesn't fight you. */
+export const EDGE_SNAP_THRESHOLD = 12;
 
 /** True where [aStart, aEnd) and [bStart, bEnd) share any span at all —
  * "these two tiles are at least partly side by side," the condition for one
@@ -185,13 +186,22 @@ function nearest(value: number, candidates: number[], threshold: number): number
 }
 
 /**
- * Edge-to-edge magnetism: nudges whichever edge `dir` just dragged to line
- * up exactly with a neighboring tile's edge, the same "snap assist" feel as
- * the screen-edge/thirds grid in `snapZoneAt`, just against other tiles
- * instead of the screen. Takes an already-`resizeRect`'d rect and only
- * further adjusts the edge `dir` moved: `resizeRect` already anchored the
- * opposite edge, so preserving that anchor here is what keeps a snap from
- * also silently resizing the fixed side.
+ * Edge-to-edge magnetism: nudges whichever edge `dir` just dragged toward a
+ * neighboring tile's edge, the same "snap assist" feel as the screen-edge/
+ * thirds grid in `snapZoneAt`, just against other tiles instead of the
+ * screen. Takes an already-`resizeRect`'d rect and only further adjusts the
+ * edge `dir` moved: `resizeRect` already anchored the opposite edge, so
+ * preserving that anchor here is what keeps a snap from also silently
+ * resizing the fixed side.
+ *
+ * Two different targets, not one: lining up with a same-type edge (my right
+ * against another tile's right, say — two tiles stacked in a column,
+ * sharing a boundary they don't actually touch along this axis) snaps
+ * flush, no gap. Meeting an opposite-type edge (my right against another's
+ * *left* — two tiles genuinely side by side) snaps to `SNAP_EDGE_GAP` short
+ * of it instead, matching the breathing room every other snap in this file
+ * already leaves between adjacent tiles — resizing shouldn't be the one path
+ * that butts them up flush against each other.
  */
 export function applyEdgeMagnetism(
   rect: TileRect,
@@ -211,7 +221,12 @@ export function applyEdgeMagnetism(
   if (dir.includes("e") || dir.includes("w")) {
     const xCandidates: number[] = [];
     for (const n of neighbors) {
-      if (overlaps(y0, y0 + h0, n.y, n.y + n.h)) xCandidates.push(n.x, n.x + n.w);
+      if (!overlaps(y0, y0 + h0, n.y, n.y + n.h)) continue;
+      if (dir.includes("e")) {
+        xCandidates.push(n.x + n.w, n.x - SNAP_EDGE_GAP);
+      } else {
+        xCandidates.push(n.x, n.x + n.w + SNAP_EDGE_GAP);
+      }
     }
     if (dir.includes("e")) {
       const right = nearest(x + w, xCandidates, threshold);
@@ -226,7 +241,12 @@ export function applyEdgeMagnetism(
   if (dir.includes("n") || dir.includes("s")) {
     const yCandidates: number[] = [];
     for (const n of neighbors) {
-      if (overlaps(x0, x0 + w0, n.x, n.x + n.w)) yCandidates.push(n.y, n.y + n.h);
+      if (!overlaps(x0, x0 + w0, n.x, n.x + n.w)) continue;
+      if (dir.includes("s")) {
+        yCandidates.push(n.y + n.h, n.y - SNAP_EDGE_GAP);
+      } else {
+        yCandidates.push(n.y, n.y + n.h + SNAP_EDGE_GAP);
+      }
     }
     if (dir.includes("s")) {
       const bottom = nearest(y + h, yCandidates, threshold);
@@ -281,7 +301,11 @@ export function snapZoneAt(x: number, y: number): SnapZone | null {
 
 /** Breathing room between a snapped tile and the screen edges (or the dock,
  * on the bottom), and equally between two tiles sharing a snapped seam —
- * snapped tiles used to butt right up against both. */
+ * snapped tiles used to butt right up against both. Also what a resize's
+ * edge magnetism (`applyEdgeMagnetism`, above) targets when two tiles meet
+ * side by side, so a manually resized layout reads the same as an
+ * arrange-menu one instead of introducing its own, flush-against-each-
+ * other convention. */
 const SNAP_EDGE_GAP = 5;
 
 /** `count` equal segments spanning [start, end], with one `gap` between each
