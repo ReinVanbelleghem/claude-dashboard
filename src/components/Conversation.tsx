@@ -9,6 +9,7 @@ import {
   settingsApi,
   toolSummary,
   type AgentDetail,
+  type AgentMeter,
   type ImageMediaType,
   type ModelInfo,
   type PermissionMode,
@@ -331,6 +332,7 @@ export function LiveConversation({
       else if (e.type === "agent-tasks") setData((d) => (d ? { ...d, tasks: e.tasks } : d));
       else if (e.type === "agent-suggestion")
         setData((d) => (d ? { ...d, suggestion: e.suggestion } : d));
+      else if (e.type === "agent-meter") setData((d) => (d ? { ...d, meter: e.meter } : d));
       else if (e.type === "agent-item") {
         setStreaming("");
         setData((d) => {
@@ -1309,9 +1311,61 @@ export function LiveConversation({
           </div>
           </div>
         </div>
+        {data.meter && <UsageLine meter={data.meter} />}
       </div>
       {data.error && <div className="chat-error">{data.error}</div>}
     </>
+  );
+}
+
+/** 80% and up is worth a glance, 95% and up is about to bite. */
+function level(pct: number) {
+  return pct >= 95 ? "over" : pct >= 80 ? "warn" : "";
+}
+
+function untilReset(at: number, now: number) {
+  const min = Math.max(0, Math.round((at - now) / 60_000));
+  if (min >= 24 * 60) return `${Math.floor(min / 1440)}d ${Math.floor((min % 1440) / 60)}h`;
+  return min >= 60 ? `${Math.floor(min / 60)}h ${min % 60}m` : `${min}m`;
+}
+
+function kTokens(n: number) {
+  return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+}
+
+/**
+ * The terminal's status line under the composer: how full the context is, and how
+ * much of the 5-hour and weekly plan limits are spent. Plan limits only exist on a
+ * subscription, so with an API key the line is context alone.
+ */
+function UsageLine({ meter }: { meter: AgentMeter }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(t);
+  }, []);
+  const { context, fiveHour, sevenDay } = meter;
+  if (!context && !fiveHour && !sevenDay) return null;
+  return (
+    <div className="usage-line">
+      {context && (
+        <span className={level(context.pct)} title="Context window used by this session">
+          Context {Math.round(context.pct)}% · {kTokens(context.tokens)}/{kTokens(context.max)}
+        </span>
+      )}
+      {fiveHour && (
+        <span className={level(fiveHour.pct)} title="5-hour plan limit">
+          5h {Math.round(fiveHour.pct)}%
+          {fiveHour.resetsAt ? ` · resets in ${untilReset(fiveHour.resetsAt, now)}` : ""}
+        </span>
+      )}
+      {sevenDay && (
+        <span className={level(sevenDay.pct)} title="Weekly plan limit">
+          7d {Math.round(sevenDay.pct)}%
+          {sevenDay.resetsAt ? ` · resets in ${untilReset(sevenDay.resetsAt, now)}` : ""}
+        </span>
+      )}
+    </div>
   );
 }
 

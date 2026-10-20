@@ -1998,6 +1998,18 @@ a { color: var(--accent); }
    scrolling), the squeeze just clipped the composer instead of the layout
    making room for it. */
 .composer-wrap { position: relative; flex-shrink: 0; }
+/* The terminal's status line: context fill and plan limits, quiet until near a cap. */
+.usage-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding: 6px 2px 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.usage-line .warn { color: var(--warning); }
+.usage-line .over { color: var(--critical); }
 .cmd-menu {
   position: absolute;
   left: 0; right: 0; bottom: 100%;

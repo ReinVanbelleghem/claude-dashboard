@@ -155,6 +155,8 @@ type Agent = {
    * turn. Cleared the moment anything is sent, since it answers the turn before.
    */
   suggestion: string | null;
+  /** Context fill and plan limits, as the terminal's status line reports them. */
+  meter: Meter;
   stderr: string[];
   /**
    * A title that has not reached the transcript yet. A session renamed before its
@@ -167,6 +169,14 @@ type Agent = {
 };
 
 const agents = new Map<string, Agent>();
+
+/** Percent used of a plan window, and when it rolls over (epoch ms). */
+type Limit = { pct: number; resetsAt: number | null };
+type Meter = {
+  context: { tokens: number; max: number; pct: number } | null;
+  fiveHour: Limit | null;
+  sevenDay: Limit | null;
+};
 
 // ── surviving a restart ───────────────────────────────────────────────────────
 /**
@@ -378,6 +388,7 @@ export function getAgent(key: string) {
     models: a.models,
     commands: a.commands,
     suggestion: a.suggestion,
+    meter: a.meter,
     // Last words of the child process — the only clue when it dies unasked.
     stderr: a.stderr.join("").trim().split("\n").slice(-20).join("\n"),
   };
@@ -642,6 +653,7 @@ export function startAgent(opts: StartOptions): string {
     models: null,
     commands: null,
     suggestion: null,
+    meter: { context: null, fiveHour: null, sevenDay: null },
     stderr: [],
     pendingTitle: null,
     push: queue.push,
@@ -790,6 +802,32 @@ function applyTaskEvent(agent: Agent, msg: Record<string, any>) {
   touch(agent);
 }
 
+/**
+ * Re-read context fill and plan usage after a turn. The usage call is marked
+ * experimental in the SDK, so either half failing just leaves its last value.
+ */
+async function refreshMeter(agent: Agent) {
+  const [ctx, usage] = await Promise.allSettled([
+    agent.q.getContextUsage(),
+    agent.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
+  ]);
+  const m = agent.meter;
+  if (ctx.status === "fulfilled") {
+    const c = ctx.value;
+    m.context = { tokens: c.totalTokens, max: c.maxTokens, pct: c.percentage };
+  }
+  if (usage.status === "fulfilled") {
+    const limit = (w?: { utilization: number | null; resets_at: string | null } | null) =>
+      w && typeof w.utilization === "number"
+        ? { pct: w.utilization, resetsAt: w.resets_at ? Date.parse(w.resets_at) : null }
+        : null;
+    const rl = usage.value.rate_limits;
+    m.fiveHour = limit(rl?.five_hour) ?? m.fiveHour;
+    m.sevenDay = limit(rl?.seven_day) ?? m.sevenDay;
+  }
+  emit("agent-meter", { key: agent.key, meter: m });
+}
+
 /** Drain the SDK's message stream into the timeline the browser renders. */
 async function consume(agent: Agent) {
   try {
@@ -810,6 +848,7 @@ async function consume(agent: Agent) {
             if (anyMsg.model) agent.model = anyMsg.model;
             if (anyMsg.permissionMode) agent.permissionMode = anyMsg.permissionMode;
             touch(agent, agent.status === "starting" ? "idle" : agent.status);
+            void refreshMeter(agent);
           }
           break;
 
@@ -892,6 +931,26 @@ async function consume(agent: Agent) {
           });
           agent.streaming = "";
           touch(agent, "idle");
+          void refreshMeter(agent);
+          break;
+        }
+
+        case "rate_limit_event": {
+          // Pushed by the CLI as the limits move. The usage call in refreshMeter is
+          // richer, so this only fills in a window that call has not reported.
+          const info = anyMsg.rate_limit_info;
+          const slot =
+            info?.rateLimitType === "five_hour"
+              ? "fiveHour"
+              : info?.rateLimitType === "seven_day"
+                ? "sevenDay"
+                : null;
+          if (!slot || typeof info.utilization !== "number" || agent.meter[slot]) break;
+          agent.meter[slot] = {
+            pct: info.utilization * 100,
+            resetsAt: info.resetsAt ? info.resetsAt * 1000 : null,
+          };
+          emit("agent-meter", { key: agent.key, meter: agent.meter });
           break;
         }
 

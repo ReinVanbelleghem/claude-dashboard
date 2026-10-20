@@ -303,8 +303,18 @@ export type AgentDetail = AgentSummary & {
   commands: SlashCommand[] | null;
   /** The CLI's predicted next prompt after an idle turn, offered as ghost text. */
   suggestion: string | null;
+  /** Context fill and plan limits; any part is null until the CLI reports it. */
+  meter: AgentMeter;
   /** Tail of the child process's stderr — the clue when it dies unasked. */
   stderr: string;
+};
+
+/** Percent used of a plan window, and when it rolls over (epoch ms). */
+export type PlanLimit = { pct: number; resetsAt: number | null };
+export type AgentMeter = {
+  context: { tokens: number; max: number; pct: number } | null;
+  fiveHour: PlanLimit | null;
+  sevenDay: PlanLimit | null;
 };
 
 export type SlashCommand = { name: string; description: string; argumentHint?: string };
@@ -1150,6 +1160,7 @@ type AgentBusEvent =
   | { type: "agent-commands"; key: string; commands: SlashCommand[] }
   | { type: "agent-tasks"; key: string; tasks: TaskInfo[] }
   | { type: "agent-suggestion"; key: string; suggestion: string | null }
+  | { type: "agent-meter"; key: string; meter: AgentMeter }
   /** A review run's record changed — status, findings, replies — or it was deleted. */
   | { type: "pr-run"; run: PrRun | { id: string; deleted: true } }
   | { type: "pr-explain"; explanation: Explanation | { ids: string[]; deleted: true } };
