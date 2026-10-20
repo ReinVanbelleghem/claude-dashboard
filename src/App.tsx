@@ -366,7 +366,7 @@ export default function App() {
       setRestorable(roster.restorable);
       agentBus.publish({ type: "agents", ...roster });
     });
-    for (const name of ["agent-item", "agent-delta", "agent-models", "agent-commands", "agent-tasks"] as const) {
+    for (const name of ["agent-item", "agent-delta", "agent-models", "agent-commands", "agent-tasks", "agent-suggestion"] as const) {
       es.addEventListener(name, (e) =>
         agentBus.publish({ type: name, ...JSON.parse((e as MessageEvent).data) }),
       );

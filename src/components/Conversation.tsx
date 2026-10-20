@@ -329,6 +329,8 @@ export function LiveConversation({
       else if (e.type === "agent-commands")
         setData((d) => (d ? { ...d, commands: e.commands } : d));
       else if (e.type === "agent-tasks") setData((d) => (d ? { ...d, tasks: e.tasks } : d));
+      else if (e.type === "agent-suggestion")
+        setData((d) => (d ? { ...d, suggestion: e.suggestion } : d));
       else if (e.type === "agent-item") {
         setStreaming("");
         setData((d) => {
@@ -837,6 +839,8 @@ export function LiveConversation({
 
   const busy = data.status === "thinking" || data.status === "starting";
   const ended = data.status === "ended" || data.status === "error";
+  // Offered only where the terminal would: an idle session and an empty box.
+  const suggestion = !busy && !ended && !draft && data.suggestion ? data.suggestion : null;
   const waiting = data.timeline.filter(
     (i): i is Extract<TimelineItem, { kind: "permission" }> =>
       i.kind === "permission" && i.decision === null,
@@ -1156,9 +1160,11 @@ export function LiveConversation({
             placeholder={
               ended
                 ? "This session has ended."
-                : busy
-                  ? "Message Claude…  (↵ queues it for after this turn, esc stops)"
-                  : "Message Claude…  (↵ to send, ⇧↵ for a new line, ↑ for the last one)"
+                : suggestion
+                  ? `${suggestion}  (⇥ to use)`
+                  : busy
+                    ? "Message Claude…  (↵ queues it for after this turn, esc stops)"
+                    : "Message Claude…  (↵ to send, ⇧↵ for a new line, ↑ for the last one)"
             }
             disabled={ended}
             onChange={(e) => {
@@ -1241,6 +1247,17 @@ export function LiveConversation({
                   accept(Math.min(highlight, menuLen - 1));
                   return;
                 }
+              }
+              // Tab takes the suggestion into the box to edit or send, as in the terminal.
+              if (e.key === "Tab" && !e.shiftKey && suggestion) {
+                e.preventDefault();
+                setDraft(suggestion);
+                setCaret(suggestion.length);
+                requestAnimationFrame(() => {
+                  const el = box.current;
+                  if (el) el.selectionStart = el.selectionEnd = suggestion.length;
+                });
+                return;
               }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();

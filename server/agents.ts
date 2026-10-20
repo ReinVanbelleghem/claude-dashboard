@@ -150,6 +150,11 @@ type Agent = {
    * render interactive terminal UI rather than expanding into a prompt.
    */
   commands: { name: string; description: string; argumentHint?: string }[] | null;
+  /**
+   * The CLI's guess at the next prompt, the grey text the terminal offers after a
+   * turn. Cleared the moment anything is sent, since it answers the turn before.
+   */
+  suggestion: string | null;
   stderr: string[];
   /**
    * A title that has not reached the transcript yet. A session renamed before its
@@ -372,6 +377,7 @@ export function getAgent(key: string) {
     tasks: [...a.tasks.values()],
     models: a.models,
     commands: a.commands,
+    suggestion: a.suggestion,
     // Last words of the child process — the only clue when it dies unasked.
     stderr: a.stderr.join("").trim().split("\n").slice(-20).join("\n"),
   };
@@ -635,6 +641,7 @@ export function startAgent(opts: StartOptions): string {
     tasks: new Map(),
     models: null,
     commands: null,
+    suggestion: null,
     stderr: [],
     pendingTitle: null,
     push: queue.push,
@@ -664,6 +671,9 @@ export function startAgent(opts: StartOptions): string {
       // a rolling one-line summary of what each one is doing.
       forwardSubagentText: true,
       agentProgressSummaries: true,
+      // The terminal's ghost-text next prompt. It arrives after `result` and rides
+      // the turn's prompt cache, so it costs next to nothing.
+      promptSuggestions: true,
       // The whole point of this feature: a permission request becomes a
       // question in the browser instead of a blocked turn.
       canUseTool: (toolName, input, o) => askBrowser(agent, toolName, input, o),
@@ -884,6 +894,14 @@ async function consume(agent: Agent) {
           touch(agent, "idle");
           break;
         }
+
+        case "prompt_suggestion": {
+          // A message sent while this was being generated already made it stale.
+          if (agent.status !== "idle") break;
+          agent.suggestion = anyMsg.suggestion?.trim() || null;
+          emit("agent-suggestion", { key: agent.key, suggestion: agent.suggestion });
+          break;
+        }
       }
     }
     // The generator only finishes when the child process is gone, which for a
@@ -922,6 +940,10 @@ export function sendMessage(key: string, text: string, images: InboundImage[] = 
     ...(images.length ? { images: images.map(persistImage) } : {}),
   });
   a.push(userMessage(text, images, busy ? "next" : undefined));
+  if (a.suggestion) {
+    a.suggestion = null;
+    emit("agent-suggestion", { key, suggestion: null });
+  }
   if (!busy) touch(a, "thinking");
   else touch(a);
   return true;
