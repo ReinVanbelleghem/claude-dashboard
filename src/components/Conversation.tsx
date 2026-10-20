@@ -1330,6 +1330,7 @@ function untilReset(at: number, now: number) {
 }
 
 function kTokens(n: number) {
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
   return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
 }
 
