@@ -573,19 +573,21 @@ function FilterBar({
   }, [query]);
   return (
     <div className="pr-filters">
-      <Select
-        compact
-        value={filter.state ?? "open"}
-        onChange={(v) => onChange({ ...filter, state: v === "open" ? undefined : (v as PrState) })}
-        options={STATES}
-        ariaLabel="Pull request state"
-        renderTrigger={({ open }) => (
-          <span className={`icon-btn tiny ${filter.state && filter.state !== "open" ? "on" : ""} ${open ? "open" : ""}`}>
-            {STATES.find((o) => o.value === (filter.state ?? "open"))?.label}
-            <ChevronIcon />
-          </span>
-        )}
-      />
+      <div className="pr-state">
+        <Select
+          compact
+          value={filter.state ?? "open"}
+          onChange={(v) => onChange({ ...filter, state: v === "open" ? undefined : (v as PrState) })}
+          options={STATES}
+          ariaLabel="Pull request state"
+          renderTrigger={({ open }) => (
+            <span className={`icon-btn tiny ${filter.state && filter.state !== "open" ? "on" : ""} ${open ? "open" : ""}`}>
+              {STATES.find((o) => o.value === (filter.state ?? "open"))?.label}
+              <ChevronIcon />
+            </span>
+          )}
+        />
+      </div>
       <label className="check">
         <input type="checkbox" checked={!!filter.reviewRequestedFromMe} onChange={(e) => onChange({ ...filter, reviewRequestedFromMe: e.target.checked })} />
         <span>Review requested from me</span>
