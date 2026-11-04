@@ -42,6 +42,7 @@ const MUTE_KIND_LABEL: Record<NotifyEventKind, string> = {
   turnComplete: "Done",
   sessionError: "Error",
   prWatch: "PR activity",
+  prReviewRequested: "Review requested",
 };
 
 const EVENTS: { kind: NotifyEventKind; label: string; help: string }[] = [
@@ -69,6 +70,11 @@ const EVENTS: { kind: NotifyEventKind; label: string; help: string }[] = [
     kind: "prWatch",
     label: "Watched pull request changed",
     help: "A PR you watch on the Reviews page got a commit, review, comment, CI verdict, conflict, merge or close. One alert per PR per poll.",
+  },
+  {
+    kind: "prReviewRequested",
+    label: "Asked to review a pull request",
+    help: "Someone requested your review, personally or through one of your teams. Once per request; what else happens is set under Reviews → Watching.",
   },
 ];
 

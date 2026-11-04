@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { PrRef, PrSummary, PrWatch, PrWatchChange, PrWatchEntry } from "../shared/pr.ts";
 import { GithubError, graphql, viewerLogin } from "./github.ts";
+import { listReviewRequests } from "./prs.ts";
 import { fireEvent } from "./notify.ts";
 import { getSettings, onSettingsChange, updateSettings } from "./settings.ts";
 
@@ -139,6 +140,7 @@ async function pollAll() {
     }
     if (changed) emit("pr-watch", { watches: listWatches() });
     expire();
+    if (Date.now() >= backoffUntil) await pollRequests();
   } catch (err) {
     console.error("[claude-dashboard] PR watch pass failed:", err);
   } finally {
@@ -334,6 +336,66 @@ function writeRow(entry: PrRef, row: Row | null, snap: Snapshot, next: Partial<R
     next?.closed_at ?? null,
     JSON.stringify(snap),
   );
+}
+
+const SEEDED = { owner: "", repo: "", number: 0 };
+
+/**
+ * New review requests, announced once each. The first pass only records what is
+ * already asked of you; a queue that existed before the feature is not news.
+ */
+async function pollRequests() {
+  const mode = getSettings().reviews.reviewRequests;
+  if (mode === "off") return;
+  let requests: Awaited<ReturnType<typeof listReviewRequests>>;
+  try {
+    requests = await listReviewRequests();
+  } catch (e) {
+    if (e instanceof GithubError && (e.status === 403 || e.status === 429)) backoffUntil = Date.now() + Math.max(backoffMs, intervalMs());
+    return;
+  }
+  const now = new Date().toISOString();
+  const seen = new Set(
+    db
+      .query<{ owner: string; repo: string; number: number }, []>("SELECT owner, repo, number FROM pr_review_requests")
+      .all()
+      .map(keyOf),
+  );
+  const seeded = seen.has(keyOf(SEEDED));
+  const insert = db.query("INSERT OR IGNORE INTO pr_review_requests (owner, repo, number, seen_at) VALUES (?, ?, ?, ?)");
+  if (!seeded) insert.run(SEEDED.owner, SEEDED.repo, SEEDED.number, now);
+  let watchedAny = false;
+  for (const pr of requests) {
+    if (seen.has(keyOf(pr))) continue;
+    insert.run(pr.owner, pr.repo, pr.number, now);
+    if (!seeded) continue;
+    void fireEvent(
+      {
+        kind: "prReviewRequested",
+        key: `prReviewRequested:${keyOf(pr)}`,
+        sessionId: null,
+        muteIds: [],
+        label: `${pr.repo}#${pr.number}`,
+        context: pr.title,
+        detail: `${pr.authorName ?? pr.author} asked you to review`,
+      },
+      `#/pr/${pr.owner}/${pr.repo}/${pr.number}`,
+    );
+    if (mode === "watch" && !isWatched(pr)) {
+      updateSettings({ reviews: { watched: [...getSettings().reviews.watched, { owner: pr.owner, repo: pr.repo, number: pr.number, since: now }] } });
+      watchedAny = true;
+    }
+  }
+  // A request that is gone (reviewed, withdrawn, PR closed) is forgotten, so being
+  // asked again later counts as new.
+  const open = new Set(requests.map(keyOf));
+  const del = db.query("DELETE FROM pr_review_requests WHERE owner = ? AND repo = ? AND number = ?");
+  for (const k of seen) {
+    if (k === keyOf(SEEDED) || open.has(k)) continue;
+    const m = /^(.+?)\/(.+?)#(\d+)$/.exec(k);
+    if (m) del.run(m[1], m[2], Number(m[3]));
+  }
+  if (watchedAny) emit("settings", getSettings());
 }
 
 /** Drop merged and closed PRs once they have been that way for the configured number of days. */

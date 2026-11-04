@@ -297,6 +297,17 @@ function migrate(db: Database) {
       snapshot        TEXT NOT NULL,
       PRIMARY KEY (owner, repo, number)
     );
+
+    -- Review requests already announced, so a request only notifies once. The row
+    -- with number 0 marks that the first pass has run: without it an empty table
+    -- could not tell "nothing asked of you yet" from "never looked".
+    CREATE TABLE IF NOT EXISTS pr_review_requests (
+      owner      TEXT NOT NULL,
+      repo       TEXT NOT NULL,
+      number     INTEGER NOT NULL,
+      seen_at    TEXT NOT NULL,
+      PRIMARY KEY (owner, repo, number)
+    );
   `);
 
   if (needsArtifactBackfill) {

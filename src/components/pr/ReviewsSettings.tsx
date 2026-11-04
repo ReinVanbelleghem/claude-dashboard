@@ -323,6 +323,22 @@ export function ReviewsSettings({ settings, save, models }: { settings: Settings
             <span className="set-help">Keeps the list from filling with finished work. Zero keeps them until you unwatch.</span>
           </label>
         </div>
+        <h3 className="set-h">Review requests</h3>
+        <div className="set-grid" style={{ maxWidth: 760 }}>
+          <label className="field">
+            <span>When someone asks me to review a PR</span>
+            <Select
+              value={r.reviewRequests ?? "notify"}
+              onChange={(v) => save({ reviews: { reviewRequests: v as Settings["reviews"]["reviewRequests"] } })}
+              options={[
+                { value: "notify", label: "Notify me once", hint: "One alert with a link to the PR" },
+                { value: "watch", label: "Notify me and watch it", hint: "The PR joins the list above, so later commits and comments notify too" },
+                { value: "off", label: "Do nothing", hint: "Review requests are only visible in the views" },
+              ]}
+            />
+            <span className="set-help">Checked on the same poll. Requests through a team count. A request you already had when this was turned on is not announced.</span>
+          </label>
+        </div>
         <h3 className="set-h">Watched pull requests</h3>
         {watches.length === 0 ? (
           <p className="set-help">None yet. Press the bell on a PR row or page, or w with a row selected.</p>
