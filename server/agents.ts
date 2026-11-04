@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { claudeEnv, DATA_DIR } from "./paths.ts";
+import { scanCommands } from "./commands.ts";
 import {
   query,
   renameSession,
@@ -817,13 +818,14 @@ function rememberCommands(list: Command[]) {
   }
 }
 export function getKnownCommands(): Command[] {
-  if (knownCommands) return knownCommands;
+  if (knownCommands?.length) return knownCommands;
   try {
-    knownCommands = JSON.parse(readFileSync(COMMANDS_CACHE, "utf8")) as Command[];
+    const cached = JSON.parse(readFileSync(COMMANDS_CACHE, "utf8")) as Command[];
+    if (cached.length) return (knownCommands = cached);
   } catch {
-    knownCommands = [];
+    // No session has reported yet on this machine; read what is on disk instead.
   }
-  return knownCommands;
+  return scanCommands();
 }
 
 /**
