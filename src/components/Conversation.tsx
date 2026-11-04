@@ -323,7 +323,7 @@ export function LiveConversation({
         if (mine) setData((d) => (d ? { ...d, ...mine } : d));
         return;
       }
-      if (e.type === "pr-run" || e.type === "pr-explain") return;
+      if (e.type === "pr-run" || e.type === "pr-explain" || e.type === "pr-watch") return;
       if (e.key !== agentKey) return;
       if (e.type === "agent-delta") setStreaming((s) => s + e.text);
       else if (e.type === "agent-models") setData((d) => (d ? { ...d, models: e.models } : d));

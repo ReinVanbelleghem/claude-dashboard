@@ -5682,6 +5682,49 @@ a.pr-side-check-name:hover { color: var(--accent); }
 .pr-row:hover .pr-row-hide, .pr-row.active .pr-row-hide, .pr-row-hide.on { opacity: 1; }
 .pr-row-hide:hover { color: var(--text-primary); background: var(--surface-2); }
 .pr-row-hide.on { color: var(--accent); }
+
+/* PR watch: the bell on a row, the activity chips, the strip on the page. */
+.pr-row-watch { flex: 0 0 auto; display: inline-flex; align-items: center; border: 0; background: none; color: var(--text-muted); cursor: pointer; padding: 2px; border-radius: 4px; opacity: 0; }
+.pr-row:hover .pr-row-watch, .pr-row.active .pr-row-watch, .pr-row-watch.on { opacity: 1; }
+.pr-row-watch:hover { color: var(--text-primary); background: var(--surface-2); }
+.pr-row-watch.on { color: var(--accent); }
+.pr-row.unseen { box-shadow: inset 2px 0 0 var(--warning); }
+.pr-row.active.unseen { box-shadow: inset 2px 0 0 var(--accent); }
+.pr-row-activity { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.pr-activity { display: inline-flex; align-items: center; gap: 4px; }
+.pr-activity-chip {
+  display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-2); font-size: 11px; font-weight: 600; color: var(--text-secondary); white-space: nowrap;
+}
+.pr-activity-chip .icon { width: 12px; height: 12px; }
+.pr-activity-chip.ok { border-color: color-mix(in srgb, var(--good) 50%, transparent); color: var(--good); }
+.pr-activity-chip.bad { border-color: color-mix(in srgb, var(--critical) 50%, transparent); color: var(--critical); }
+.pr-activity-chip.accent { border-color: color-mix(in srgb, var(--accent) 50%, transparent); color: var(--accent); }
+.pr-row-seen { display: inline-flex; align-items: center; gap: 3px; border: 0; background: none; color: var(--text-muted); font-size: 11px; cursor: pointer; padding: 2px 4px; border-radius: 4px; opacity: 0; }
+.pr-row:hover .pr-row-seen, .pr-row.active .pr-row-seen { opacity: 1; }
+.pr-row-seen:hover { color: var(--text-primary); background: var(--surface-2); }
+.pr-row-seen .icon { width: 12px; height: 12px; }
+.sidebar-item .badge.soft { background: var(--accent); color: var(--accent-ink); }
+
+.pr-since { margin: 12px 0 4px; border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border)); border-radius: var(--radius); background: color-mix(in srgb, var(--warning) 7%, var(--surface-1)); font-size: 13px; }
+.pr-since-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid color-mix(in srgb, var(--warning) 30%, var(--border)); }
+.pr-since-head .icon { width: 15px; height: 15px; color: var(--warning); }
+.pr-since-count { color: var(--text-muted); font-size: 12px; }
+.pr-since-x { margin-left: auto; border: 0; background: none; color: var(--text-muted); cursor: pointer; padding: 2px; border-radius: 4px; display: inline-flex; }
+.pr-since-x:hover { color: var(--text-primary); background: var(--surface-2); }
+.pr-since-list { list-style: none; margin: 0; padding: 4px 0; }
+.pr-since-item { display: flex; align-items: center; gap: 10px; padding: 5px 12px; }
+.pr-since-item .pr-badge { flex: 0 0 72px; justify-content: center; }
+.pr-since-item a { color: var(--text-primary); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-since-item a:hover { text-decoration: underline; }
+.pr-since-when { margin-left: auto; color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+
+.pr-watch-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.pr-watch-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-1); font-size: 13px; }
+.pr-watch-ref { flex: 0 0 auto; font: 500 11px/1.4 var(--mono); color: var(--text-muted); text-decoration: none; }
+.pr-watch-ref:hover { color: var(--accent); }
+.pr-watch-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-watch-since { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 .pr-row.hidden-pr { opacity: 0.55; }
 .pr-row.hidden-pr .pr-row-title { text-decoration: line-through; }
 

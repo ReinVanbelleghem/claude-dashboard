@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { prApi, type AgentSummary, type PrDetail, type PrRef, type Settings } from "../../api.ts";
+import { prApi, prKey, type AgentSummary, type PrDetail, type PrRef, type PrWatch, type PrWatchChange, type Settings } from "../../api.ts";
 import { RefreshIcon } from "../Icons.tsx";
 import { CiDot, ContextLinks, DraftBadge, ReviewBadge } from "./PrBadges.tsx";
 import { PrCommitsTab } from "./PrCommitsTab.tsx";
 import { PrFilesTab } from "./PrFilesTab.tsx";
 import { PrOverviewTab } from "./PrOverviewTab.tsx";
 import { PrRunsTab, RunStatusBadge } from "./PrRunsTab.tsx";
+import { SinceStrip, WatchToggle } from "./PrWatchBits.tsx";
 import { isTyping, prHash, usePrRuns } from "./prState.ts";
 
 /**
@@ -25,12 +26,14 @@ export function routePr(hash: string): PrRoute | null {
 export function PrPage({
   route,
   agents,
+  watches,
   settings,
   onSettings,
   onBack,
 }: {
   route: PrRoute;
   agents: AgentSummary[];
+  watches: PrWatch[];
   settings: Settings | null;
   onSettings: (s: Settings) => void;
   onBack: () => void;
@@ -44,6 +47,22 @@ export function PrPage({
   /** Bumped by Refresh; keys the active tab so it remounts and fetches again. */
   const [generation, setGeneration] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const watch = watches.find((w) => prKey(w) === prKey(pr)) ?? null;
+  /**
+   * What was unseen when the page opened, kept on screen after the daemon has been
+   * told it was seen. Changes that land while the page is open are appended and
+   * marked seen the same way, so the strip never shows less than you were told about.
+   */
+  const [since, setSince] = useState<PrWatchChange[]>([]);
+  useEffect(() => setSince([]), [key]);
+  useEffect(() => {
+    if (!watch?.unseen.length) return;
+    setSince((prev) => {
+      const have = new Set(prev.map((c) => `${c.at}|${c.text}`));
+      return [...prev, ...watch.unseen.filter((c) => !have.has(`${c.at}|${c.text}`))];
+    });
+    prApi.markSeen(pr).catch(() => {});
+  }, [key, watch?.unseen]);
 
   const loadDetail = useCallback(() => {
     setError(null);
@@ -74,10 +93,11 @@ export function PrPage({
     const onKey = (e: KeyboardEvent) => {
       if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "r") refresh();
+      else if (e.key === "w") void (watch ? prApi.unwatch(pr) : prApi.watch(pr)).catch(() => {});
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [refresh]);
+  }, [refresh, key, !!watch]);
 
   useEffect(() => {
     document.title = detail ? `#${pr.number} ${detail.title}` : `${pr.repo}#${pr.number}`;
@@ -155,6 +175,7 @@ export function PrPage({
         </div>
         <div className="pr-head-actions">
           {startError && <span className="pr-error">{startError}</span>}
+          <WatchToggle pr={pr} watched={!!watch} />
           <button className={`icon-btn ${refreshing ? "pr-refreshing" : ""}`} onClick={refresh} disabled={refreshing} title="Reload this PR from GitHub (r)">
             <RefreshIcon /> {refreshing ? "Refreshing…" : "Refresh"}
           </button>
@@ -180,6 +201,7 @@ export function PrPage({
           )}
         </div>
       </div>
+      <SinceStrip changes={since} onDismiss={() => setSince([])} />
       <nav className="pr-tabs">
         <a href={prHash(pr)} className={tab === "overview" ? "on" : ""}>
           Overview
