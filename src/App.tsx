@@ -828,15 +828,13 @@ export default function App() {
               ]}
             />
           )}
+          {/* API-list-price estimate of today's traffic, for scale. No bar: on a
+              subscription nothing is metered in dollars, so a budget here was a
+              made-up ceiling that only ever looked like an alarm. */}
           <Tile
             label="Today"
             value={fmtUsd(usage.day.costUsd)}
-            sub={`${fmtTokens(usage.day.fresh)} fresh tokens`}
-            pct={usage.remaining.dailyCostPct}
-            note={[
-              `${Math.round(usage.remaining.dailyCostPct)}% of budget`,
-              fmtUsd(usage.budgets.dailyCostUsd),
-            ]}
+            sub={`${fmtTokens(usage.day.fresh)} fresh tokens · at API list prices`}
           />
           {usage.plan?.sevenDay ? (
             <Tile
