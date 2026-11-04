@@ -339,7 +339,9 @@ SQLite index.
   last looked* strip on the PR page that clears on open, a count on the sidebar entry,
   and one notification per PR per poll through the usual channels and quiet hours. The
   list lives in `settings.json` and survives a reindex; merged and closed PRs drop off it
-  after a configurable number of days.
+  after a configurable number of days. The same poll notices when someone asks you to
+  review a PR, personally or through a team, and either notifies once or also watches
+  it, as set under Settings → Reviews.
 
 Checkouts are made under `~/.claude-dashboard/pr` (configurable), one bare clone per
 repository and one worktree per reviewed commit, so your own clones are never touched.

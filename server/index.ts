@@ -155,6 +155,7 @@ const NOTIFY_KINDS: NotifyEventKind[] = [
   "turnComplete",
   "sessionError",
   "prWatch",
+  "prReviewRequested",
 ];
 import { sessionReceipt, usageSummary } from "./usage.ts";
 

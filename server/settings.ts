@@ -24,7 +24,8 @@ export type NotifyEventKind =
   | "awaitingPermission"
   | "turnComplete"
   | "sessionError"
-  | "prWatch";
+  | "prWatch"
+  | "prReviewRequested";
 
 /**
  * One session's silence, keyed by its transcript id — or by the agent key while it
@@ -225,6 +226,12 @@ export type Settings = {
     watchIntervalMinutes: number;
     /** A merged or closed PR drops off the list this many days later. Zero keeps it. */
     watchUnwatchAfterDays: number;
+    /**
+     * What a new review request does: nothing, one notification, or the PR joins the
+     * watched list as well. Watching is the loud option — every later commit and
+     * comment on someone else's PR — so one alert is the default.
+     */
+    reviewRequests: "off" | "notify" | "watch";
   };
   /**
    * Local dev services: what the Services page can start, where, and the compose
@@ -279,6 +286,7 @@ const DEFAULTS: Settings = {
       turnComplete: false,
       sessionError: true,
       prWatch: true,
+      prReviewRequested: true,
     },
     channels: { native: true, browser: true, googleChat: false },
     googleChatWebhook: "",
@@ -322,6 +330,7 @@ const DEFAULTS: Settings = {
     watched: [],
     watchIntervalMinutes: 2,
     watchUnwatchAfterDays: 7,
+    reviewRequests: "notify",
   },
   services: { defs: [], paths: DEFAULT_SERVICE_PATHS, compose: DEFAULT_COMPOSE, importedAt: null },
   templates: [],

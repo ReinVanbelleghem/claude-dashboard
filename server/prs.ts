@@ -161,20 +161,29 @@ const STATE_TERM: Record<NonNullable<PrFilter["state"]>, string | null> = { open
  * `draft:`, `review:`) is left out of the generated part, so `state:closed` does not
  * end up beside an implied `is:open` and quietly match nothing.
  */
-function searchStrings(filter: PrFilter, login: string): string[] {
+function searchStrings(filter: PrFilter, login: string, teams: Set<string>): string[] {
   const repos = filter.repos?.length ? filter.repos : trackedRepos();
   const query = filter.query?.trim() ?? "";
   const names = (q: string) => new RegExp(`(^|\\s)-?(${q}):`, "i").test(query);
   const base = ["is:pr", ...repos.map((r) => `repo:${r}`)];
   const state = STATE_TERM[filter.state ?? "open"];
   if (state && !names("is|state")) base.push(state);
-  if (filter.reviewRequestedFromMe) base.push("review-requested:@me");
   if (filter.hideApproved && !names("review")) base.push("-review:approved");
   if (!filter.includeDrafts && !names("draft")) base.push("draft:false");
   if (query) base.push(query);
   const authors = [...new Set((filter.authors ?? []).map((a) => (a === "@me" ? login : a)))];
-  if (!authors.length) return [[...base, "sort:updated-desc"].join(" ")];
-  return authors.map((a) => [...base, `author:${a}`, "sort:updated-desc"].join(" "));
+  // GitHub's search cannot OR qualifiers, so each author and each way of being asked
+  // to review (personally, or through a team) is its own search, merged afterwards.
+  const requested = filter.reviewRequestedFromMe ? ["review-requested:@me", ...[...teams].map((t) => `team-review-requested:${t}`)] : [""];
+  const out: string[] = [];
+  for (const r of requested) for (const a of authors.length ? authors.map((a) => `author:${a}`) : [""]) out.push([...base, r, a, "sort:updated-desc"].filter(Boolean).join(" "));
+  return out;
+}
+
+/** Open PRs the viewer is asked to review, personally or through a team, fresh from GitHub. */
+export async function listReviewRequests(): Promise<PrSummary[]> {
+  const { prs } = await listPrs({ repos: [], reviewRequestedFromMe: true, includeDrafts: true }, true);
+  return prs.filter((p) => p.reviewRequestedFromMe);
 }
 
 /**
@@ -204,10 +213,8 @@ export async function listPrs(filter: PrFilter, refresh = false): Promise<{ prs:
     const [teams, page] = await Promise.all([viewerTeams(), watchedPage(getSettings().reviews.watched, refresh)]);
     return { prs: page.value.map((pr) => toSummary(pr, login, teams)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), fetchedAt: page.at };
   }
-  const [teams, results] = await Promise.all([
-    viewerTeams(),
-    Promise.all(searchStrings(filter, login).map((q) => search(q, refresh))),
-  ]);
+  const teams = await viewerTeams();
+  const results = await Promise.all(searchStrings(filter, login, teams).map((q) => search(q, refresh)));
   const byUrl = new Map<string, GqlPr>();
   for (const pr of results.flatMap((r) => r.value)) byUrl.set(pr.url, pr);
   return {

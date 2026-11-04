@@ -349,7 +349,8 @@ export type NotifyEventKind =
   | "awaitingPermission"
   | "turnComplete"
   | "sessionError"
-  | "prWatch";
+  | "prWatch"
+  | "prReviewRequested";
 
 /** What one session has been silenced about, and what to call it in Settings. */
 export type SessionMute = { kinds: NotifyEventKind[]; label: string };
@@ -426,6 +427,8 @@ export type Settings = {
     watchIntervalMinutes: number;
     /** Merged or closed PRs leave the list after this many days; 0 keeps them. */
     watchUnwatchAfterDays: number;
+    /** What a new review request does: nothing, one alert, or watch the PR too. */
+    reviewRequests: "off" | "notify" | "watch";
   };
 };
 
