@@ -1,12 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { agentApi, type SlashCommand } from "../api.ts";
+import { tokenizeComposer } from "./composerTokens.ts";
 import { rankCommands, slashTokenAt } from "./Conversation.tsx";
 
 /**
- * A prompt textarea with the composer's slash menu, for places that have no
- * session yet: a template's first prompt. The commands come from the daemon's
- * record of what the last session reported, which is the same list a new session
- * will see, short of a skill added since.
+ * A prompt textarea with the composer's slash menu and skill highlighting, for
+ * places that have no session yet: a template's first prompt. The commands come
+ * from the daemon's record of what the last session reported, or a scan of the
+ * skills on disk, which is the same list a new session will see.
+ *
+ * Same trick as the composer: a mirror behind the textarea paints the text with
+ * known commands coloured, and the textarea's own ink is transparent so it keeps
+ * the caret, the selection and the scrolling.
  */
 export function PromptBox({
   value,
@@ -26,6 +31,7 @@ export function PromptBox({
   const [dismissed, setDismissed] = useState<number | null>(null);
   const [highlight, setHighlight] = useState(0);
   const box = useRef<HTMLTextAreaElement>(null);
+  const mirror = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     agentApi
@@ -34,6 +40,7 @@ export function PromptBox({
       .catch(() => {});
   }, []);
 
+  const known = useMemo(() => new Set(commands.map((c) => c.name)), [commands]);
   const token = slashTokenAt(value, caret);
   const open = token !== null && dismissed !== token.start;
   const matches = open && token ? rankCommands(commands, token.word).slice(0, 8) : [];
@@ -44,8 +51,7 @@ export function PromptBox({
     if (!token) return;
     const before = value.slice(0, token.start);
     const after = value.slice(caret);
-    const next = `${before}/${c.name} ${after}`;
-    onChange(next);
+    onChange(`${before}/${c.name} ${after}`);
     const pos = token.start + c.name.length + 2;
     requestAnimationFrame(() => {
       const el = box.current;
@@ -57,7 +63,7 @@ export function PromptBox({
   };
 
   return (
-    <div className="composer-wrap">
+    <div className="composer-wrap prompt-stack">
       {matches.length > 0 && (
         <div className="cmd-menu">
           {matches.map((c, n) => (
@@ -76,9 +82,21 @@ export function PromptBox({
           ))}
         </div>
       )}
+      <div className={`prompt-mirror ${className}`} ref={mirror} aria-hidden="true">
+        {tokenizeComposer(value, known).map((seg, i) =>
+          seg.kind === "plain" ? (
+            <span key={i}>{seg.text}</span>
+          ) : (
+            <mark key={i} className={`tok tok-${seg.kind}`}>
+              {seg.text}
+            </mark>
+          ),
+        )}
+        {value.endsWith("\n") ? " " : ""}
+      </div>
       <textarea
         ref={box}
-        className={className}
+        className={`prompt-box ${className}`}
         rows={rows}
         value={value}
         placeholder={placeholder}
@@ -88,6 +106,10 @@ export function PromptBox({
           setDismissed(null);
         }}
         onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+        onScroll={(e) => {
+          const el = mirror.current;
+          if (el) el.scrollTop = (e.target as HTMLTextAreaElement).scrollTop;
+        }}
         onKeyDown={(e) => {
           if (matches.length === 0) return;
           if (e.key === "ArrowDown") {

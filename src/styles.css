@@ -6415,7 +6415,6 @@ a.pr-side-check-name:hover { color: var(--accent); }
 .tpl-hint code { font-family: var(--mono); font-size: 11.5px; padding: 0 4px; border-radius: 4px; background: var(--surface-2); }
 .tpl-hint.warn { color: var(--warning); }
 .tpl-folders { margin-bottom: 0; }
-.tpl-prompt-input { resize: vertical; font-family: inherit; line-height: 1.45; min-height: 96px; }
 .tpl-schedule-edit { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-0); }
 .tpl-weekly { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .tpl-days { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -6425,3 +6424,48 @@ a.pr-side-check-name:hover { color: var(--accent); }
 .tpl-time .search { margin: 0; width: 120px; height: 32px; padding: 0 10px; }
 @media (max-width: 640px) { .tpl-row { grid-template-columns: 1fr; } }
 .search.bad { border-color: var(--critical); }
+
+/* ── prompt box (template editor): the composer's mirror trick, standalone ── */
+.prompt-stack { position: relative; }
+/* Every metric that moves a glyph is shared by both layers, as in the composer. */
+.prompt-stack .prompt-box,
+.prompt-stack .prompt-mirror {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  letter-spacing: normal;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  tab-size: 4;
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 96px;
+}
+.prompt-stack .prompt-box {
+  position: relative;
+  z-index: 1;
+  display: block;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text-primary);
+  resize: vertical;
+  overflow-y: auto;
+}
+.prompt-stack .prompt-box::placeholder { color: var(--text-muted); }
+.prompt-stack .prompt-box::selection { background: color-mix(in oklab, var(--accent) 30%, transparent); }
+.prompt-stack .prompt-box:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+.prompt-stack .prompt-mirror {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--surface-0);
+  pointer-events: none;
+  user-select: none;
+  min-height: 0;
+}

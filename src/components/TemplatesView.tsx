@@ -471,7 +471,7 @@ function TemplateEditor({
             </div>
             <label className="field">
               <span>First prompt</span>
-              <PromptBox className="search tpl-prompt-input" rows={5} value={t.prompt} placeholder="Sent as soon as the session is up. Type / for skills and commands." onChange={(prompt) => edit({ prompt })} />
+              <PromptBox rows={5} value={t.prompt} placeholder="Sent as soon as the session is up. Type / for skills and commands." onChange={(prompt) => edit({ prompt })} />
             </label>
           </section>
 
