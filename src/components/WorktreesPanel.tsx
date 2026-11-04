@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, memo, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { gitApi, shortPath, type RepoStatus, type Worktree } from "../api.ts";
 import { BranchPicker, type BranchChoice } from "./BranchPicker.tsx";
@@ -26,6 +26,7 @@ export const WorktreesPanel = memo(function WorktreesPanel({
   onOpenWorktree,
   title,
   subtitle,
+  titleExtra,
   worktreeRoot,
   currentPath,
   layout = "rows",
@@ -48,6 +49,8 @@ export const WorktreesPanel = memo(function WorktreesPanel({
   /** Heading, when this panel is one repository among several on screen. */
   title?: string;
   subtitle?: string | null;
+  /** Controls that sit beside the title — the Worktrees page puts its pin here. */
+  titleExtra?: ReactNode;
   /** `ui.worktreeRoot`, so the preview names the directory a new checkout will land in. */
   worktreeRoot?: string;
   /**
@@ -210,6 +213,7 @@ export const WorktreesPanel = memo(function WorktreesPanel({
               {subtitle}
             </small>
           )}
+          {titleExtra}
         </span>
         {/* In tiles the offer to add one is a tile of its own, at the end of the list
             where the thing it adds will appear. */}

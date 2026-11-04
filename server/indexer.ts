@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { PROJECTS_DIR } from "./paths.ts";
+import { artifactSlug, artifactSlugsInCommand, PROJECTS_DIR } from "./paths.ts";
 
 /** Accumulator for one session while we parse its (possibly partial) JSONL. */
 type Agg = {
@@ -47,6 +47,33 @@ function emptyAgg(id: string, slug: string, filePath: string): Agg {
     version: null,
     file_path: filePath,
   };
+}
+
+const FILE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+
+/**
+ * Which artifacts a single tool call touched.
+ *
+ * This is the whole link between a session and what it produced: the transcript
+ * already records every write with the session id around it, so no hook, no
+ * convention and no cooperation from the model is needed beyond writing to the
+ * artifact folder in the first place.
+ */
+function artifactSlugsIn(block: any): string[] {
+  const input = block.input ?? {};
+  const out = new Set<string>();
+  if (FILE_WRITE_TOOLS.has(block.name)) {
+    const target = input.file_path ?? input.filePath ?? input.notebook_path;
+    const slug = typeof target === "string" ? artifactSlug(target) : null;
+    if (slug) out.add(slug);
+  }
+  // A heredoc or a `cp` writes the same file without ever going through Write.
+  // The reconciler would still find the folder, but with nobody to attribute it
+  // to, so the command text is worth a look.
+  if (block.name === "Bash" && typeof input.command === "string") {
+    for (const slug of artifactSlugsInCommand(input.command)) out.add(slug);
+  }
+  return [...out];
 }
 
 function ts(v: unknown): number | null {
@@ -233,12 +260,17 @@ function applyLines(
       for (const t of ["prompts", "replies", "tools", "pr_links"]) {
         db.query(`DELETE FROM ${t} WHERE session_id = ?`).run(sessionId);
       }
+      // Hand-made links survive: the transcript this pass rebuilds from never
+      // held them, so clearing them would quietly undo the user's correction.
+      db.query("DELETE FROM artifact_writes WHERE session_id = ? AND manual = 0").run(sessionId);
       db.query("DELETE FROM prompts_fts WHERE session_id = ?").run(sessionId);
       db.query("DELETE FROM replies_fts WHERE session_id = ?").run(sessionId);
     }
   }
 
   const toolCounts = new Map<string, number>();
+  /** slug → earliest timestamp this session was seen writing to it. */
+  const artifactHits = new Map<string, number | null>();
   // Only used to synthesise a key for the rare record with no uuid.
   let replySeq = 0;
   const insertPrompt = db.query(
@@ -379,6 +411,12 @@ function applyLines(
             if (b?.type === "tool_use" && b.name) {
               agg.tool_count++;
               toolCounts.set(b.name, (toolCounts.get(b.name) ?? 0) + 1);
+              for (const slug of artifactSlugsIn(b)) {
+                const prev = artifactHits.get(slug);
+                if (prev === undefined || (t !== null && (prev === null || t < prev))) {
+                  artifactHits.set(slug, t);
+                }
+              }
             }
           }
           break;
@@ -445,6 +483,14 @@ function applyLines(
        ON CONFLICT(session_id, name) DO UPDATE SET count = tools.count + excluded.count`,
     );
     for (const [name, count] of toolCounts) upTool.run(sessionId, name, count);
+
+    // First touch wins: a session that kept editing one artifact is still the
+    // session that made it, and an incremental pass must not restamp it.
+    const upArtifact = db.query(
+      `INSERT INTO artifact_writes (slug, session_id, ts) VALUES (?, ?, ?)
+       ON CONFLICT(slug, session_id) DO UPDATE SET ts = COALESCE(artifact_writes.ts, excluded.ts)`,
+    );
+    for (const [slug, at] of artifactHits) upArtifact.run(slug, sessionId, at);
   });
 
   run();

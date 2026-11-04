@@ -8,7 +8,7 @@ import {
   type GitWriteResult,
   type RepoStatus,
 } from "../api.ts";
-import { CheckIcon, GitIcon, PlusIcon, WorktreeIcon } from "./Icons.tsx";
+import { CheckIcon, ChevronIcon, GitIcon, PlusIcon, WorktreeIcon } from "./Icons.tsx";
 
 const POP_MARGIN = 8;
 
@@ -42,7 +42,7 @@ function computePopPos(trigger: HTMLElement, menu: HTMLElement | null) {
  * ranked list — type to narrow, type something new to create it.
  *
  * The filter runs on the server, not over a list held here. A repo a few years old
- * has thousands of remote branches (the TMS backend has ~5,800), which is a
+ * has thousands of remote branches (a busy monorepo easily passes 5,000), which is a
  * megabyte of JSON and thousands of unread DOM nodes if you fetch them all to
  * filter three of them out.
  *
@@ -239,7 +239,7 @@ export function BranchSwitcher({
         <GitIcon />
         <span className="branch-trigger-name">{label}</span>
         <span className="branch-caret" aria-hidden>
-          ▾
+          <ChevronIcon />
         </span>
       </button>
 

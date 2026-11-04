@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { dirApi, shortPath, type DirListing, type Favourite } from "../api.ts";
-import { CheckIcon, FolderIcon, GitIcon, PlusIcon, TrashIcon } from "./Icons.tsx";
+import { dirApi, type Favourite } from "../api.ts";
+import { FolderPicker } from "./FolderPicker.tsx";
+import { FolderIcon, PlusIcon, TrashIcon } from "./Icons.tsx";
 
 /**
  * Manage the working directories you start sessions in.
@@ -24,8 +25,6 @@ export function FoldersModal({
 }) {
   const [favourites, setFavourites] = useState<Favourite[]>([]);
   const [adding, setAdding] = useState(false);
-  const [listing, setListing] = useState<DirListing | null>(null);
-  const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -43,31 +42,7 @@ export function FoldersModal({
     onChanged?.(rows);
   };
 
-  const go = (path: string) => {
-    dirApi
-      .list(path)
-      .then((l) => {
-        setListing(l);
-        setLabel(l.path.replace(/\/$/, "").split("/").pop() ?? "");
-      })
-      .catch(() => {});
-  };
-
-  const startAdding = () => {
-    setAdding(true);
-    go("~");
-  };
-
-  const add = async () => {
-    if (!listing) return;
-    setBusy(true);
-    try {
-      apply((await dirApi.save(label, listing.path)).favourites);
-      setAdding(false);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const startAdding = () => setAdding(true);
 
   const already = (p: string) => favourites.some((f) => f.path === p);
 
@@ -140,87 +115,29 @@ export function FoldersModal({
               ))}
             </div>
           )
-        ) : (
-          <div className="browser">
-            <div className="browser-bar">
-              <button className="icon-btn" onClick={() => go("~")} title="Home">
-                Home
-              </button>
-              <button
-                className="icon-btn"
-                disabled={!listing?.parent}
-                onClick={() => listing?.parent && go(listing.parent)}
-              >
-                ↑ Up
-              </button>
-              <span className="browser-path">
-                {listing ? listing.path.replace(/^\/Users\/[^/]+/, "~") : "…"}
-              </span>
-              {listing?.isRepo && (
-                <span className="chip">
-                  <GitIcon /> repo
-                </span>
-              )}
-            </div>
+        ) : null}
 
-            <div className="browser-grid">
-              {listing?.entries.length === 0 && (
-                <div className="hint" style={{ padding: 10 }}>
-                  No subfolders here — this is a leaf. Name it below and add it.
-                </div>
-              )}
-              {listing?.entries.map((e) => (
-                <button
-                  key={e.path}
-                  className={`folder-card ${already(e.path) ? "saved" : ""}`}
-                  onClick={() => go(e.path)}
-                  title={e.path}
-                >
-                  <span className="folder-ic">
-                    <FolderIcon />
-                  </span>
-                  <span className="folder-name">{e.name}</span>
-                  {e.isRepo && (
-                    <span className="folder-tag">
-                      <GitIcon />
-                    </span>
-                  )}
-                  {already(e.path) && (
-                    <span className="folder-saved">
-                      <CheckIcon />
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-
-            <div className="browser-foot">
-              <div className="field" style={{ margin: 0, flex: 1 }}>
-                <span>Name for this folder</span>
-                <input
-                  className="search"
-                  value={label}
-                  onChange={(e) => setLabel(e.target.value)}
-                  placeholder="Backend"
-                  onKeyDown={(e) => e.key === "Enter" && void add()}
-                />
-              </div>
-              <div className="modal-actions" style={{ margin: 0 }}>
-                <button className="icon-btn" onClick={() => setAdding(false)}>
-                  Cancel
-                </button>
-                <button
-                  className="icon-btn primary"
-                  disabled={busy || !listing || already(listing.path)}
-                  onClick={add}
-                >
-                  {already(listing?.path ?? "")
-                    ? "Already saved"
-                    : `Add ${listing ? shortPath(listing.path, 1) : ""}`}
-                </button>
-              </div>
-            </div>
-          </div>
+        {adding && (
+          <FolderPicker
+            stacked
+            title="Add a working directory"
+            hint="Pick a folder to start sessions in. You can rename it in the list afterwards."
+            primary="Add folder"
+            onClose={() => setAdding(false)}
+            onPick={(path) => {
+              if (already(path)) return setAdding(false);
+              const name = path.replace(/\/$/, "").split("/").pop() ?? path;
+              setBusy(true);
+              dirApi
+                .save(name, path)
+                .then((r) => apply(r.favourites))
+                .catch(() => {})
+                .finally(() => {
+                  setBusy(false);
+                  setAdding(false);
+                });
+            }}
+          />
         )}
 
         {!adding && (

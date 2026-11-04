@@ -130,7 +130,7 @@ export function HistoryView({
       <div className="search-row">
         <input
           className="search"
-          placeholder="Search — e.g. redis queue, trimble syncer, pallet network…"
+          placeholder="Search — e.g. csv import, login bug, flaky test…"
           aria-label="Search sessions"
           value={q}
           onChange={(e) => search(e.target.value)}

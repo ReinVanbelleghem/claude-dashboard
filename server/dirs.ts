@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DATA_DIR, SCRATCH_DIR } from "./paths.ts";
@@ -20,6 +20,7 @@ export function listDirs(input?: string): {
   path: string;
   parent: string | null;
   isRepo: boolean;
+  branch: string | null;
   entries: DirEntry[];
 } {
   const base = resolve(expand(input?.trim() || homedir()));
@@ -37,12 +38,32 @@ export function listDirs(input?: string): {
   } catch {
     // An unreadable directory still returns its own path so the UI can show it.
   }
+  const isRepo = existsSync(join(base, ".git"));
   return {
     path: base,
     parent: parent === base ? null : parent,
-    isRepo: existsSync(join(base, ".git")),
+    isRepo,
+    branch: isRepo ? currentBranch(base) : null,
     entries,
   };
+}
+
+/** The checked-out branch, read straight from HEAD; null when detached or unreadable. */
+export function currentBranch(repo: string): string | null {
+  try {
+    let gitDir = join(repo, ".git");
+    const stat = statSync(gitDir);
+    if (stat.isFile()) {
+      const m = readFileSync(gitDir, "utf8").match(/^gitdir:\s*(.+)$/m);
+      if (!m) return null;
+      gitDir = resolve(repo, m[1].trim());
+    }
+    const head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
+    const ref = head.match(/^ref:\s*refs\/heads\/(.+)$/);
+    return ref ? ref[1] : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

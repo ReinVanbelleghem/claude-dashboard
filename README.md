@@ -29,6 +29,7 @@ everything, `bun install && ./start.sh` does the same job.
 | --- | --- | --- |
 | daemon | 5757 | Bun HTTP API, the transcript indexer, and the parent of every session you start here |
 | UI | 5758 | Vite dev server, proxying `/api` to the daemon |
+| artifacts | 5759 | Generated HTML, on its own origin so its scripts cannot reach the API |
 
 For a single-process setup, build the UI once and let the daemon serve it:
 
@@ -50,6 +51,10 @@ access, so it must not be reachable from your network.
 | git | the diff viewer, branch switcher and review panel shell out to it |
 | Claude Code, logged in | the dashboard drives your existing install and settings. Without it you can still index and search past sessions, but not start new ones |
 | `terminal-notifier` *(optional, macOS)* | clickable notification banners; without it, notifications fall back to `osascript` |
+| `gh`, logged in *(optional)* | the Reviews tab uses the token `gh auth token` returns; without it everything else still works |
+| `tmux` *(optional)* | the Services page runs your local dev stack in tmux sessions |
+| `python3` *(optional)* | brokers the in-browser terminal for the Services page: attach, container logs and shells. Standard library only |
+| Docker with `docker compose` *(optional)* | the containers section under Services lists and drives a compose project |
 
 ---
 
@@ -290,6 +295,48 @@ Writes are serialised in two tiers, because worktrees share a ref store but not 
 per checkout for staging, committing and switching, and per repository for fetching and
 for worktree add/remove.
 
+### Reviews
+
+GitHub pull requests, reviewed from the dashboard. Nothing new is stored on GitHub's
+side: the daemon talks to the API with the token `gh` already holds, and everything
+local (pending comments, run records, explanations) lives in the dashboard's own
+SQLite index.
+
+- **Views** — saved filters down the side: review requested from me (team requests
+  count), hide approved, author, drafts, plus a free GitHub search query. Views live in
+  `settings.json`, so every browser sees the same set. Which repositories a view searches
+  by default is set in Settings → Reviews.
+- **Files changed** — GitHub's diff, rendered by the same hunk renderer the git panel
+  uses, unified or split. Review threads sit on their lines with reply and resolve;
+  outdated ones fold under the file header. "More context" asks the daemon for the same
+  file with more lines around each change, cut from a local blobless clone, up to the
+  whole file. Viewed checkboxes sync with GitHub. `j`/`k` file, `n`/`p` hunk, `v` viewed,
+  `c` comment.
+- **Pending comments** — `+` on a line (shift-click a later line for a range) collects a
+  comment locally. Nothing reaches GitHub until **Review → Comment / Approve / Request
+  changes** sends them as one review. If you already have a pending review on GitHub, the
+  comments join it rather than failing on "one pending review per pull request".
+- **Conversations** — every thread in one column with the hunk it was written on;
+  hovering highlights its marker in the diff, locating jumps to it.
+- **Actions** — buttons in the PR header that start an ordinary dashboard session in a
+  detached worktree of the PR's head commit, with the action's prompt as the first
+  message. It streams, asks for permissions and takes follow-ups like any session; the
+  **Runs** tab shows it alongside its record. An action with *structured findings* makes
+  the session answer with a checklist — severity, file, line, background, problem,
+  suggestion — that follow-ups in the same conversation update (severity changes and new
+  findings are marked). Each finding can be added to your pending review when its line is
+  in the diff, or posted to the PR conversation after a confirmation. The prompt also
+  carries the Notion and Slack links from the description as references, and the
+  discussion so far, so the session does not re-raise what reviewers already said.
+- **Explain** — select code in the diff and press ⌘⇧E. A session in a checkout of that
+  commit answers with a summary and a few parts; drill into a part, ask a question, or
+  select text inside an explanation to go one level deeper, each as another turn of the
+  same session shown as a child node.
+
+Checkouts are made under `~/.claude-dashboard/pr` (configurable), one bare clone per
+repository and one worktree per reviewed commit, so your own clones are never touched.
+Older checkouts no session is using are pruned past a configurable count.
+
 ### History and Usage
 
 Full-text search over every prompt you have typed, across every project, **paginated**
@@ -302,11 +349,81 @@ Cache reads are reported separately: they are typically ~97% of raw token volume
 tenth of the input rate, so including them makes every gauge read as maxed out. Costs
 are pay-as-you-go list-price equivalents, not what a subscription charges.
 
+### Artifacts
+
+Every HTML page your sessions generate, in one grid, each one linked back to the
+session that wrote it.
+
+Nothing has to be registered. Anything written under the artifact folder
+(**`~/Notes/artifacts`** by default, changed under Settings → Artifacts) — one
+folder per artifact with an `index.html`, or a loose `.html` file — is picked up, and
+the name comes from the page's own `<title>` (falling back to its `<h1>`, then to the
+folder name). The link to a session is read out of the transcript, which already
+records every write with the session id around it: no hook, no manifest, and it covers
+sessions this dashboard never started.
+
+Going back over artifacts you already had needs one full re-read, because the indexer
+is incremental — a write that sits behind a recorded byte offset is never seen again.
+Upgrading clears those offsets once, automatically; `bun run reindex` does the same
+thing on demand. Writes made with `Write`,
+`Edit` and friends are attributed, as are heredocs and copies visible in a `Bash`
+command. Each session page grows an **Artifacts** panel listing what it produced.
+
+Previews are the real page, scaled down and live, rather than screenshots — so there
+is no headless browser to install and a card can never show a stale thumbnail of a
+page that has since been rewritten. Deleting an artifact removes the folder and its
+row; the record of which session made it survives in a separate table, so putting the
+file back — or pointing the folder setting back — restores the link. An artifact that
+disappears from disk on its own is flagged rather than dropped, so you can see that
+something went missing, and **Forget** clears the entry.
+
+**⌘F searches inside an open artifact.** Not by giving up the isolation — this
+window still cannot read a node of that document. The framed preview is served with
+a small bridge script (only when framed; a direct open gets the file exactly as
+written), the search runs inside the frame, and the same find bar drives it over
+postMessage. Both backends return the same shape, so there is one bar, not two.
+
+Artifacts are served from **their own port** (5759 by default), so a generated page is
+cross-origin to the API, is framed without `allow-same-origin`, and gets a CSP whose
+`connect-src` cannot reach the daemon. The daemon additionally **refuses any API
+request whose `Origin` is not the dashboard's** — a cross-origin POST is delivered even
+when its response is unreadable, and the daemon can start sessions with real file
+access, so refusing the write is the part that matters.
+
+### Services
+
+Your local dev stack, as a page. Each **service** is a tmux session with one pane per
+command: a Django server with its pub/sub and queue workers beside it, a frontend dev
+server, an API. You describe them once under Settings → Services and start them from
+any checkout of the repository they belong to — the main checkout or any worktree —
+with the branch shown in the start menu so you know what you are running.
+
+- **Status, panes, ports, uptime** per service, read live from tmux. Nothing is cached:
+  a daemon restart changes nothing, and a stack started from a terminal with the same
+  session prefix shows up too.
+- **Attach** opens a real `tmux attach` in the browser, one pane or the whole window,
+  with search through the scrollback. Ctrl-b d detaches without stopping anything.
+- **Crash detection and auto-restart.** A pane whose process dropped back to the
+  prompt shows as crashed; a rule per service restarts a pane when its output matches
+  a pattern, capped per ten minutes so a broken service does not flap forever.
+- **Docker compose.** Point it at the compose folder in a repository and the containers
+  appear under the services with state, uptime and ports, plus logs, a shell, restart
+  and stop per container. Order and visibility are yours to set.
+
+Settings → Services holds the **repositories** (a main checkout plus a worktrees
+folder, where worktrees are `<key>-<branch>` subfolders), the **services** (name,
+repository, subdirectory, setup line, panes, restart rules) and the **compose project**.
+Sessions are named `<prefix>-<checkout>-<service>`; the prefix is `dash` unless
+`DASHBOARD_TMUX_PREFIX` says otherwise, which is how a stack started by another launcher
+can be adopted. A services file from such a launcher can be imported once with
+`DASHBOARD_SERVICES_IMPORT=<path>`.
+
 ### Settings
 
-Five sections behind a left rail — Appearance, Notifications, Sessions, Git, MCP — one
-panel at a time, with the section you last used remembered. Everything saves as you
-change it; there is no save button.
+Sections behind a left rail — Appearance, Pages, Notifications, Sessions, Artifacts,
+Services, Code, MCP — one panel at a time, with the section you last used remembered.
+Everything saves as you change it, except the Services editor, which has a Save button
+because a half-typed command is not a service.
 
 ### Appearance
 
@@ -416,7 +533,13 @@ prints what it loaded on startup:
 | `PORT` | `5757` | Daemon port |
 | `DASHBOARD_HOME` | `~/.claude-dashboard` | Where the dashboard keeps its own state |
 | `CLAUDE_HOME` | `~/.claude` | Claude Code's state. **Only ever read** |
+| `ARTIFACT_PORT` | `5759` | Port generated artifacts are served from, deliberately not the API's |
+| `CLAUDE_ARTIFACTS_DIR` | `~/Notes/artifacts` | Default artifact folder. Settings → Artifacts overrides it, and wins once set |
 | `DASHBOARD_WATCH` | unset | `1` restarts the daemon on server file changes — see below |
+| `DASHBOARD_TMUX_PREFIX` | `dash` | Prefix of the tmux sessions the Services page starts and lists |
+| `DASHBOARD_TMUX_BIN` | `tmux` | The tmux binary to use |
+| `DASHBOARD_PYTHON` | `python3` | The Python used to broker browser terminals |
+| `DASHBOARD_SERVICES_IMPORT` | unset | Path to an INI-style services file to import once, on the first boot with no services configured |
 
 ---
 
@@ -473,6 +596,7 @@ is invisible to lines already consumed. Rows are rebuilt, not duplicated.
 ```
 ~/.claude/projects/**.jsonl ──► indexer ──► index.db ──► History, Usage, transcripts
 ~/.claude/sessions/*.json   ──► registry ─────────────► Live (external sessions)
+~/Notes/artifacts/**        ──► artifacts ────────────► Artifacts tab, session panels
 Agent SDK child processes   ──► agents.ts ────────────► Live (your sessions), chat
 git                         ──► git.ts ───────────────► branches, diffs, history, switch, worktrees
 ```
@@ -492,7 +616,13 @@ usage rollups, index ticks, agent timelines, streaming tokens, and notifications
 | `git.ts` | Git: never a shell, always `--no-optional-locks`; writes are limited to switch/create/fetch and worktree add/remove, ref names validated by git itself, and serialised in two tiers — per checkout for the index, per repository for the shared ref store |
 | `provision.ts` | What a new worktree carries over so it can actually run |
 | `repoKeys.ts` | Which repository each indexed session belongs to, so worktrees group |
+| `artifacts.ts` | Generated artifacts: reconciling the folder, the API, and the isolated static server |
 | `comments.ts` | Review comments and the prompt they compose into |
+| `github.ts` | GitHub REST and GraphQL over plain fetch, with the `gh` token |
+| `prs.ts`, `prReview.ts` | PR search and detail; files, threads, viewed state, pending comments and review submission |
+| `prRuns.ts`, `prExplain.ts` | Review and explain sessions: records for sessions `agents.ts` runs, structured findings, posting to the PR |
+| `prRepos.ts` | Bare blobless clones and per-commit worktrees for review sessions |
+| `prRoutes.ts` | The `/api/pr/…` routes |
 | `notify.ts` | Whether, when and where to interrupt you |
 | `settings.ts`, `config.ts`, `dirs.ts`, `usage.ts`, `paths.ts` | Preferences, pricing, folder picking, rollups, paths |
 
@@ -517,6 +647,9 @@ rendered as React elements, never `innerHTML`, so a transcript cannot inject mar
   enable it later; switching to it mid-session fails with a message saying so
 - **Auto mode is model-dependent.** Models that do not offer it fall back to *Ask me*,
   and the UI reports the mode actually in force
+- **An artifact a subagent wrote is unattributed.** Subagent transcripts are read for
+  tokens only, so the write never reaches the artifact index. The folder still appears
+  in the Artifacts tab, just with no session next to it
 - **Search covers your prompts, not replies.** The FTS index holds typed prompts only
 - **Subagent transcripts are not indexed.** They exist under
   `~/.claude/projects/<dir>/<sessionId>/subagents/` but the indexer reads only

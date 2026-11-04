@@ -52,6 +52,25 @@ function migrate(db: Database) {
     .all();
   const needsUsageBackfill = usageCols.length > 0 && !usageCols.some((c) => c.name === "request_id");
 
+  /**
+   * Artifacts were added after the fact, and the indexer is incremental: an
+   * existing database has a byte offset recorded for every transcript, so without
+   * clearing them the writes that produced every artifact you already have sit
+   * behind the read head and stay unattributed forever. Same shape of problem as
+   * replies above, same one-time answer — clear the offsets and read once more.
+   */
+  const hadArtifacts = db
+    .query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'artifacts'",
+    )
+    .get();
+  const hadFiles = db
+    .query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'files'",
+    )
+    .get();
+  const needsArtifactBackfill = (hadArtifacts?.n ?? 0) === 0 && (hadFiles?.n ?? 0) > 0;
+
   db.exec(`
     -- Incremental-read bookkeeping: how far into each JSONL we've already parsed.
     CREATE TABLE IF NOT EXISTS files (
@@ -156,7 +175,120 @@ function migrate(db: Database) {
       src_path      TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_events(ts DESC);
+
+    -- Generated HTML artifacts, split by who owns the truth.
+    --
+    -- The artifacts table is what is on disk and is written only by the reconciler;
+    -- the filesystem decides what exists. artifact_writes is who made it and is
+    -- written only by the indexer; the transcript decides provenance. Keeping them
+    -- apart means re-reading one transcript can never delete a folder's row, and
+    -- deleting a folder can never lose the record of which session produced it.
+    CREATE TABLE IF NOT EXISTS artifacts (
+      slug        TEXT PRIMARY KEY,
+      title       TEXT,
+      -- Entry page, relative to the artifact root: <slug>/index.html, or <slug>.html
+      -- for a loose page that never got a folder.
+      entry       TEXT NOT NULL,
+      created_ts  INTEGER,
+      modified_ts INTEGER,
+      size        INTEGER NOT NULL DEFAULT 0,
+      file_count  INTEGER NOT NULL DEFAULT 1,
+      -- Kept, not deleted, when the folder goes away: a session's history should
+      -- still say it made something, even once the something is gone.
+      missing     INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_artifacts_modified ON artifacts(modified_ts DESC);
+
+    CREATE TABLE IF NOT EXISTS artifact_writes (
+      slug       TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      ts         INTEGER,
+      PRIMARY KEY (slug, session_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_artifact_writes_session ON artifact_writes(session_id);
   `);
+
+  /**
+   * The GitHub review pages. These rows are authored by the user or by a review
+   * session, not derived from transcripts, so no re-index ever touches them.
+   */
+  db.exec(`
+    -- Review comments collected locally and submitted to GitHub together, as one review.
+    CREATE TABLE IF NOT EXISTS pr_drafts (
+      id         TEXT PRIMARY KEY,
+      owner      TEXT NOT NULL,
+      repo       TEXT NOT NULL,
+      number     INTEGER NOT NULL,
+      path       TEXT NOT NULL,
+      side       TEXT NOT NULL,
+      line       INTEGER NOT NULL,
+      start_line INTEGER,
+      body       TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_pr_drafts_pr ON pr_drafts(owner, repo, number);
+
+    -- One Claude session started against a PR from an action button.
+    CREATE TABLE IF NOT EXISTS pr_runs (
+      id               TEXT PRIMARY KEY,
+      action_id        TEXT,
+      action_name      TEXT NOT NULL,
+      owner            TEXT NOT NULL,
+      repo             TEXT NOT NULL,
+      number           INTEGER NOT NULL,
+      title            TEXT NOT NULL,
+      status           TEXT NOT NULL,
+      agent_key        TEXT,
+      session_id       TEXT,
+      cwd              TEXT,
+      prompt           TEXT NOT NULL,
+      replies          TEXT NOT NULL DEFAULT '[]',
+      cost_usd         REAL,
+      findings         TEXT,
+      checked_findings TEXT NOT NULL DEFAULT '[]',
+      posted_findings  TEXT NOT NULL DEFAULT '{}',
+      created_at       TEXT NOT NULL,
+      finished_at      TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pr_runs_pr ON pr_runs(owner, repo, number);
+
+    -- A selection of code explained by a session; drill-downs are children.
+    CREATE TABLE IF NOT EXISTS pr_explanations (
+      id               TEXT PRIMARY KEY,
+      root_id          TEXT NOT NULL,
+      parent_id        TEXT,
+      drill_part_index INTEGER,
+      drill_text       TEXT,
+      owner            TEXT NOT NULL,
+      repo             TEXT NOT NULL,
+      number           INTEGER NOT NULL,
+      side             TEXT NOT NULL,
+      sha              TEXT NOT NULL,
+      path             TEXT NOT NULL,
+      start_line       INTEGER NOT NULL,
+      end_line         INTEGER NOT NULL,
+      code             TEXT NOT NULL,
+      question         TEXT,
+      status           TEXT NOT NULL,
+      result           TEXT,
+      error            TEXT,
+      agent_key        TEXT,
+      session_id       TEXT,
+      created_at       TEXT NOT NULL,
+      finished_at      TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pr_explanations_pr ON pr_explanations(owner, repo, number);
+  `);
+
+  if (needsArtifactBackfill) {
+    const n = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM files").get()?.n ?? 0;
+    if (n > 0) {
+      db.exec("DELETE FROM files");
+      console.log(
+        `[claude-dashboard] re-reading ${n} transcript(s) once to link artifacts to their sessions`,
+      );
+    }
+  }
 
   if (needsRepliesFts) {
     const n = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM replies").get()?.n ?? 0;
@@ -168,6 +300,33 @@ function migrate(db: Database) {
       console.log(`[claude-dashboard] indexed ${n} assistant replies for search`);
     }
   }
+
+  /**
+   * A link the user made by hand, rather than one read out of a transcript.
+   *
+   * Needed because attribution cannot always be inferred: an artifact written
+   * somewhere else and moved in by a shell script leaves no trace a path scan can
+   * follow. A manual link is also the only kind a re-read must not delete — the
+   * transcript it would be rebuilt from never contained it.
+   */
+  ensureColumn(db, "artifact_writes", "manual", "INTEGER NOT NULL DEFAULT 0");
+
+  /**
+   * Tags on artifacts. `source` says who put it there: 'meta' rows are re-read
+   * from the page's <meta name="tags"> on every reconcile and replaced wholesale;
+   * 'user' rows were added in the dashboard and survive a re-read.
+   */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS artifact_tags (
+      slug   TEXT NOT NULL,
+      tag    TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'user',
+      PRIMARY KEY (slug, tag)
+    );
+    CREATE INDEX IF NOT EXISTS idx_artifact_tags_tag ON artifact_tags(tag);
+  `);
+  ensureColumn(db, "artifacts", "pinned", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "artifacts", "hidden", "INTEGER NOT NULL DEFAULT 0");
 
   // Added with dashboard-set titles: marks a title the user chose, so a later
   // auto-generated one cannot quietly replace it.

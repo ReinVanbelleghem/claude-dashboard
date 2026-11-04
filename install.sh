@@ -122,7 +122,33 @@ if [ "$OS" = macos ]; then
   fi
 fi
 
-# ── 5. ports ──────────────────────────────────────────────────────────────────
+# ── 5. services page (optional) ───────────────────────────────────────────────
+# Everything here is optional: without it the Services page simply says what is
+# missing, and the rest of the dashboard is unaffected.
+step "Services page (optional)"
+if has_tmux; then
+  ok "tmux $(tmux -V | awk '{print $2}') — runs the local dev stack"
+else
+  warn "tmux not installed — the Services page cannot start or attach to anything"
+  hint "$(tmux_install_hint)"
+  if [ "$OS" = macos ] && have brew && confirm; then
+    brew install tmux && ok "tmux installed"
+  fi
+fi
+if has_python3; then
+  ok "python3 $(python3 --version 2>&1 | awk '{print $2}') — brokers the browser terminal"
+else
+  warn "python3 not found — the in-browser terminal (attach, logs, shell) needs it"
+  hint "it only uses the standard library; any python3 on PATH will do"
+fi
+if has_docker; then
+  ok "docker compose $(docker compose version --short 2>/dev/null || echo found) — lists and drives containers"
+else
+  warn "docker compose not available — the containers section stays empty"
+  hint "$(docker_install_hint)"
+fi
+
+# ── 6. ports ──────────────────────────────────────────────────────────────────
 step "Ports"
 for p in 5757 5758; do
   if port_busy "$p"; then
@@ -138,7 +164,7 @@ if [ "$FATAL" = 1 ]; then
   exit 1
 fi
 
-# ── 6. packages + build ───────────────────────────────────────────────────────
+# ── 7. packages + build ───────────────────────────────────────────────────────
 step "Dependencies"
 bun install
 ok "packages installed"

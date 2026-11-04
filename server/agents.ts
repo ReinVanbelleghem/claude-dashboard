@@ -75,7 +75,15 @@ export type TimelineItem = (
       /** Set once answered; while null the turn is parked waiting on the browser. */
       decision: "allow" | "allowAlways" | "deny" | null;
     }
-  | { kind: "result"; ts: number; costUsd: number | null; durationMs: number | null; error: string | null }
+  | {
+      kind: "result";
+      ts: number;
+      costUsd: number | null;
+      durationMs: number | null;
+      error: string | null;
+      /** The turn's JSON answer, for a session started with an output schema. */
+      structured?: unknown;
+    }
   | { kind: "error"; ts: number; text: string }
 ) & { agentId?: string };
 
@@ -209,11 +217,15 @@ function saveRestorable() {
     ...restorable,
     ...onDisk,
   ];
-  const seen = new Set<string>();
-  restorable = rows
-    .filter((r) => (seen.has(r.sessionId) ? false : seen.add(r.sessionId)))
-    .sort((a, b) => b.lastSeen - a.lastSeen)
-    .slice(0, 50);
+  // Newest wins, except on a name: a session resumed without one would otherwise
+  // overwrite the title it is already known by with null, and lose it for good.
+  const byId = new Map<string, Restorable>();
+  for (const r of rows) {
+    const kept = byId.get(r.sessionId);
+    if (!kept) byId.set(r.sessionId, { ...r });
+    else if (kept.title === null && r.title !== null) kept.title = r.title;
+  }
+  restorable = [...byId.values()].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 50);
   try {
     mkdirSync(DATA_DIR, { recursive: true });
     writeFileSync(RESTORE_PATH, JSON.stringify(restorable, null, 2));
@@ -550,6 +562,16 @@ export type StartOptions = {
   prompt?: string;
   /** Replaces the auto-generated title. Ignored by the CLI when resuming. */
   title?: string;
+  /**
+   * Tools that run without asking. Anything else still goes through the browser's
+   * permission prompt, so this narrows what interrupts you, not what the session can do.
+   */
+  allowedTools?: string[];
+  /**
+   * A JSON schema every turn's final answer must match. Set by the review pages so a
+   * session's verdict arrives as data rather than prose to parse.
+   */
+  outputSchema?: Record<string, unknown>;
 };
 
 /**
@@ -579,6 +601,16 @@ const RESEARCH_OPTIONS: Pick<Options, "settingSources" | "skills" | "disallowedT
   disallowedTools: ["Bash", "BashOutput", "KillShell", "Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep", "Task"],
 };
 
+/**
+ * The name a session already goes by. Resuming starts a new agent record, and the
+ * CLI ignores `title` on resume, so without this a resume from a caller that does
+ * not re-supply the name comes back nameless and the views fall back to its path.
+ */
+function knownTitle(sessionId: string): string | null {
+  for (const a of agents.values()) if (a.sessionId === sessionId && a.title) return a.title;
+  return restorable.find((r) => r.sessionId === sessionId)?.title ?? null;
+}
+
 export function startAgent(opts: StartOptions): string {
   const key = randomUUID();
   const queue = inputQueue();
@@ -588,7 +620,7 @@ export function startAgent(opts: StartOptions): string {
     sessionId: opts.resume ?? null,
     cwd: opts.cwd,
     research: opts.research === true,
-    title: opts.title?.trim() || null,
+    title: opts.title?.trim() || (opts.resume ? knownTitle(opts.resume) : null),
     model: opts.model ?? null,
     permissionMode: opts.permissionMode ?? "default",
     status: "starting",
@@ -624,6 +656,8 @@ export function startAgent(opts: StartOptions): string {
       allowDangerouslySkipPermissions: opts.permissionMode === "bypassPermissions",
       resume: opts.resume,
       title: opts.title?.trim() || undefined,
+      allowedTools: opts.allowedTools,
+      outputFormat: opts.outputSchema ? { type: "json_schema", schema: opts.outputSchema } : undefined,
       includePartialMessages: true,
       // Without these a Task call is an opaque tool row: the first forwards the
       // subagent's own messages (tagged with parent_tool_use_id), the second adds
@@ -844,6 +878,7 @@ async function consume(agent: Agent) {
             costUsd: anyMsg.total_cost_usd ?? null,
             durationMs: anyMsg.duration_ms ?? null,
             error: anyMsg.is_error ? (anyMsg.subtype ?? "error") : null,
+            ...(anyMsg.structured_output !== undefined ? { structured: anyMsg.structured_output } : {}),
           });
           agent.streaming = "";
           touch(agent, "idle");
@@ -870,14 +905,19 @@ async function consume(agent: Agent) {
  * on it. The timeline records it immediately, flagged as queued, so you can see
  * that it landed and is waiting rather than wondering if it was dropped.
  */
-export function sendMessage(key: string, text: string, images: InboundImage[] = []): boolean {
+/**
+ * `display` is what the timeline shows when the text sent to the session carries
+ * context the sender never typed, so the transcript stays the conversation the user
+ * had rather than the one the machinery needed.
+ */
+export function sendMessage(key: string, text: string, images: InboundImage[] = [], display?: string): boolean {
   const a = agents.get(key);
   if (!a || a.status === "ended" || a.status === "error") return false;
   const busy = a.status === "thinking" || a.status === "awaiting-permission";
   append(a, {
     kind: "user",
     ts: Date.now(),
-    text,
+    text: display ?? text,
     ...(busy ? { queued: true } : {}),
     ...(images.length ? { images: images.map(persistImage) } : {}),
   });
@@ -1123,4 +1163,36 @@ export async function stopAllAgents() {
   await Promise.all(
     [...agents.keys()].map((k) => stopAgent(k, "the dashboard daemon shut down").catch(() => {})),
   );
+}
+
+/**
+ * Stop a live session and bring it straight back on the same conversation.
+ *
+ * The tool registry — MCP servers above all — is built once when the process starts,
+ * so a server authorized afterwards stays invisible however many times you retry.
+ * Only a fresh process picks it up, and End-then-Resume-from-the-card is the same
+ * two moves with a card hunt in between.
+ *
+ * The old agent is forgotten rather than left in the roster: it keeps the session id
+ * it was resumed from, and the views look an agent up by that id, so leaving it there
+ * would point the open page at the dead process instead of the new one.
+ */
+export async function restartAgent(key: string): Promise<{ key: string } | { error: string }> {
+  const a = agents.get(key);
+  if (!a) return { error: "unknown session" };
+  const { sessionId, cwd, research, model, permissionMode, title } = a;
+  if (!sessionId) return { error: "this session has not started a conversation yet" };
+  if (!existsSync(cwd)) return { error: `${cwd} no longer exists` };
+  if (a.status !== "ended" && a.status !== "error") await stopAgent(key, "restarted from the dashboard");
+  forgetAgent(key);
+  return {
+    key: startAgent({
+      cwd,
+      research,
+      model: model ?? undefined,
+      permissionMode,
+      title: title ?? undefined,
+      resume: sessionId,
+    }),
+  };
 }

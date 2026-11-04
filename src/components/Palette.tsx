@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { visiblePages, type Tab } from "../pages.ts";
 import { api, fmtAgo, shortPath, type AgentSummary, type Overview, type SessionRow } from "../api.ts";
 import { ACCENTS, type Appearance } from "../appearance.ts";
 
@@ -14,7 +15,7 @@ import { ACCENTS, type Appearance } from "../appearance.ts";
  */
 
 type Group = "Commands" | "Live" | "Sessions" | "Projects";
-type Tab = "live" | "history" | "worktrees" | "usage" | "settings";
+
 
 export type PaletteItem = {
   id: string;
@@ -78,6 +79,8 @@ export function Palette({
   projects,
   recent,
   appearance,
+  hiddenPages,
+  pageOrder,
   onClose,
   onOpenSession,
   onTab,
@@ -91,6 +94,9 @@ export function Palette({
   projects: Overview["projects"];
   recent: SessionRow[];
   appearance: Appearance;
+  /** Dock pages turned off in settings, so the palette cannot jump to one. */
+  hiddenPages: string[] | undefined;
+  pageOrder?: string[];
   onClose: () => void;
   onOpenSession: (id: string, opts?: { full?: boolean }) => void;
   onTab: (tab: Tab) => void;
@@ -180,14 +186,10 @@ export function Palette({
       boost: 20,
       run: onNewSession,
     });
-    const TABS: [Tab, string][] = [
-      ["live", "your sessions"],
-      ["history", "past sessions"],
-      ["worktrees", "checkouts"],
-      ["usage", "tokens and cost"],
-      ["settings", "preferences"],
-    ];
-    for (const [t, hint] of TABS) {
+    // A page turned off in settings is not reachable from here either — otherwise
+    // the palette is a back door into a view the dock says you do not want.
+    for (const { key: t, hint } of visiblePages(hiddenPages, pageOrder)) {
+      if (t === "desktop") continue;
       add({
         id: `cmd:tab:${t}`,
         group: "Commands",
@@ -265,6 +267,7 @@ export function Palette({
     recent,
     found,
     appearance,
+    hiddenPages,
     onNewSession,
     onTab,
     onOpenSession,

@@ -20,7 +20,7 @@ export type LiveSession = {
   alive: boolean;
 };
 
-/** Statuses that mean the session is blocked on Rein, not on itself. */
+/** Statuses that mean the session is blocked on the user, not on itself. */
 const NEEDS_INPUT = new Set(["needs_input", "waiting"]);
 
 export function needsInput(s: LiveSession): boolean {

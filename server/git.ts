@@ -686,6 +686,8 @@ export type WorktreeRepo = {
    * a second round trip per repository is what kept the page blank while it waited.
    */
   worktrees: Worktree[];
+  /** A bare clone: no main checkout, every worktree is a linked one. */
+  bare: boolean;
 };
 
 /**
@@ -711,13 +713,16 @@ export async function worktreeRepos(candidates: string[]): Promise<WorktreeRepo[
     // A main checkout answers for the repository better than a linked one, so it wins
     // even when a linked worktree was seen first.
     if (prev && !(id.mainRoot && id.root === id.mainRoot)) continue;
-    const named = id.mainRoot ?? id.root;
+    // A bare clone has no main checkout to take a name from, and its worktrees are
+    // named for commits — so the clone directory itself (`backend.git`) is the name.
+    const name = id.mainRoot ? basename(id.mainRoot) : basename(id.commonDir).replace(/\.git$/, "");
     byKey.set(id.commonDir, {
       repoKey: id.commonDir,
-      name: basename(named),
+      name,
       root: id.root,
       mainRoot: id.mainRoot,
       worktrees: [],
+      bare: !id.mainRoot,
     });
   }
 
@@ -813,7 +818,7 @@ const BRANCH_LIMIT_DEFAULT = 60;
  * Local and remote-tracking branches, filtered and paged.
  *
  * The filtering has to happen here rather than in the browser: a long-lived repo
- * accumulates thousands of remote branches — the TMS backend has ~5,800 — and
+ * accumulates thousands of remote branches — a busy monorepo easily passes 5,000 — and
  * shipping all of them is a megabyte-and-a-half of JSON per popover open, then
  * thousands of DOM nodes nobody scrolls to. So the query goes to the server and
  * comes back as one screenful.

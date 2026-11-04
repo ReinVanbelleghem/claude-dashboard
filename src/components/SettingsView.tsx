@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   configApi,
   modelApi,
@@ -10,10 +10,15 @@ import {
 } from "../api.ts";
 import type { Appearance } from "../appearance.ts";
 import { AppearancePanel } from "./AppearancePanel.tsx";
-import { CheckIcon, TrashIcon } from "./Icons.tsx";
+import { FolderField } from "./FolderPicker.tsx";
+import { CheckIcon, GripIcon, TrashIcon } from "./Icons.tsx";
 import { McpPanel } from "./McpPanel.tsx";
 import { OpenTargetPicker } from "./OpenTargetPicker.tsx";
+import { orderedPages } from "../pages.ts";
+import { useSortable } from "../useSortable.ts";
+import { ServicesSettings } from "./services/ServicesSettings.tsx";
 import { Select } from "./Select.tsx";
+import { ReviewsSettings } from "./pr/ReviewsSettings.tsx";
 
 function labelFromModelId(id: string): string {
   const m = id.match(/^claude-([a-z]+)-(.+)$/);
@@ -66,14 +71,16 @@ const EVENTS: { kind: NotifyEventKind; label: string; help: string }[] = [
  * scrolling: notifications alone is longer than a screen, and the three short
  * panels were disappearing under it.
  */
-type SectionKey = "appearance" | "notifications" | "sessions" | "git" | "models" | "mcp";
+type SectionKey = "appearance" | "pages" | "notifications" | "sessions" | "artifacts" | "services" | "code" | "mcp";
 
 const SECTIONS: { key: SectionKey; label: string; help: string }[] = [
   { key: "appearance", label: "Appearance", help: "Theme, accent, tab icon" },
+  { key: "pages", label: "Pages", help: "Which pages the dock shows" },
   { key: "notifications", label: "Notifications", help: "What interrupts you" },
-  { key: "sessions", label: "Sessions", help: "Where a card opens" },
-  { key: "git", label: "Git", help: "Diffs and worktrees" },
-  { key: "models", label: "Models", help: "Default and available models" },
+  { key: "sessions", label: "Sessions", help: "Where a card opens, and which model" },
+  { key: "artifacts", label: "Artifacts", help: "Where generated pages are kept" },
+  { key: "services", label: "Services", help: "The local dev stack" },
+  { key: "code", label: "Code", help: "Diffs, worktrees and pull requests" },
   { key: "mcp", label: "MCP", help: "Connectors and sign-in" },
 ];
 
@@ -118,9 +125,11 @@ export function SettingsView({
   // Remembered, because settings is a place you come back to for one thing.
   const [section, setSection] = useState<SectionKey>(() => {
     const saved = localStorage.getItem(SECTION_KEY);
-    // "diffs" grew into "git" when the worktree settings moved into it, so anyone whose
-    // last visit was that panel lands on it rather than back at the top of the rail.
-    if (saved === "diffs") return "git";
+    // Sections have been merged twice — "diffs" into "git", then "git" and "reviews"
+    // into "code", and "models" into "sessions". A stale key lands on whichever panel
+    // now holds what it used to, rather than back at the top of the rail.
+    const MOVED: Record<string, SectionKey> = { diffs: "code", git: "code", reviews: "code", models: "sessions" };
+    if (saved && MOVED[saved]) return MOVED[saved];
     return SECTIONS.some((s) => s.key === saved) ? (saved as SectionKey) : "appearance";
   });
 
@@ -208,12 +217,34 @@ export function SettingsView({
       {nav}
       <div className="settings-body">
         {section === "appearance" && (
+          <div className="panel">
+            <h2>Name</h2>
+            <p className="hint">
+              What the sidebar, the breadcrumb and the window title call this app. Two words
+              become a wordmark over a subtitle in the sidebar.
+            </p>
+            <AppNameField value={settings.ui.appName ?? "Claude Dashboard"} onSave={(appName) => save({ ui: { appName } })} />
+          </div>
+        )}
+        {section === "appearance" && (
           <AppearancePanel
             appearance={appearance}
             onChange={onAppearance}
             themes={settings.ui.themes ?? []}
             onThemes={(themes) => save({ ui: { themes } })}
           />
+        )}
+
+        {section === "pages" && (
+          <div className="settings-section">
+            <h3>Pages</h3>
+            <p className="hint">Drag to reorder. A page turned off leaves the sidebar and the palette; nothing is deleted.</p>
+            <PagesList settings={settings} save={save} />
+            <p className="hint">
+              <b>Live</b> and <b>Settings</b> stay put: one is where a hidden page sends you,
+              the other is the way back here.
+            </p>
+          </div>
         )}
 
         {section === "notifications" && (
@@ -229,10 +260,7 @@ export function SettingsView({
                 <span>{n.enabled ? "On" : "Off"}</span>
               </label>
             </div>
-            <p className="hint">
-              Told when a session wants you, so you can leave the dashboard closed. Nothing fires while
-              the master switch is off{saving ? " · saving…" : ""}.
-            </p>
+            <p className="hint">Alerts when a session needs you{saving ? " · saving…" : ""}.</p>
 
             <div className={`set-group ${n.enabled ? "" : "disabled"}`}>
               <h3 className="set-h">What to tell me about</h3>
@@ -514,110 +542,8 @@ export function SettingsView({
           </div>
         )}
 
-        {section === "git" && (
-          <div className="panel">
-            <h2>Diffs</h2>
-            <p className="hint">Defaults for the git views. Changing them here or there is the same thing.</p>
-            <div className="set-grid">
-              <label className="field">
-                <span>Default layout</span>
-                <Select
-                  value={settings.ui.diffMode}
-                  onChange={(v) => save({ ui: { diffMode: v as "unified" | "split" } })}
-                  options={[
-                    { value: "unified", label: "Unified" },
-                    { value: "split", label: "Split" },
-                  ]}
-                />
-              </label>
-              <label className="set-row" style={{ alignSelf: "end" }}>
-                <input
-                  type="checkbox"
-                  checked={settings.ui.diffIgnoreWhitespace}
-                  onChange={(e) => save({ ui: { diffIgnoreWhitespace: e.target.checked } })}
-                />
-                <span className="set-text">
-                  <span className="set-label">Ignore whitespace</span>
-                  <span className="set-help">Hide changes that only reindent.</span>
-                </span>
-              </label>
-            </div>
-            <h2 style={{ marginTop: 22 }}>Worktrees</h2>
-            <p className="hint">
-              A worktree is a second checkout of one repository, on its own branch, so a session
-              can work a branch without moving the files under any other session. New ones are
-              created beside the repository unless you name a directory here.
-            </p>
-            <label className="field" style={{ maxWidth: 420 }}>
-              <span>Create worktrees in</span>
-              <input
-                className="search"
-                spellCheck={false}
-                placeholder="Beside the repository"
-                defaultValue={settings.ui.worktreeRoot ?? ""}
-                /* On blur rather than per keystroke: a half-typed path is not a setting. */
-                onBlur={(e) => {
-                  const v = e.target.value.trim();
-                  if (v !== (settings.ui.worktreeRoot ?? "")) save({ ui: { worktreeRoot: v } });
-                }}
-              />
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={settings.ui.worktreeExclude === true}
-                onChange={(e) => save({ ui: { worktreeExclude: e.target.checked } })}
-              />
-              <span>Let it add those paths to the repository's local exclude file</span>
-            </label>
-            <p className="hint">
-              A <code>node_modules</code> symlink is not ignored by the usual{" "}
-              <code>node_modules/</code> line, because a trailing slash means directory — so
-              without this the symlink would show as untracked and the worktree could not be
-              removed, and it is left behind instead. Turning this on writes the bare path to{" "}
-              <code>.git/info/exclude</code>, which git never commits and which changes nothing in
-              your main checkout.
-            </p>
-            <p className="hint">
-              {(settings.ui.worktreeProvision ?? []).length > 0 ? (
-                <>
-                  Carried into every new worktree, in every repository, when git ignores it:{" "}
-                  {(settings.ui.worktreeProvision ?? [])
-                    .map((r) => `${r.path} (${r.mode})`)
-                    .join(", ")}
-                  . A path git does not ignore is left behind — copying it would show up as
-                  uncommitted work. Edit this baseline in <code>settings.json</code>.
-                </>
-              ) : (
-                <>
-                  Nothing is carried into a new worktree by default, so a fresh checkout will
-                  have no dependencies or env files. Set <code>ui.worktreeProvision</code> in{" "}
-                  <code>settings.json</code> to change that everywhere, or add rules per
-                  repository under Worktrees.
-                </>
-              )}
-            </p>
-            <p className="hint">
-              {/*
-                The per-repository list is the one that gets edited in practice, because the
-                interesting cases are repository-specific: one venv per project in a Python
-                monorepo, and nothing a global default could have guessed. It lives on the
-                Worktrees tab, next to the repository it concerns.
-              */}
-              Per-repository rules — a venv for each project, patterns like{" "}
-              <code>projects/*/venv</code>, or a global rule switched off for one repo — are
-              edited under <b>Worktrees</b>, on the repository itself, where the list can be
-              checked against what that checkout actually has.
-              {Object.keys(settings.ui.worktreeProvisionByRepo ?? {}).length > 0 &&
-                ` ${Object.keys(settings.ui.worktreeProvisionByRepo ?? {}).length} repositor${
-                  Object.keys(settings.ui.worktreeProvisionByRepo ?? {}).length === 1 ? "y has" : "ies have"
-                } their own rules.`}
-            </p>
-          </div>
-        )}
-
         {(() => {
-          if (section !== "models") return null;
+          if (section !== "sessions") return null;
           const customModels = settings.ui.customModels ?? [];
           const disabled = settings.ui.disabledModels ?? [];
           const merged = [
@@ -717,10 +643,8 @@ export function SettingsView({
 
               <h2 style={{ marginTop: 22 }}>Add an older or unlisted model</h2>
               <p className="hint">
-                The CLI's picker only offers a handful of current aliases. Older and dated model IDs
-                still work — Claude Code accepts any exact model ID, family alias, or version prefix —
-                but they skip its usual validation: a retired ID or an account not entitled to it will
-                only fail once a session actually tries to start with it.
+                Any exact model ID, family alias or version prefix works, but is only validated when a
+                session starts with it.
               </p>
               {knownCandidates.length > 0 && (
                 <div className="chip-row" style={{ marginBottom: 10 }}>
@@ -767,8 +691,191 @@ export function SettingsView({
           );
         })()}
 
+        {section === "code" && (
+          <div className="panel">
+            <h2>Diffs</h2>
+            <p className="hint">Defaults for the git views. Changing them here or there is the same thing.</p>
+            <div className="set-grid">
+              <label className="field">
+                <span>Default layout</span>
+                <Select
+                  value={settings.ui.diffMode}
+                  onChange={(v) => save({ ui: { diffMode: v as "unified" | "split" } })}
+                  options={[
+                    { value: "unified", label: "Unified" },
+                    { value: "split", label: "Split" },
+                  ]}
+                />
+              </label>
+              <label className="set-row" style={{ alignSelf: "end" }}>
+                <input
+                  type="checkbox"
+                  checked={settings.ui.diffIgnoreWhitespace}
+                  onChange={(e) => save({ ui: { diffIgnoreWhitespace: e.target.checked } })}
+                />
+                <span className="set-text">
+                  <span className="set-label">Ignore whitespace</span>
+                  <span className="set-help">Hide changes that only reindent.</span>
+                </span>
+              </label>
+            </div>
+            <h2 style={{ marginTop: 22 }}>Worktrees</h2>
+            <p className="hint">New worktrees are created beside the repository unless you pick a folder here.</p>
+            <div style={{ maxWidth: 520 }}>
+              <FolderField
+                label="Create worktrees in"
+                value={settings.ui.worktreeRoot ?? ""}
+                placeholder="Beside the repository"
+                onChange={(v) => save({ ui: { worktreeRoot: v } })}
+                pickerTitle="Pick the worktrees folder"
+                pickerHint="New worktrees are created as subfolders of this directory."
+              />
+            </div>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={settings.ui.worktreeExclude === true}
+                onChange={(e) => save({ ui: { worktreeExclude: e.target.checked } })}
+              />
+              <span>Let it add those paths to the repository's local exclude file</span>
+            </label>
+            <p className="hint">
+              Writes the symlinked paths to <code>.git/info/exclude</code>, which git never commits, so a
+              worktree with a <code>node_modules</code> symlink can still be removed.
+            </p>
+            <p className="hint">
+              {(settings.ui.worktreeProvision ?? []).length > 0
+                ? `Carried into every new worktree: ${(settings.ui.worktreeProvision ?? [])
+                    .map((r) => `${r.path} (${r.mode})`)
+                    .join(", ")}. Edit this baseline in settings.json.`
+                : "Nothing is carried into a new worktree by default; set ui.worktreeProvision in settings.json."}
+              {" "}Per-repository rules live under <b>Worktrees</b>, on the repository itself.
+              {Object.keys(settings.ui.worktreeProvisionByRepo ?? {}).length > 0 &&
+                ` ${Object.keys(settings.ui.worktreeProvisionByRepo ?? {}).length} repositor${
+                  Object.keys(settings.ui.worktreeProvisionByRepo ?? {}).length === 1 ? "y has" : "ies have"
+                } their own.`}
+            </p>
+          </div>
+        )}
+
+        {section === "artifacts" && (
+          <div className="settings-section">
+            <h3>Artifacts</h3>
+            <p className="hint">Every HTML page written under this folder is indexed and linked to the session that wrote it.</p>
+            <div style={{ maxWidth: 520 }}>
+              <FolderField
+                label="Keep artifacts in"
+                value={settings.ui.artifactsRoot ?? ""}
+                placeholder="~/Notes/artifacts"
+                onChange={(v) => save({ ui: { artifactsRoot: v } })}
+                pickerTitle="Pick the artifacts folder"
+                pickerHint="Every HTML page written under it is indexed and shown on the Artifacts page."
+              />
+            </div>
+            <p className="hint">
+              Empty means <code>~/Notes/artifacts</code> or <code>CLAUDE_ARTIFACTS_DIR</code>. Changing it
+              re-scans; your <code>CLAUDE.md</code> has to point Claude at the same folder.
+            </p>
+          </div>
+        )}
+
+
+        {section === "services" && <ServicesSettings settings={settings} save={save} />}
+
+        {section === "code" && (
+          <ReviewsSettings
+            settings={settings}
+            save={save}
+            models={[
+              ...allModels.filter((m) => m.value !== "default").map((m) => ({ value: m.value, label: m.displayName })),
+              ...(settings.ui.customModels ?? []).filter((c) => !allModels.some((m) => m.value === c.value)),
+            ]}
+          />
+        )}
+
         {section === "mcp" && <McpPanel />}
       </div>
     </div>
+  );
+}
+
+function PagesList({ settings, save }: { settings: Settings; save: (patch: SettingsPatch) => void }) {
+  const pages = orderedPages(settings.ui.pageOrder);
+  const hidden = settings.ui.hiddenPages ?? [];
+  const listRef = useRef<HTMLDivElement>(null);
+  const drag = useSortable({
+    count: pages.length,
+    listRef,
+    itemSelector: ".set-row",
+    onMove: (from, to) => {
+      const next = pages.map((p) => p.key);
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      save({ ui: { pageOrder: next } });
+    },
+  });
+  return (
+    <div className="set-group" ref={listRef}>
+      {pages.map((p, i) => (
+        <label key={p.key} className={`set-row ${drag.active === i ? "dragging" : ""}`} style={drag.itemStyle(i)}>
+          <span className="set-row-lead">
+            <button
+              type="button"
+              className="sort-grip"
+              data-sort-handle
+              aria-label={`Drag to reorder ${p.label || "Desktop"}`}
+              onClick={(e) => e.preventDefault()}
+              {...drag.handleProps(i)}
+            >
+              <GripIcon />
+            </button>
+            <input
+              type="checkbox"
+              checked={!hidden.includes(p.key)}
+              disabled={p.fixed}
+              onChange={(e) =>
+                save({
+                  ui: { hiddenPages: e.target.checked ? hidden.filter((k) => k !== p.key) : [...hidden, p.key] },
+                })
+              }
+            />
+          </span>
+          <span className="set-text">
+            <span className="set-label">{p.label || "Desktop"}</span>
+            <span className="set-help">
+              {p.hint}
+              {p.fixed ? " · always on" : ""}
+            </span>
+          </span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function AppNameField({ value, onSave }: { value: string; onSave: (name: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => {
+    const next = draft.trim() || "Claude Dashboard";
+    if (next !== value) onSave(next);
+    setDraft(next);
+  };
+  return (
+    <label className="field" style={{ maxWidth: 360 }}>
+      <span>App name</span>
+      <input
+        className="search"
+        value={draft}
+        placeholder="Claude Dashboard"
+        maxLength={40}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
+          if (e.key === "Escape") setDraft(value);
+        }}
+      />
+    </label>
   );
 }

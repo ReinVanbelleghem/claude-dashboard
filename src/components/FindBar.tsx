@@ -1,17 +1,59 @@
 import { useFind } from "../useFind.ts";
+import { useFrameFind } from "../useFrameFind.ts";
 import { MATCH_LIMIT } from "../find.ts";
 
-export function FindBar({ onClose }: { onClose: () => void }) {
-  const { query, setQuery, count, index, step } = useFind(true);
+type Find = ReturnType<typeof useFind>;
+
+/**
+ * One bar, two backends.
+ *
+ * Searching this document and searching inside an open artifact are the same
+ * interaction and must not become two different-looking controls — but they cannot
+ * share an implementation, because an artifact is a separate cross-origin document
+ * this window cannot read. The split is here and nowhere else: both hooks return
+ * the same shape, and everything below renders it.
+ */
+export function FindBar({ onClose, frame }: { onClose: () => void; frame?: HTMLIFrameElement | null }) {
+  // Hooks cannot be called conditionally, so the choice is made by which component
+  // mounts rather than by a branch inside one.
+  return frame === undefined ? (
+    <PageFindBar onClose={onClose} />
+  ) : (
+    <FrameFindBar frame={frame} onClose={onClose} />
+  );
+}
+
+function PageFindBar({ onClose }: { onClose: () => void }) {
+  return <FindBarUI find={useFind(true)} onClose={onClose} />;
+}
+
+function FrameFindBar({ frame, onClose }: { frame: HTMLIFrameElement | null; onClose: () => void }) {
+  return <FindBarUI find={useFrameFind(frame)} onClose={onClose} inFrame />;
+}
+
+function FindBarUI({
+  find: { query, setQuery, count, index, step },
+  onClose,
+  inFrame,
+}: {
+  find: Find;
+  onClose: () => void;
+  inFrame?: boolean;
+}) {
   const empty = query.trim().length > 0 && count === 0;
 
   return (
-    <div className="find-bar" data-find-skip role="search" aria-label="Find on page">
+    <div
+      className={`find-bar${inFrame ? " find-bar-artifact" : ""}`}
+      data-find-skip
+      role="search"
+      aria-label={inFrame ? "Find in artifact" : "Find on page"}
+    >
       <input
         className="find-input"
         autoFocus
         value={query}
-        placeholder="Find in page…"
+        placeholder={inFrame ? "Find in artifact…" : "Find in page…"}
         aria-label="Find"
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {

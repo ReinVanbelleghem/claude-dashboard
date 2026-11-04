@@ -75,10 +75,10 @@ export function slashTokenAt(
  * How well a command name matches what was typed, lowest first, or `null` if it
  * isn't a match at all.
  *
- * A plain `.includes()` puts "/m" and "qargo:morning-inbox" on equal footing with
+ * A plain `.includes()` puts "/m" and "team:morning-inbox" on equal footing with
  * "model", so the thing you actually meant can lose to something that merely
- * contains the letter somewhere in the middle. Namespaced names (`qargo:todo`) are
- * ranked on their own segment too, so "/todo" finds "qargo:todo" as readily as a
+ * contains the letter somewhere in the middle. Namespaced names (`team:todo`) are
+ * ranked on their own segment too, so "/todo" finds "team:todo" as readily as a
  * plain "todo" would.
  */
 function commandRank(name: string, typed: string): number | null {
@@ -322,6 +322,7 @@ export function LiveConversation({
         if (mine) setData((d) => (d ? { ...d, ...mine } : d));
         return;
       }
+      if (e.type === "pr-run" || e.type === "pr-explain") return;
       if (e.key !== agentKey) return;
       if (e.type === "agent-delta") setStreaming((s) => s + e.text);
       else if (e.type === "agent-models") setData((d) => (d ? { ...d, models: e.models } : d));

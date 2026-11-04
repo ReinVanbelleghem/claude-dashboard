@@ -17,6 +17,7 @@ import {
   pruneImages,
   renameAgent,
   renamePastSession,
+  restartAgent,
   restoreAgent,
   interruptAgent,
   listAgents,
@@ -43,6 +44,11 @@ import {
   migrateRepoKeys,
   updateComment,
 } from "./comments.ts";
+import {
+  handleArtifactRoute,
+  reconcileArtifacts,
+  startArtifactServer,
+} from "./artifacts.ts";
 import { loadConfig } from "./config.ts";
 import { openDb } from "./db.ts";
 import {
@@ -97,7 +103,36 @@ import {
   setNotifyEmitter,
   type NotifySubject,
 } from "./notify.ts";
-import { PORT, PROJECTS_DIR, SCRATCH_DIR, SESSIONS_DIR, slugToPath } from "./paths.ts";
+import {
+  ARTIFACT_PORT,
+  artifactsDir,
+  setArtifactsDir,
+  PORT,
+  PROJECTS_DIR,
+  SCRATCH_DIR,
+  SESSIONS_DIR,
+  slugToPath,
+} from "./paths.ts";
+import { handlePrRoute } from "./prRoutes.ts";
+import { initExplain, onAgentItem as explainOnItem, onRoster as explainOnRoster } from "./prExplain.ts";
+import { initReview } from "./prReview.ts";
+import { reviewRepoLabel } from "./prRepos.ts";
+import { initRuns, onAgentItem as runsOnItem, onRoster as runsOnRoster, runMessagePreamble } from "./prRuns.ts";
+import {
+  buildState as servicesState,
+  capturePane,
+  checkoutsFor,
+  dismissError,
+  restartDead,
+  restartPane,
+  searchPane,
+  startService,
+  stopAll as stopAllServices,
+  stopSession,
+  type SearchAction,
+} from "./services.ts";
+import { closePty, openPty, sweepViewSessions, writePty, type PtyData } from "./servicesPty.ts";
+import { composeDir, containerAction, containerArgv } from "./containers.ts";
 import { MAX_DROP_BYTES, pruneDropped, storeDropped } from "./dropped.ts";
 import { needsInput, readRegistry } from "./registry.ts";
 import {
@@ -156,6 +191,13 @@ const t0 = Date.now();
 const touched = await indexOnce(db);
 console.log(`[claude-dashboard] indexed ${touched} transcript(s) in ${Date.now() - t0}ms`);
 
+applyArtifactsRoot(settings.ui.artifactsRoot);
+{
+  const found = await reconcileArtifacts(db);
+  if (found > 0) console.log(`[claude-dashboard] reconciled ${found} artifact(s)`);
+  console.log(`[claude-dashboard] artifacts folder: ${artifactsDir()}`);
+}
+
 // ── SSE fan-out ────────────────────────────────────────────────────────────────
 type Client = { send: (event: string, data: unknown) => void; close: () => void };
 const clients = new Set<Client>();
@@ -176,11 +218,48 @@ pruneImages();
 pruneDropped();
 
 setNotifyEmitter(broadcast);
+
+/**
+ * Services are pushed only when something about them actually changed: the page is
+ * a table of mostly-idle rows, and re-rendering it every poll would fight the user
+ * for scroll position. The poll itself is unconditional because tmux has nothing to
+ * subscribe to — a pane can die without anyone telling us.
+ */
+let lastServices = "";
+async function broadcastServices(force = false): Promise<void> {
+  const { services } = getSettings();
+  try {
+    const state = await servicesState(services.defs, services.paths, services.compose);
+    const payload = JSON.stringify(state);
+    if (!force && payload === lastServices) return;
+    lastServices = payload;
+    broadcast("services", state);
+  } catch {
+    // tmux missing or mid-restart; the next tick tries again.
+  }
+}
+// The review pages keep records about some sessions (which PR, which findings);
+// they learn what happened the same way the browser does, from the event stream.
+initReview(db);
+initRuns(db, broadcast);
+initExplain(db, broadcast);
 // Every roster change already flows through here, which makes it the natural
 // place to re-evaluate what deserves a notification — agents.ts stays unaware.
 setAgentEmitter((event, data) => {
   broadcast(event, data);
-  if (event === "agents") notifyTick();
+  if (event === "agents") {
+    notifyTick();
+    const roster = data as ReturnType<typeof rosterPayload>;
+    runsOnRoster(roster.agents);
+    explainOnRoster(roster.agents);
+  }
+  if (event === "agent-item") {
+    const d = data as { key: string; item: Parameters<typeof runsOnItem>[1]; replace?: boolean };
+    if (!d.replace) {
+      runsOnItem(d.key, d.item);
+      explainOnItem(d.key, d.item);
+    }
+  }
 });
 
 /**
@@ -250,7 +329,7 @@ const labelQuery = db.query<{ title: string | null; git_branch: string | null },
 
 const HOME = homedir();
 
-/** `/Users/rein/src/app` → `~/src/app`, so a banner never leaks the home prefix. */
+/** `/Users/you/src/app` → `~/src/app`, so a banner never leaks the home prefix. */
 function tildify(path: string): string {
   if (path === HOME) return "~";
   return path.startsWith(`${HOME}/`) ? `~${path.slice(HOME.length)}` : path;
@@ -452,6 +531,11 @@ if (existsSync(SESSIONS_DIR)) {
 }
 setInterval(scheduleLiveBroadcast, 3_000);
 
+// tmux state has no change feed, so it is polled. 2s matches how fast a pane dying
+// needs to show up without making the table feel busy.
+setInterval(() => void broadcastServices(), 2_000);
+void sweepViewSessions();
+
 // Transcripts are append-heavy; poll rather than watch recursively so we get one
 // coalesced pass instead of an event per line written.
 setInterval(async () => {
@@ -466,6 +550,9 @@ setInterval(async () => {
      * history cannot stall the tick.
      */
     if ((await resolveRepoKeys(db)) > 0) broadcast("index", { at: Date.now() });
+    // Cheap on a steady state: one readdir, and a title is only re-read from a
+    // file whose bytes actually moved.
+    if ((await reconcileArtifacts(db)) > 0) broadcast("artifacts", { at: Date.now() });
   } catch (err) {
     console.error("[claude-dashboard] index pass failed:", err);
   }
@@ -681,7 +768,7 @@ function overview() {
    * they ran in.
    *
    * Two levels, because a cwd is neither. Sessions run in subdirectories all the time —
-   * `backend/projects/tms` and `backend/platform/redis-queue` are one checkout of one
+   * `repo/apps/api` and `repo/packages/queue` are one checkout of one
    * repository — so grouping on cwd invents checkouts that do not exist. `worktree_root`
    * is the real checkout, and `repo_key` the real repository, which is why the rollup
    * uses those and not the project slug.
@@ -734,15 +821,86 @@ const json = (data: unknown, status = 200) =>
     headers: { "content-type": "application/json", "access-control-allow-origin": "*" },
   });
 
-const server = Bun.serve({
+/**
+ * Point the artifact machinery at the configured folder. Returns true when it
+ * actually moved, which is the caller's cue that the index describes the wrong
+ * directory now.
+ */
+function applyArtifactsRoot(root: string): boolean {
+  return setArtifactsDir(root ?? "");
+}
+
+/**
+ * Who is allowed to call the API from a browser.
+ *
+ * Every artifact is model-written HTML running real scripts. Sandboxing and a
+ * separate origin stop it *reading* anything back, but a plain POST is still
+ * delivered — so the write has to be refused here, by the one party that knows an
+ * artifact's origin is not the dashboard's. A request with no Origin header is a
+ * non-browser caller (curl, a script) and is left alone.
+ */
+function originAllowed(req: Request, url: URL): boolean {
+  const origin = req.headers.get("origin");
+  if (!origin) return true;
+  let o: URL;
+  try {
+    o = new URL(origin);
+  } catch {
+    // "null" — a sandboxed iframe with an opaque origin.
+    return false;
+  }
+  if (o.port === String(ARTIFACT_PORT)) return false;
+  const local = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+  return o.hostname === url.hostname || (local.has(o.hostname) && local.has(url.hostname));
+}
+
+const server = Bun.serve<PtyData, never>({
   port: PORT,
   // Localhost only. These endpoints start Claude sessions with real file access
   // on this machine, so the server must not be reachable from the network.
   hostname: "127.0.0.1",
   idleTimeout: 0,
-  async fetch(req) {
+  websocket: {
+    // Big enough for a screenful of a noisy pane; the broker blocks rather than
+    // buffering past it, so the program slows down instead of this growing.
+    maxPayloadLength: 16 * 1024 * 1024,
+    open: (ws) => void openPty(ws),
+    message: (ws, message) => writePty(ws, message as string | Uint8Array),
+    close: (ws) => void closePty(ws),
+  },
+  // Annotated because the websocket upgrade below refers to `server`, and an
+  // inferred return type would be circular.
+  async fetch(req): Promise<Response | undefined> {
     const url = new URL(req.url);
     const p = url.pathname;
+
+    if (p === "/pty") {
+      const cols = Number(url.searchParams.get("cols")) || 120;
+      const rows = Number(url.searchParams.get("rows")) || 30;
+      const container = url.searchParams.get("container");
+      let data: PtyData;
+      if (container) {
+        const { services } = getSettings();
+        const cwd = composeDir(services.compose, services.paths);
+        if (!cwd) return new Response("compose directory not found", { status: 404 });
+        const argv = containerArgv(container, url.searchParams.get("mode") === "shell" ? "shell" : "logs");
+        if (!argv) return new Response("bad container name", { status: 400 });
+        data = { kind: "exec", argv, cwd, cols, rows };
+      } else {
+        const session = url.searchParams.get("session");
+        if (!session) return new Response("session is required", { status: 400 });
+        data = { kind: "tmux", session, paneId: url.searchParams.get("pane"), cols, rows };
+      }
+      const ok = server.upgrade(req, { data });
+      return ok ? undefined : new Response("expected a websocket", { status: 426 });
+    }
+
+    if (p.startsWith("/api/") && !originAllowed(req, url))
+      return json({ error: "cross-origin request refused" }, 403);
+
+    // ── generated artifacts ──────────────────────────────────────────────────
+    const artifactResponse = await handleArtifactRoute(req, url, db);
+    if (artifactResponse) return artifactResponse;
 
     // ── owned sessions (write path) ──────────────────────────────────────────
     if (p === "/api/agents" && req.method === "GET")
@@ -792,6 +950,70 @@ const server = Bun.serve({
       return json({ key, agent: getAgent(key) });
     }
 
+    // ── services ──────────────────────────────────────────────────────────
+    if (p === "/api/services" && req.method === "GET") {
+      const { services } = getSettings();
+      return json(await servicesState(services.defs, services.paths, services.compose));
+    }
+
+    if (p === "/api/services/capture" && req.method === "GET") {
+      const pane = url.searchParams.get("pane");
+      if (!pane) return json({ error: "pane is required" }, 400);
+      const lines = Number(url.searchParams.get("lines")) || 500;
+      return json({ text: await capturePane(pane, lines) });
+    }
+
+    if (p.startsWith("/api/services/") && req.method === "POST") {
+      const action = p.slice("/api/services/".length);
+      const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+      const { services } = getSettings();
+
+      if (action === "start") {
+        const service = services.defs.find((x) => x.key === String(body.serviceKey ?? ""));
+        if (!service) return json({ error: "unknown service" }, 400);
+        const checkout = checkoutsFor(service.repo, services.paths).find(
+          (c) => c.path === String(body.checkoutPath ?? ""),
+        );
+        if (!checkout) return json({ error: "unknown checkout" }, 400);
+        const result = await startService(service, services.defs, checkout);
+        broadcastServices();
+        return json(result, result.ok ? 200 : 400);
+      }
+      if (action === "stop") {
+        const result = body.all ? await stopAllServices() : await stopSession(String(body.session ?? ""));
+        broadcastServices();
+        return json(result, "ok" in result && result.ok ? 200 : 400);
+      }
+      if (action === "restart") {
+        const result = body.paneId
+          ? await restartPane(String(body.paneId))
+          : await restartDead(String(body.session ?? ""));
+        broadcastServices();
+        return json(result, result.ok ? 200 : 400);
+      }
+      if (action === "dismiss") {
+        if (!body.paneId) return json({ error: "paneId is required" }, 400);
+        const result = await dismissError(String(body.paneId));
+        broadcastServices();
+        return json(result, result.ok ? 200 : 400);
+      }
+      if (action === "container") {
+        const verb = String(body.verb ?? "");
+        if (verb !== "up" && verb !== "stop" && verb !== "restart") return json({ error: "bad verb" }, 400);
+        const names = Array.isArray(body.services) ? body.services.map(String) : [String(body.service ?? "")];
+        const result = await containerAction(services.compose, services.paths, verb, names);
+        broadcastServices(true);
+        return json(result, result.ok ? 200 : 400);
+      }
+      if (action === "search") {
+        if (!body.target) return json({ error: "target is required" }, 400);
+        return json(
+          await searchPane(String(body.target), (body.action as SearchAction) ?? "find", String(body.query ?? "")),
+        );
+      }
+      return json({ error: "not found" }, 404);
+    }
+
     if (p.startsWith("/api/agents/")) {
       const [key, action] = p.slice("/api/agents/".length).split("/");
       if (!key) return json({ error: "not found" }, 404);
@@ -818,7 +1040,7 @@ const server = Bun.serve({
             // An image on its own is a legitimate message ("what is this?"), so the
             // requirement is content of some kind, not text specifically.
             if (!text && images.length === 0) return json({ error: "text is required" }, 400);
-            return json({ ok: sendMessage(id, text, images) });
+            return json({ ok: sendMessage(id, text ? runMessagePreamble(id, text) : text, images, text) });
           }
           case "permission":
             return json({
@@ -831,6 +1053,10 @@ const server = Bun.serve({
             });
           case "interrupt":
             return json({ ok: await interruptAgent(id) });
+          case "restart": {
+            const r = await restartAgent(id);
+            return json(r, "error" in r ? 400 : 200);
+          }
           case "model": {
             const r = await setAgentModel(id, (body.model as string) || undefined);
             return json(r, r.ok ? 200 : 400);
@@ -896,6 +1122,17 @@ const server = Bun.serve({
       if (req.method === "POST") {
         const patch = (await req.json().catch(() => ({}))) as Record<string, unknown>;
         const next = updateSettings(patch);
+        // Moving the artifact root is not a flag flip: every row in `artifacts`
+        // describes a folder nobody is watching any more. Clearing them and
+        // re-scanning is the only way the tab can't show stale entries from a
+        // directory that is no longer the artifact directory. Provenance in
+        // `artifact_writes` is left alone — it is keyed by slug and still true if
+        // you point the setting back.
+        if (applyArtifactsRoot(next.ui.artifactsRoot)) {
+          db.query("DELETE FROM artifacts").run();
+          await reconcileArtifacts(db);
+          broadcast("artifacts", { at: Date.now() });
+        }
         // Other open tabs should not keep showing the old toggles.
         broadcast("settings", next);
         return json({ settings: next });
@@ -1010,6 +1247,10 @@ const server = Bun.serve({
         return c ? json({ comment: c }) : json({ error: "not found" }, 404);
       }
     }
+
+    // ── GitHub pull requests ─────────────────────────────────────────────────
+    const prResponse = await handlePrRoute(req, url);
+    if (prResponse) return prResponse;
 
     // ── git ──────────────────────────────────────────────────────────────────
     if (p.startsWith("/api/git/")) {
@@ -1267,7 +1508,13 @@ const server = Bun.serve({
             // repositories from session history still answer the question.
           }
         }
-        return json({ repos: await gitWorktreeRepos([...seen, ...placed]) });
+        // The dashboard's own PR clones are repositories too, but ones it manages: they
+        // are labelled as such so the page can set them apart from the user's checkouts.
+        const repos = (await gitWorktreeRepos([...seen, ...placed])).map((r) => {
+          const review = reviewRepoLabel(r.repoKey);
+          return review ? { ...r, name: review, review: true } : { ...r, review: false };
+        });
+        return json({ repos });
       }
 
       /**
@@ -1484,6 +1731,7 @@ const server = Bun.serve({
           client.send("usage", usageSummary(db, cfg, Date.now()));
           client.send("agents", rosterPayload());
           client.send("settings", getSettings());
+          if (lastServices) client.send("services", JSON.parse(lastServices));
           // Comment-only heartbeat keeps proxies and browsers from timing out.
           interval = setInterval(() => {
             try {
@@ -1520,6 +1768,21 @@ const server = Bun.serve({
 });
 
 console.log(`[claude-dashboard] api on http://localhost:${server.port}`);
+
+/**
+ * A clash on the artifact port costs you previews, not the dashboard. Everything
+ * else — capture, the list, the session panels — works without this listener, so it
+ * is not worth refusing to start over.
+ */
+try {
+  const artifactServer = startArtifactServer(db);
+  console.log(`[claude-dashboard] artifacts on http://localhost:${artifactServer.port}`);
+} catch (err) {
+  console.warn(
+    `[claude-dashboard] artifact server could not bind port ${ARTIFACT_PORT}, previews disabled:`,
+    err instanceof Error ? err.message : err,
+  );
+}
 
 // Owned sessions are child processes; ending them beats orphaning them.
 for (const sig of ["SIGINT", "SIGTERM"] as const) {

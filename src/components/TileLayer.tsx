@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { useSortable } from "../useSortable.ts";
 import { createPortal } from "react-dom";
 import { stalledReason, type AgentSummary, type Settings } from "../api.ts";
 import {
   applyEdgeMagnetism,
   applyMoveMagnetism,
   clampRect,
-  DOCK_DRAG_MIME,
   readDockOrder,
   rectForZone,
   resizeRect,
@@ -147,11 +147,11 @@ export function TileLayer({
   onToggleMinimizeAll: () => void;
   /** Brand mark and connection status — the dock is the one bar on screen, so it
    * carries what the header used to. */
-  dockLeading: React.ReactNode;
+  dockLeading?: React.ReactNode;
   /** Page switcher, rendered as icon buttons alongside the session chips. */
-  dockNav: React.ReactNode;
+  dockNav?: React.ReactNode;
   /** Theme toggle, pinned to the dock's far end. */
-  dockTrailing: React.ReactNode;
+  dockTrailing?: React.ReactNode;
 }) {
   const drag = useRef<Drag | null>(null);
   const [snapZone, setSnapZone] = useState<SnapZone | null>(null);
@@ -325,13 +325,12 @@ export function TileLayer({
         onMinimize={onMinimize}
         onClose={onClose}
         onToggleMinimizeAll={onToggleMinimizeAll}
-        onReorder={(draggedId, beforeId) => {
+        onReorder={(from, to) => {
           setDockOrder((prev) => {
-            const without = prev.filter((id) => id !== draggedId);
-            const at = without.indexOf(beforeId);
-            if (at === -1) return prev;
-            const next = [...without];
-            next.splice(at, 0, draggedId);
+            const next = [...prev];
+            const [moved] = next.splice(from, 1);
+            if (moved === undefined) return prev;
+            next.splice(to, 0, moved);
             return next;
           });
         }}
@@ -399,21 +398,44 @@ function TileDock({
   onMinimize: (id: string) => void;
   onClose: (id: string) => void;
   onToggleMinimizeAll: () => void;
-  /** A chip was dropped onto another — put it just before the drop target. */
-  onReorder: (draggedId: string, beforeId: string) => void;
-  leading: React.ReactNode;
-  nav: React.ReactNode;
-  trailing: React.ReactNode;
+  /** A chip was dragged from one position in the list to another. */
+  onReorder: (from: number, to: number) => void;
+  leading?: React.ReactNode;
+  nav?: React.ReactNode;
+  trailing?: React.ReactNode;
 }) {
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [overId, setOverId] = useState<string | null>(null);
+  const chipsRef = useRef<HTMLDivElement | null>(null);
+  const drag = useSortable({ count: ids.length, listRef: chipsRef, itemSelector: ".tile-dock-chip", axis: "x", onMove: onReorder });
+  const [edges, setEdges] = useState({ start: false, end: false });
+
+  useEffect(() => {
+    const el = chipsRef.current;
+    if (!el) return;
+    const sync = () => {
+      const over = el.scrollWidth - el.clientWidth;
+      setEdges({ start: el.scrollLeft > 1, end: over > 1 && el.scrollLeft < over - 1 });
+    };
+    sync();
+    el.addEventListener("scroll", sync, { passive: true });
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child);
+    return () => {
+      el.removeEventListener("scroll", sync);
+      ro.disconnect();
+    };
+  }, [ids.join("")]);
+
+  // Nothing running and nothing parked: a dock with one button is a smudge at the
+  // bottom of the screen, not a dock. Pages live in the sidebar now.
+  if (ids.length === 0 && !leading && !nav && !trailing) return null;
 
   return (
     <div className="tile-dock">
       {leading}
-      <div className="tile-dock-sep" aria-hidden />
+      {leading && <div className="tile-dock-sep" aria-hidden />}
       {nav}
-      <div className="tile-dock-sep" aria-hidden />
+      {nav && <div className="tile-dock-sep" aria-hidden />}
       <button
         className="tile-dock-all"
         title="Minimize or restore every open tile (⌘⇧M)"
@@ -421,8 +443,17 @@ function TileDock({
       >
         <ShowDesktopIcon />
       </button>
-      <div className="dock-chips">
-        {ids.map((id) => {
+      <div
+        className={`dock-chips ${edges.start ? "fade-start" : ""} ${edges.end ? "fade-end" : ""}`}
+        ref={chipsRef}
+        onWheel={(e) => {
+          const el = chipsRef.current;
+          if (!el || el.scrollWidth <= el.clientWidth) return;
+          if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+          el.scrollLeft += e.deltaY;
+        }}
+      >
+        {ids.map((id, index) => {
           const agent = agentFor(id);
           const label = agent?.title ?? id.slice(0, 8);
           const status = dockStatus(agent);
@@ -432,34 +463,12 @@ function TileDock({
             <div
               key={id}
               className={`tile-dock-chip ${openNow ? "open" : ""} ${status ? status.cls : ""} ${
-                draggingId === id ? "dragging" : ""
-              } ${overId === id && draggingId && draggingId !== id ? "drag-over" : ""}`}
+                drag.active === index ? "dragging" : ""
+              }`}
+              style={drag.itemStyle(index)}
               onClick={() => (openNow ? onMinimize(id) : onOpen(id))}
               title={`${openNow ? "Minimize" : live ? "Open" : "Restore"} ${label}${status ? ` — ${status.label}` : ""}`}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData(DOCK_DRAG_MIME, id);
-                e.dataTransfer.effectAllowed = "move";
-                setDraggingId(id);
-              }}
-              onDragEnd={() => {
-                setDraggingId(null);
-                setOverId(null);
-              }}
-              onDragOver={(e) => {
-                if (!e.dataTransfer.types.includes(DOCK_DRAG_MIME)) return;
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-                if (overId !== id) setOverId(id);
-              }}
-              onDragLeave={() => setOverId((prev) => (prev === id ? null : prev))}
-              onDrop={(e) => {
-                e.preventDefault();
-                const draggedId = e.dataTransfer.getData(DOCK_DRAG_MIME);
-                setOverId(null);
-                if (!draggedId || draggedId === id) return;
-                onReorder(draggedId, id);
-              }}
+              {...drag.handleProps(index)}
             >
               <i className="dot" />
               <span className="tile-dock-chip-label">{label}</span>
@@ -479,7 +488,7 @@ function TileDock({
           );
         })}
       </div>
-      <div className="tile-dock-sep" aria-hidden />
+      {trailing && <div className="tile-dock-sep" aria-hidden />}
       {trailing}
     </div>
   );

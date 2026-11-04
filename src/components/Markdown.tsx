@@ -54,44 +54,253 @@ function CodeBlock({ source, lang }: { source: string; lang: string }) {
 
 // ── inline ────────────────────────────────────────────────────────────────────
 // One alternation pass keeps precedence explicit: code spans win over emphasis,
-// so `**not bold**` inside backticks stays literal.
+// so `**not bold**` inside backticks stays literal. The HTML branches cover what
+// GitHub comment bodies carry: line breaks, images, links and a few phrase tags.
 const INLINE =
-  /(`+)([\s\S]*?)\1|\*\*([\s\S]+?)\*\*|__([\s\S]+?)__|(?<![\w*])\*([^*\n]+?)\*(?![\w*])|(?<![\w_])_([^_\n]+?)_(?![\w_])|~~([\s\S]+?)~~|\[([^\]]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s<>()"']+)/g;
+  /(?<fence>`+)(?<code>[\s\S]*?)\k<fence>|<br\s*\/?>|<img\b(?<img>[^>]*?)\/?>|<a\b(?<aAttrs>[^>]*)>(?<aText>[\s\S]*?)<\/a\s*>|<(?<tag>b|strong|i|em|code|kbd|sub|sup|s|del|strike|ins|mark)\b[^>]*>(?<tagText>[\s\S]*?)<\/\k<tag>\s*>|\*\*(?<strong1>[\s\S]+?)\*\*|__(?<strong2>[\s\S]+?)__|(?<![\w*])\*(?<em1>(?:[^*\n]|\*\*[^*\n]+?\*\*)+?)\*(?![\w*])|(?<![\w_])_(?<em2>(?:[^_\n]|__[^_\n]+?__)+?)_(?![\w_])|~~(?<strike>[\s\S]+?)~~|!\[(?<imgAlt>[^\]]*)\]\(<?(?<imgSrc>[^)\s>]+)>?(?:\s+"[^"]*")?\)|\[(?<linkText>[^\]]+)\]\(<?(?<linkHref>[^)\s>]+)>?(?:\s+"[^"]*")?\)|(?<bareUrl>https?:\/\/[^\s<>()"']+)/gi;
+
+const PHRASE_TAGS: Record<string, keyof React.JSX.IntrinsicElements> = {
+  b: "strong",
+  strong: "strong",
+  i: "em",
+  em: "em",
+  code: "code",
+  kbd: "kbd",
+  sub: "sub",
+  sup: "sup",
+  s: "s",
+  del: "s",
+  strike: "s",
+  ins: "ins",
+  mark: "mark",
+};
+
+/** `name="value"`, `name='value'` and bare `name=value` pairs out of a tag's attribute string. */
+function attrs(raw: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of raw.matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g)) out[m[1].toLowerCase()] = m[2] ?? m[3] ?? m[4] ?? "";
+  return out;
+}
+
+/** Where the phrase tag opened at `at` closes, counting nested copies of the same tag; -1 when it never does. */
+function phraseEnd(text: string, at: number, tag: string): number {
+  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, "gi");
+  re.lastIndex = at;
+  let depth = 0;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    depth += m[1] ? -1 : 1;
+    if (depth === 0) return m.index + m[0].length;
+  }
+  return -1;
+}
 
 function inline(text: string, keyPrefix: string): ReactNode[] {
   const out: ReactNode[] = [];
   let last = 0;
   let i = 0;
-  for (const m of text.matchAll(INLINE)) {
-    const at = m.index ?? 0;
+  const re = new RegExp(INLINE.source, INLINE.flags);
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const at = m.index;
     if (at > last) out.push(text.slice(last, at));
     const key = `${keyPrefix}-${i++}`;
-    const [, , code, strong1, strong2, em1, em2, strike, linkText, linkHref, bareUrl] = m;
-    if (code !== undefined) out.push(<code key={key}>{code.trim()}</code>);
-    else if (strong1 ?? strong2) out.push(<strong key={key}>{inline(strong1 ?? strong2, key)}</strong>);
-    else if (em1 ?? em2) out.push(<em key={key}>{inline(em1 ?? em2, key)}</em>);
-    else if (strike !== undefined) out.push(<s key={key}>{inline(strike, key)}</s>);
-    else if (linkHref !== undefined)
+    const g = m.groups ?? {};
+    let token = m[0];
+    if (g.tag !== undefined) {
+      const end = phraseEnd(text, at, g.tag);
+      if (end > at + token.length) {
+        token = text.slice(at, end);
+        g.tagText = token.slice(token.indexOf(">") + 1, token.lastIndexOf("</"));
+        re.lastIndex = end;
+      }
+    }
+    if (g.code !== undefined) out.push(<code key={key}>{g.code.trim()}</code>);
+    else if (/^<br/i.test(token)) out.push(<br key={key} />);
+    else if (g.img !== undefined) out.push(<Image key={key} {...attrs(g.img)} />);
+    else if (g.aText !== undefined)
       out.push(
-        <a key={key} href={safeHref(linkHref)} target="_blank" rel="noreferrer">
-          {linkText}
+        <a key={key} href={safeHref(attrs(g.aAttrs ?? "").href ?? "")} target="_blank" rel="noreferrer">
+          {inline(g.aText, key)}
         </a>,
       );
-    else if (bareUrl !== undefined)
+    else if (g.tag !== undefined) {
+      const Tag = PHRASE_TAGS[g.tag.toLowerCase()] ?? "span";
+      out.push(<Tag key={key}>{Tag === "code" ? g.tagText : inline(g.tagText ?? "", key)}</Tag>);
+    } else if (g.strong1 ?? g.strong2) out.push(<strong key={key}>{inline(g.strong1 ?? g.strong2 ?? "", key)}</strong>);
+    else if (g.em1 ?? g.em2) out.push(<em key={key}>{inline(g.em1 ?? g.em2 ?? "", key)}</em>);
+    else if (g.strike !== undefined) out.push(<s key={key}>{inline(g.strike, key)}</s>);
+    else if (g.imgSrc !== undefined) out.push(<Image key={key} src={g.imgSrc} alt={g.imgAlt} />);
+    else if (g.linkHref !== undefined)
       out.push(
-        <a key={key} href={safeHref(bareUrl)} target="_blank" rel="noreferrer">
-          {bareUrl}
+        <a key={key} href={safeHref(g.linkHref)} target="_blank" rel="noreferrer">
+          {g.linkText}
         </a>,
       );
-    last = at + m[0].length;
+    else if (g.bareUrl !== undefined)
+      out.push(
+        <a key={key} href={safeHref(g.bareUrl)} target="_blank" rel="noreferrer">
+          {g.bareUrl}
+        </a>,
+      );
+    last = at + token.length;
   }
   if (last < text.length) out.push(text.slice(last));
   return out;
 }
 
+/**
+ * GitHub serves comment attachments only to a signed-in browser, so those go
+ * through the daemon, which fetches them with the token it already has.
+ */
+const PROXIED_IMAGE = /^https:\/\/(github\.com\/user-attachments\/|(?:private-)?user-images\.githubusercontent\.com\/)/i;
+
+export function imageSrc(src: string): string {
+  if (!/^https?:\/\//i.test(src)) return "";
+  return PROXIED_IMAGE.test(src) ? `/api/pr/image?url=${encodeURIComponent(src)}` : src;
+}
+
+function Image({ src, alt, width, height, title }: { src?: string; alt?: string; width?: string; height?: string; title?: string }) {
+  const href = imageSrc(src ?? "");
+  if (!href) return alt ? <span>{alt}</span> : null;
+  return <img className="md-img" src={href} alt={alt ?? ""} title={title} width={width} height={height} loading="lazy" />;
+}
+
 /** Only http(s) links are followed; anything else renders as plain text href-less. */
 function safeHref(href: string): string {
   return /^https?:\/\//i.test(href) ? href : "#";
+}
+
+// ── HTML blocks ───────────────────────────────────────────────────────────────
+// GitHub lets a comment carry raw HTML: <details> folds, <img> tags, <p align>,
+// tables. The chunk is parsed by the browser's own parser into a detached
+// document, then rebuilt as React elements from a whitelist of tags and
+// attributes — the markup itself never reaches the page.
+const BLOCK_TAG = /^\s*<(details|div|p|picture|table|blockquote|ul|ol|pre|center|figure|h[1-6]|img|hr|br|summary)\b/i;
+const VOID_TAG = /^(img|hr|br)$/i;
+const CONTAINER: Record<string, keyof React.JSX.IntrinsicElements> = {
+  details: "details",
+  summary: "summary",
+  p: "p",
+  div: "div",
+  center: "div",
+  figure: "figure",
+  figcaption: "figcaption",
+  picture: "span",
+  blockquote: "blockquote",
+  ul: "ul",
+  ol: "ol",
+  li: "li",
+  table: "table",
+  thead: "thead",
+  tbody: "tbody",
+  tfoot: "tfoot",
+  tr: "tr",
+  th: "th",
+  td: "td",
+  h1: "h3",
+  h2: "h4",
+  h3: "h5",
+  h4: "h6",
+  h5: "h6",
+  h6: "h6",
+};
+const BLOCK_TEXT_PARENTS = new Set(["details", "div", "center", "figure", "blockquote", "li", "td", "th", "body"]);
+const SKIP_TAG = new Set(["script", "style", "source", "iframe", "object", "embed", "svg", "math", "template", "link", "meta"]);
+
+/** Lines i.. that make up one HTML block: a void tag is one line, a container runs to its matching close. */
+function htmlBlockEnd(lines: string[], i: number): number {
+  const tag = lines[i].match(BLOCK_TAG)?.[1].toLowerCase() ?? "";
+  if (VOID_TAG.test(tag)) return i + 1;
+  const open = new RegExp(`<${tag}\\b[^>]*(?<!/)>`, "gi");
+  const close = new RegExp(`</${tag}\\s*>`, "gi");
+  let depth = 0;
+  for (let j = i; j < lines.length; j++) {
+    depth += (lines[j].match(open) ?? []).length;
+    depth -= (lines[j].match(close) ?? []).length;
+    if (depth <= 0) return j + 1;
+  }
+  return i + 1;
+}
+
+function domToReact(node: Node, parentTag: string, key: string): ReactNode {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const text = node.textContent ?? "";
+    if (!text.trim()) return null;
+    if (BLOCK_TEXT_PARENTS.has(parentTag) && text.trim().includes("\n")) return <Markdown key={key} text={text} />;
+    return <span key={key}>{inline(BLOCK_TEXT_PARENTS.has(parentTag) ? text.trim() : text, key)}</span>;
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return null;
+  const el = node as Element;
+  const tag = el.tagName.toLowerCase();
+  if (SKIP_TAG.has(tag)) return null;
+  const children = () => Array.from(el.childNodes).map((c, n) => domToReact(c, tag, `${key}-${n}`));
+  const get = (name: string) => el.getAttribute(name) ?? undefined;
+  if (tag === "img") return <Image key={key} src={get("src")} alt={get("alt")} width={get("width")} height={get("height")} title={get("title")} />;
+  if (tag === "br") return <br key={key} />;
+  if (tag === "hr") return <hr key={key} className="md-hr" />;
+  if (tag === "pre") return <CodeBlock key={key} source={el.textContent ?? ""} lang="" />;
+  if (tag === "a")
+    return (
+      <a key={key} href={safeHref(get("href") ?? "")} target="_blank" rel="noreferrer">
+        {children()}
+      </a>
+    );
+  const phrase = PHRASE_TAGS[tag];
+  if (phrase) {
+    const Tag = phrase;
+    return <Tag key={key}>{children()}</Tag>;
+  }
+  const container = CONTAINER[tag];
+  if (container) {
+    const Tag = container;
+    const className = tag === "details" ? "md-details" : tag === "table" ? "md-table" : tag === "blockquote" ? "md-quote" : /^h[1-6]$/.test(tag) ? `md-h md-h${tag[1]}` : tag === "p" ? "md-p" : undefined;
+    const align = get("align");
+    const style = align ? { textAlign: align as "left" | "center" | "right" } : undefined;
+    const open = tag === "details" && el.hasAttribute("open") ? true : undefined;
+    const inner = children();
+    if (tag === "table")
+      return (
+        <div key={key} className="md-table-wrap">
+          <table className="md-table">{inner}</table>
+        </div>
+      );
+    return (
+      <Tag key={key} className={className} style={style} open={open}>
+        {inner}
+      </Tag>
+    );
+  }
+  return <span key={key}>{children()}</span>;
+}
+
+function HtmlBlock({ html }: { html: string }) {
+  if (typeof DOMParser === "undefined") return <p className="md-p">{html}</p>;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return <>{Array.from(doc.body.childNodes).map((c, n) => domToReact(c, "body", `h${n}`))}</>;
+}
+
+/** HTML comments vanish as they do on GitHub, except inside fenced code where they are content. */
+function stripComments(text: string): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let segment: string[] = [];
+  let fence: string | null = null;
+  const flush = () => {
+    if (segment.length) out.push(segment.join("\n").replace(/<!--[\s\S]*?-->/g, ""));
+    segment = [];
+  };
+  for (const line of lines) {
+    const f = line.match(/^\s*(```+|~~~+)/);
+    if (fence) {
+      out.push(line);
+      if (f && f[1].startsWith(fence)) fence = null;
+    } else if (f) {
+      flush();
+      out.push(line);
+      fence = f[1][0].repeat(3);
+    } else segment.push(line);
+  }
+  flush();
+  return out.join("\n");
 }
 
 // ── blocks ────────────────────────────────────────────────────────────────────
@@ -284,7 +493,7 @@ export function handleMdCopy(e: React.ClipboardEvent<HTMLDivElement>) {
 }
 
 export function Markdown({ text }: { text: string }) {
-  const lines = text.split("\n");
+  const lines = stripComments(text).split("\n");
   const blocks: ReactNode[] = [];
   let i = 0;
   let key = 0;
@@ -308,6 +517,13 @@ export function Markdown({ text }: { text: string }) {
 
     if (!line.trim()) {
       i++;
+      continue;
+    }
+
+    if (BLOCK_TAG.test(line)) {
+      const end = htmlBlockEnd(lines, i);
+      blocks.push(<HtmlBlock key={k()} html={lines.slice(i, end).join("\n")} />);
+      i = end;
       continue;
     }
 
@@ -408,6 +624,7 @@ export function Markdown({ text }: { text: string }) {
       i < lines.length &&
       lines[i].trim() &&
       !/^\s*(```|~~~|#{1,6}\s|>|([-*+]|\d+[.)])\s)/.test(lines[i]) &&
+      !BLOCK_TAG.test(lines[i]) &&
       !(lines[i].includes("|") && i + 1 < lines.length && isTableDivider(lines[i + 1]))
     ) {
       para.push(lines[i++]);

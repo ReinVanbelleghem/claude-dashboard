@@ -1,4 +1,39 @@
+import type {
+  ComposeSettings,
+  SearchAction,
+  Service,
+  ServicePaths,
+  ServicesState,
+  StartResult,
+} from "../shared/services.ts";
 import type { Appearance } from "./appearance.ts";
+import type {
+  DraftComment,
+  Explanation,
+  ExplainTarget,
+  FilesResponse,
+  FindingTarget,
+  Person,
+  PrCommit,
+  PrDetail,
+  PrOverview,
+  PrFilter,
+  PrRef,
+  PrRun,
+  PrSummary,
+  ReviewAction,
+  ReviewPermissionMode,
+  ReviewEvent,
+  ReviewThread,
+  RunStatus,
+  SavedView,
+  CommentKind,
+  SubmitResult,
+  ThreadReply,
+} from "../shared/pr.ts";
+
+export type * from "../shared/pr.ts";
+export { classifyLink, linksBeyondTemplate, prKey, prParam } from "../shared/pr.ts";
 
 export type LiveSession = {
   pid: number;
@@ -280,6 +315,7 @@ export type DirListing = {
   path: string;
   parent: string | null;
   isRepo: boolean;
+  branch: string | null;
   entries: { name: string; path: string; isRepo: boolean }[];
 };
 
@@ -296,6 +332,8 @@ export type NotifyEventKind =
 export type SessionMute = { kinds: NotifyEventKind[]; label: string };
 
 export type Settings = {
+  /** Local dev services the Services page can start. */
+  services: { defs: Service[]; paths: ServicePaths; compose: ComposeSettings; importedAt: string | null };
   notifications: {
     enabled: boolean;
     events: Record<NotifyEventKind, boolean>;
@@ -312,8 +350,15 @@ export type Settings = {
   ui: {
     diffMode: "unified" | "split";
     diffIgnoreWhitespace: boolean;
+    /** Where generated artifacts live. Empty follows the daemon's default. */
+    artifactsRoot: string;
     /** Hide tool calls and thinking in conversations. */
     hideToolCalls: boolean;
+    /** Dock pages turned off, by key. Absent means all of them are on. */
+    hiddenPages?: string[];
+    pageOrder?: string[];
+    sidebarCollapsed?: boolean;
+    appName?: string;
     /** Where a plain click on a session card lands. */
     clickOpensIn: "drawer" | "page" | "tile";
     /** Where ⌘/Ctrl-click lands. */
@@ -339,11 +384,25 @@ export type Settings = {
     disabledModels?: string[];
     defaultModel?: string;
     customModels?: { value: string; label: string }[];
+    /** Repositories (by shared `.git`) shown first on the Worktrees page. */
+    pinnedRepos?: string[];
+  };
+  /** The GitHub review pages. Lists are replaced wholesale on save. */
+  reviews: {
+    repos: string[];
+    views: SavedView[];
+    actions: ReviewAction[];
+    explainModel: string;
+    explainPermissionMode: ReviewPermissionMode;
+    checkoutRoot: string;
+    keepCheckouts: number;
   };
 };
 
 /** A patch is merged server-side, so callers send only what changed. */
 export type SettingsPatch = {
+  /** Replaced wholesale — the editor always sends the full list. Compose merges. */
+  services?: Partial<Omit<Settings["services"], "compose">> & { compose?: Partial<ComposeSettings> };
   notifications?: Partial<
     Omit<Settings["notifications"], "events" | "channels" | "quietHours" | "mutes">
   > & {
@@ -352,6 +411,7 @@ export type SettingsPatch = {
     quietHours?: Partial<Settings["notifications"]["quietHours"]>;
   };
   ui?: Partial<Settings["ui"]>;
+  reviews?: Partial<Settings["reviews"]>;
 };
 
 /** What the server sends when something wants your attention. */
@@ -653,6 +713,10 @@ export type WorktreeRepo = {
   mainRoot: string | null;
   /** This repository's checkouts, so the list paints without a second request. */
   worktrees: Worktree[];
+  /** A bare clone with no main checkout. */
+  bare: boolean;
+  /** One of the dashboard's own PR clones for review sessions, named `owner/repo`. */
+  review: boolean;
 };
 
 export type BranchList = {
@@ -847,9 +911,155 @@ export const fileApi = {
     postResult<FileWrite>("/api/file", { cwd, path, content, baseHash }),
 };
 
+// ── GitHub pull requests ──────────────────────────────────────────────────────
+const prPath = (pr: PrRef) => `/api/pr/${pr.owner}/${pr.repo}/${pr.number}`;
+
+async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? `${path} → ${res.status}`);
+  return data as T;
+}
+
+const del = <T = { ok: boolean }>(path: string, body?: unknown) => send<T>("DELETE", path, body);
+const patch = <T>(path: string, body: unknown) => send<T>("PATCH", path, body);
+
+export type RunSummary = Record<string, { total: number; active: number; last: RunStatus }>;
+
+export const prApi = {
+  /** Whether the daemon can reach GitHub, and as whom. */
+  status: () => get<{ ok: boolean; login: string | null; repos: string[]; error?: string }>("/api/pr"),
+  reset: () => post("/api/pr/reset"),
+  /** `fetchedAt` says how old the daemon's copy is; ask again with `refresh` when it is stale for you. */
+  list: (filter: PrFilter, refresh = false) =>
+    get<{ prs: PrSummary[]; fetchedAt: number }>(`/api/pr/list?filter=${encodeURIComponent(JSON.stringify(filter))}${refresh ? "&refresh=1" : ""}`),
+  people: (q: string, repos: string[] = []) =>
+    get<{ people: Person[] }>(`/api/pr/people?q=${encodeURIComponent(q)}${repos.length ? `&repos=${encodeURIComponent(repos.join(","))}` : ""}`),
+  detail: (pr: PrRef) => get<{ pr: PrDetail }>(prPath(pr)),
+  template: (pr: PrRef) => get<{ body: string }>(`${prPath(pr)}/template`),
+  files: (pr: PrRef) => get<FilesResponse>(`${prPath(pr)}/files`),
+  file: (pr: PrRef, sha: string, path: string) =>
+    get<{ content: string | null; error?: string }>(`${prPath(pr)}/file?${q({ sha, path })}`),
+  /** The same file with more context lines, cut from the daemon's local clone. */
+  fileDiff: (pr: PrRef, opts: { base: string; head: string; path: string; previous?: string | null; context: number }) =>
+    get<{ ok: boolean; patch: string; error: string | null }>(
+      `${prPath(pr)}/file-diff?${q({ base: opts.base, head: opts.head, path: opts.path, previous: opts.previous ?? undefined, context: opts.context })}`,
+    ),
+  setViewed: (pr: PrRef, path: string, viewed: boolean) => post(`${prPath(pr)}/viewed`, { path, viewed }),
+  overview: (pr: PrRef) => get<PrOverview>(`${prPath(pr)}/overview`),
+  /** A plain comment in the PR conversation, outside any review. */
+  comment: (pr: PrRef, body: string) => post<{ url: string }>(`${prPath(pr)}/comment`, { body }),
+  commits: (pr: PrRef) => get<{ commits: PrCommit[] }>(`${prPath(pr)}/commits`),
+  /** The diff one commit introduced. `source` says whether it came from the local clone or GitHub. */
+  commit: (pr: PrRef, sha: string, context = 3) =>
+    get<{ ok: boolean; patch: string; source: "clone" | "github" | null; error: string | null }>(`${prPath(pr)}/commit?${q({ sha, context })}`),
+  threads: (pr: PrRef) => get<{ threads: ReviewThread[] }>(`${prPath(pr)}/threads`),
+  reply: (pr: PrRef, threadId: string, body: string) =>
+    post<{ comment: ThreadReply }>(`${prPath(pr)}/threads/${encodeURIComponent(threadId)}/reply`, { body }),
+  editComment: (pr: PrRef, id: string, kind: CommentKind, body: string) =>
+    patch<{ ok: true }>(`${prPath(pr)}/comments/${encodeURIComponent(id)}`, { body, kind }),
+  deleteComment: (pr: PrRef, id: string, kind: CommentKind) =>
+    del<{ ok: true }>(`${prPath(pr)}/comments/${encodeURIComponent(id)}?kind=${kind}`),
+  requestReviewers: (pr: PrRef, reviewers: string[], teams: string[] = []) =>
+    post<{ ok: true }>(`${prPath(pr)}/reviewers`, { reviewers, teams }),
+  removeReviewers: (pr: PrRef, reviewers: string[], teams: string[] = []) =>
+    del<{ ok: true }>(`${prPath(pr)}/reviewers`, { reviewers, teams }),
+  resolve: (pr: PrRef, threadId: string, resolved: boolean) =>
+    post(`${prPath(pr)}/threads/${encodeURIComponent(threadId)}/resolved`, { resolved }),
+  drafts: (pr: PrRef) => get<{ drafts: DraftComment[] }>(`${prPath(pr)}/drafts`),
+  addDraft: (pr: PrRef, draft: { path: string; side: "LEFT" | "RIGHT"; line: number; startLine: number | null; body: string }) =>
+    post<{ draft: DraftComment }>(`${prPath(pr)}/drafts`, draft),
+  updateDraft: (pr: PrRef, id: string, body: string) => post<{ draft: DraftComment }>(`${prPath(pr)}/drafts/${id}`, { body }),
+  deleteDraft: (pr: PrRef, id: string) => del(`${prPath(pr)}/drafts/${id}`),
+  pendingReview: (pr: PrRef) => get<{ pending: { nodeId: string; comments: number } | null }>(`${prPath(pr)}/pending-review`),
+  /** Submits every draft as one review. A refusal comes back as `ok: false` with GitHub's wording. */
+  submit: (pr: PrRef, event: ReviewEvent, body: string) => postResult<SubmitResult>(`${prPath(pr)}/submit`, { event, body }),
+  runs: (pr: PrRef) => get<{ runs: PrRun[] }>(`${prPath(pr)}/runs`),
+  allRuns: () => get<{ runs: PrRun[]; summary: RunSummary }>("/api/pr/runs"),
+  run: (id: string) => get<{ run: PrRun }>(`/api/pr/run/${id}`),
+  startRun: (pr: PrRef, actionId: string) => post<{ run: PrRun }>(`${prPath(pr)}/run`, { actionId }),
+  resumeRun: (id: string) => post<{ run: PrRun }>(`/api/pr/run/${id}/resume`),
+  deleteRun: (id: string) => del(`/api/pr/run/${id}`),
+  findingTargets: (id: string) => get<{ targets: Record<string, FindingTarget> }>(`/api/pr/run/${id}/finding-targets`),
+  checkFinding: (id: string, findingId: string, checked: boolean) =>
+    post<{ run: PrRun }>(`/api/pr/run/${id}/finding/${findingId}`, { checked }),
+  postFinding: (id: string, findingId: string) => post<{ run: PrRun }>(`/api/pr/run/${id}/finding/${findingId}/post`),
+  explanations: (pr: PrRef) => get<{ explanations: Explanation[] }>(`${prPath(pr)}/explain`),
+  explain: (pr: PrRef, target: ExplainTarget, question?: string) =>
+    post<{ explanation: Explanation }>(`${prPath(pr)}/explain`, { ...target, question }),
+  drill: (id: string, input: { partIndex?: number; text?: string; question?: string }) =>
+    post<{ explanation: Explanation }>(`/api/pr/explain/${id}/drill`, input),
+  deleteExplanation: (id: string) => del<{ ids: string[] }>(`/api/pr/explain/${id}`),
+};
+
 /** Models the CLI offers, cached by the daemon from the last session that ran. */
 export const modelApi = {
   list: () => get<{ models: ModelInfo[] }>("/api/models"),
+};
+
+export type ArtifactSession = {
+  id: string;
+  title: string | null;
+  cwd: string | null;
+  ts: number | null;
+};
+
+export type Artifact = {
+  slug: string;
+  title: string;
+  /** Entry page relative to the artifact root — shown, not fetched. */
+  entry: string;
+  createdTs: number | null;
+  modifiedTs: number | null;
+  size: number;
+  fileCount: number;
+  /** The folder is gone. The row stays so a session's history still records it. */
+  missing: boolean;
+  pinned: boolean;
+  /** Tucked away: out of the grid unless hidden ones are shown. */
+  hidden: boolean;
+  /** Page-declared tags first, then the ones added here. */
+  tags: string[];
+  /** The page-declared subset, which cannot be removed from the dashboard. */
+  metaTags: string[];
+  sessions: ArtifactSession[];
+};
+
+export type ArtifactTag = { tag: string; count: number };
+export type ArtifactList = { artifacts: Artifact[]; port: number; root: string; tags: ArtifactTag[] };
+
+export const artifactApi = {
+  list: (opts: { q?: string; sessionId?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.q) qs.set("q", opts.q);
+    if (opts.sessionId) qs.set("session", opts.sessionId);
+    return get<ArtifactList>(`/api/artifacts${qs.size ? `?${qs}` : ""}`);
+  },
+  refresh: () => post<{ changed: number; artifacts: Artifact[] }>("/api/artifacts/refresh"),
+  remove: (slug: string) =>
+    fetch(`/api/artifacts/${encodeURIComponent(slug)}`, { method: "DELETE" }).then((r) => r.ok),
+  setTags: (slug: string, tags: string[]) =>
+    fetch(`/api/artifacts/${encodeURIComponent(slug)}/tags`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tags }),
+    }).then((r) => r.json() as Promise<{ artifact: Artifact; tags: ArtifactTag[] }>),
+  hide: (slug: string, hidden: boolean) =>
+    post<{ artifact: Artifact }>(`/api/artifacts/${encodeURIComponent(slug)}/hide`, { hidden }),
+  pin: (slug: string, pinned: boolean) =>
+    post<{ artifact: Artifact }>(`/api/artifacts/${encodeURIComponent(slug)}/pin`, { pinned }),
+  /**
+   * Artifacts are served from their own port, so their scripts are cross-origin to
+   * this API and the daemon refuses anything they send it. The hostname has to come
+   * from the browser: the daemon cannot know whether it was reached over localhost
+   * or a tunnel.
+   */
+  url: (slug: string, port: number) =>
+    `${location.protocol}//${location.hostname}:${port}/a/${encodeURIComponent(slug)}/`,
 };
 
 export const dirApi = {
@@ -917,6 +1127,8 @@ export const agentApi = {
     answers?: Record<string, string>,
   ) => post(`/api/agents/${key}/permission`, { requestId, behavior, answers }),
   interrupt: (key: string) => post(`/api/agents/${key}/interrupt`),
+  /** End this process and resume the same conversation in a new one. */
+  restart: (key: string) => post<{ key: string }>(`/api/agents/${key}/restart`),
   model: (key: string, model: string) => post(`/api/agents/${key}/model`, { model }),
   mode: (key: string, permissionMode: PermissionMode) => post(`/api/agents/${key}/mode`, { permissionMode }),
   rename: (key: string, title: string) => post(`/api/agents/${key}/rename`, { title }),
@@ -934,7 +1146,10 @@ type AgentBusEvent =
   | { type: "agent-delta"; key: string; text: string }
   | { type: "agent-models"; key: string; models: ModelInfo[] }
   | { type: "agent-commands"; key: string; commands: SlashCommand[] }
-  | { type: "agent-tasks"; key: string; tasks: TaskInfo[] };
+  | { type: "agent-tasks"; key: string; tasks: TaskInfo[] }
+  /** A review run's record changed — status, findings, replies — or it was deleted. */
+  | { type: "pr-run"; run: PrRun | { id: string; deleted: true } }
+  | { type: "pr-explain"; explanation: Explanation | { ids: string[]; deleted: true } };
 
 const busSubscribers = new Set<(e: AgentBusEvent) => void>();
 
@@ -1049,4 +1264,39 @@ export function shortPath(p: string | null, segments = 2): string {
   if (!p) return "—";
   const parts = p.replace(/\/$/, "").split("/").filter(Boolean);
   return parts.length <= segments ? p : `…/${parts.slice(-segments).join("/")}`;
+}
+
+// ── services ──────────────────────────────────────────────────────────────────
+
+export const servicesApi = {
+  state: () => get<ServicesState>("/api/services"),
+  capture: (pane: string, lines = 500) =>
+    get<{ text: string }>(`/api/services/capture?pane=${encodeURIComponent(pane)}&lines=${lines}`),
+  start: (serviceKey: string, checkoutPath: string) =>
+    post<StartResult>("/api/services/start", { serviceKey, checkoutPath }),
+  stop: (session: string) => post<{ ok: boolean; error?: string }>("/api/services/stop", { session }),
+  stopAll: () => post<{ ok: true; stopped: number }>("/api/services/stop", { all: true }),
+  restartPane: (paneId: string) => post<{ ok: boolean; error?: string }>("/api/services/restart", { paneId }),
+  restartDead: (session: string) =>
+    post<{ ok: true; restarted: number; dead: number }>("/api/services/restart", { session }),
+  dismiss: (paneId: string) => post<{ ok: boolean }>("/api/services/dismiss", { paneId }),
+  container: (verb: "up" | "stop" | "restart", services: string[]) =>
+    post<{ ok: boolean; error?: string }>("/api/services/container", { verb, services }),
+  search: (target: string, action: SearchAction, query: string) =>
+    post<{ ok: true; found: boolean; matches: number }>("/api/services/search", { target, action, query }),
+};
+
+/** The websocket a terminal attaches through. */
+export function ptyUrl(session: string, paneId: string | null, cols: number, rows: number): string {
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const params = new URLSearchParams({ session, cols: String(cols), rows: String(rows) });
+  if (paneId) params.set("pane", paneId);
+  // Same origin: Vite proxies /pty through to the daemon with ws upgrade on.
+  return `${scheme}://${location.host}/pty?${params}`;
+}
+
+export function containerPtyUrl(service: string, mode: "logs" | "shell", cols: number, rows: number): string {
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const params = new URLSearchParams({ container: service, mode, cols: String(cols), rows: String(rows) });
+  return `${scheme}://${location.host}/pty?${params}`;
 }

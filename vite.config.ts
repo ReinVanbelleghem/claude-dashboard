@@ -8,6 +8,8 @@ export default defineConfig({
     // The daemon is the only process that touches ~/.claude; the UI talks to it.
     proxy: {
       "/api": { target: "http://localhost:5757", changeOrigin: true, ws: false },
+      // The services terminal is a real websocket, so this one proxies the upgrade.
+      "/pty": { target: "http://localhost:5757", changeOrigin: true, ws: true },
     },
   },
   build: { outDir: "dist" },

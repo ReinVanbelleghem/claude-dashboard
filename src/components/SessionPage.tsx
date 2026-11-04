@@ -8,6 +8,7 @@ import {
   type SessionDetail,
   type Settings,
 } from "../api.ts";
+import { SessionArtifacts } from "./ArtifactsView.tsx";
 import { HBars } from "./Charts.tsx";
 import { Receipt } from "./Receipt.tsx";
 import { LiveConversation } from "./Conversation.tsx";
@@ -43,7 +44,7 @@ export function SessionPage({
   settings: Settings | null;
   onSettings: (s: Settings) => void;
   onBack: () => void;
-  onContinue?: (sessionId: string, cwd: string) => Promise<void>;
+  onContinue?: (sessionId: string, cwd: string, title: string | null) => Promise<void>;
   /** Start work in another checkout of this repository — see BranchSwitcher. */
   onOpenWorktree?: (path: string) => void;
 }) {
@@ -131,6 +132,19 @@ export function SessionPage({
           settings={settings}
           onSettings={onSettings}
         />
+        {/* A new process is the only thing that rebuilds the tool registry, so an MCP
+            server authorized mid-session needs this rather than another retry. */}
+        {agent && agent.sessionId && agent.status !== "ended" && agent.status !== "error" && (
+          <button
+            className="icon-btn"
+            title="Restart this session — same conversation, fresh process. Picks up an MCP server or setting authorized since it started."
+            onClick={() => {
+              agentApi.restart(agent.key).catch(() => {});
+            }}
+          >
+            Restart
+          </button>
+        )}
         {/* Adopting a session that is still running in a terminal would put two
             processes on one transcript, so it is offered only once that one is done. */}
         {onContinue && s?.cwd && !agent && !live && (
@@ -142,7 +156,7 @@ export function SessionPage({
               setAdopting(true);
               setAdoptError(null);
               try {
-                await onContinue(s.id, s.cwd!);
+                await onContinue(s.id, s.cwd!, s.title ?? null);
               } catch (e) {
                 setAdoptError(e instanceof Error ? e.message : String(e));
               } finally {
@@ -261,6 +275,8 @@ export function SessionPage({
           {data && s && (
             <>
               {data.receipt && <Receipt receipt={data.receipt} />}
+
+              <SessionArtifacts sessionId={id} />
 
               {data.prLinks.length > 0 && (
                 <div className="panel">

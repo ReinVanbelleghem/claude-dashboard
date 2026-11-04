@@ -2,6 +2,16 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./paths.ts";
 import { DEFAULT_PROVISION, type ProvisionRule } from "./provision.ts";
+import type { ReviewAction, ReviewPermissionMode, SavedView } from "../shared/pr.ts";
+import {
+  DEFAULT_COMPOSE,
+  DEFAULT_SERVICE_PATHS,
+  normalizeServicePaths,
+  type ComposeSettings,
+  type Service,
+  type ServicePaths,
+} from "../shared/services.ts";
+import { importLegacyServices, legacyConfigPath } from "./servicesImport.ts";
 
 /**
  * User-editable preferences, as opposed to config.ts which holds the pricing and
@@ -114,6 +124,23 @@ export type Settings = {
      * ("glance", "commit to it", "keep an eye on it alongside something else")
      * that used to only have two configurable destinations between them.
      */
+    /**
+     * Where generated HTML artifacts are kept and scanned for. Empty means the
+     * built-in default (or CLAUDE_ARTIFACTS_DIR, when that is set), so an unset
+     * field keeps following the environment rather than freezing today's value.
+     */
+    artifactsRoot: string;
+    /**
+     * Dock pages turned off, by key. Absent means every page is on, so a page added
+     * later arrives visible rather than silently hidden by an older settings file.
+     */
+    hiddenPages: string[];
+    /** Dock pages in display order, by key. Empty means the registry order. */
+    pageOrder: string[];
+    /** The sidebar as an icon rail rather than with labels. */
+    sidebarCollapsed: boolean;
+    /** What the sidebar, breadcrumb and window title call this app. */
+    appName: string;
     clickOpensIn: "drawer" | "page" | "tile";
     cmdClickOpensIn: "drawer" | "page" | "tile";
     optionClickOpensIn: "drawer" | "page" | "tile";
@@ -168,8 +195,65 @@ export type Settings = {
     disabledModels?: string[];
     defaultModel?: string;
     customModels?: { value: string; label: string }[];
+    /** Repositories (by shared `.git`) shown first on the Worktrees page. */
+    pinnedRepos?: string[];
+  };
+  /**
+   * The GitHub review pages. Views and actions are replaced wholesale on save, like
+   * appearance is: the UI always sends the complete list.
+   */
+  reviews: {
+    /** `owner/name`, searched when a view names no repositories of its own. */
+    repos: string[];
+    views: SavedView[];
+    actions: ReviewAction[];
+    /** Model for explain sessions. Empty means the dashboard's default model. */
+    explainModel: string;
+    explainPermissionMode: ReviewPermissionMode;
+    /** Where PR checkouts for review sessions live. Empty means ~/.claude-dashboard/pr. */
+    checkoutRoot: string;
+    /** Checkouts kept around after a session ends; older ones are removed. */
+    keepCheckouts: number;
+  };
+  /**
+   * Local dev services: what the Services page can start, where, and the compose
+   * project shown under it. Optionally imported once from a services file.
+   */
+  services: {
+    defs: Service[];
+    paths: ServicePaths;
+    compose: ComposeSettings;
+    /** Set by the import so it never runs twice, even if every service is deleted. */
+    importedAt: string | null;
   };
 };
+
+const CONTEXT_TOOLS = [
+  "mcp__claude_ai_Slack__slack_search_public",
+  "mcp__claude_ai_Slack__slack_search_public_and_private",
+  "mcp__claude_ai_Slack__slack_read_channel",
+  "mcp__claude_ai_Slack__slack_read_thread",
+  "mcp__claude_ai_Notion__notion-fetch",
+  "mcp__claude_ai_Notion__notion-search",
+  "mcp__claude_ai_Notion__notion-get-comments",
+];
+
+/** The one action every install starts with. Editable in Settings → Reviews. */
+export const DEFAULT_REVIEW_ACTIONS: ReviewAction[] = [
+  {
+    id: "review",
+    name: "Review",
+    promptTemplate:
+      "Review this pull request: {{pr_url}} ({{title}}, {{head_ref}} → {{base_ref}}).\n" +
+      "You are in a checkout of the head commit. See what changed with `git diff {{base_sha}}` and read the surrounding code before judging it.\n" +
+      "Look for bugs, behaviour changes the description does not mention, missing error handling and anything a careful reviewer would flag. Do not comment on style.",
+    allowedTools: ["Read", "Grep", "Glob", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", ...CONTEXT_TOOLS],
+    permissionMode: "default",
+    model: "",
+    checkout: "head",
+    structuredFindings: true,
+  },
+];
 
 const DEFAULTS: Settings = {
   notifications: {
@@ -197,6 +281,11 @@ const DEFAULTS: Settings = {
     hideToolCalls: false,
     // Match the old hardcoded behavior exactly, so nobody's click behavior
     // changes just because these settings now exist.
+    artifactsRoot: "",
+    hiddenPages: [],
+    pageOrder: [],
+    sidebarCollapsed: false,
+    appName: "Claude Dashboard",
     clickOpensIn: "drawer",
     cmdClickOpensIn: "page",
     optionClickOpensIn: "tile",
@@ -205,6 +294,19 @@ const DEFAULTS: Settings = {
     worktreeProvisionByRepo: {},
     worktreeExclude: false,
   },
+  reviews: {
+    repos: [],
+    views: [
+      { id: "review-requested", name: "Review requested", filter: { repos: [], reviewRequestedFromMe: true, hideApproved: true } },
+      { id: "my-prs", name: "My PRs", filter: { repos: [], authors: ["@me"], includeDrafts: true } },
+    ],
+    actions: DEFAULT_REVIEW_ACTIONS,
+    explainModel: "",
+    explainPermissionMode: "default",
+    checkoutRoot: "",
+    keepCheckouts: 6,
+  },
+  services: { defs: [], paths: DEFAULT_SERVICE_PATHS, compose: DEFAULT_COMPOSE, importedAt: null },
 };
 
 const SETTINGS_PATH = join(DATA_DIR, "settings.json");
@@ -216,6 +318,7 @@ const listeners = new Set<(s: Settings) => void>();
 function merge(base: Settings, patch: DeepPartial<Settings>): Settings {
   const n = patch.notifications ?? {};
   const u = patch.ui ?? {};
+  const r = patch.reviews ?? {};
   return {
     notifications: {
       ...base.notifications,
@@ -233,6 +336,14 @@ function merge(base: Settings, patch: DeepPartial<Settings>): Settings {
     // Appearance is replaced wholesale rather than merged: the UI always sends the
     // complete object, and half-applied themes are worse than none.
     ui: { ...base.ui, ...(u as Partial<Settings["ui"]>) },
+    reviews: { ...base.reviews, ...(r as Partial<Settings["reviews"]>) },
+    // Service definitions are replaced wholesale: the editor always sends the full
+    // list, and a merged half-list would resurrect services the user just deleted.
+    services: {
+      ...base.services,
+      ...((patch.services ?? {}) as Partial<Settings["services"]>),
+      compose: { ...base.services.compose, ...((patch.services?.compose ?? {}) as Partial<ComposeSettings>) },
+    },
   };
 }
 
@@ -248,6 +359,20 @@ export function loadSettings(): Settings {
   try {
     const user = JSON.parse(readFileSync(SETTINGS_PATH, "utf8")) as DeepPartial<Settings>;
     current = merge(DEFAULTS, user);
+    if (user.services?.paths) {
+      current = {
+        ...current,
+        services: { ...current.services, paths: normalizeServicePaths(user.services.paths) },
+      };
+    }
+    // An older layout name, from before the layouts were generic.
+    current = {
+      ...current,
+      services: {
+        ...current.services,
+        defs: current.services.defs.map((d) => ((d.layout as string) === "tms-split" ? { ...d, layout: "split" } : d)),
+      },
+    };
     // One-time carry-forward: a settings.json from before `clickOpensIn` existed
     // has the old two-value `openSessionsIn` instead. Respect it rather than
     // silently reverting an existing choice back to the "drawer" default.
@@ -258,7 +383,28 @@ export function loadSettings(): Settings {
     // A hand-edited file with a syntax error should not stop the daemon booting.
     current = DEFAULTS;
   }
+  importServicesOnce();
   return current;
+}
+
+/**
+ * Adopt services from a launcher's config file, once, when asked to.
+ *
+ * `importedAt` is the guard rather than an empty list: someone who deletes every
+ * service means it, and should not find them all back on the next boot.
+ */
+function importServicesOnce(): void {
+  if (current.services.importedAt) return;
+  const imported = importLegacyServices();
+  const stamp = new Date().toISOString();
+  current = {
+    ...current,
+    services: imported
+      ? { ...current.services, defs: imported.services, paths: imported.paths, importedAt: stamp }
+      : { ...current.services, importedAt: stamp },
+  };
+  if (imported) console.log(`imported ${imported.services.length} services from ${legacyConfigPath}`);
+  persist();
 }
 
 export function getSettings(): Settings {

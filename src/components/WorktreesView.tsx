@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { gitApi, shortPath, type RepoStatus, type Settings, type WorktreeRepo } from "../api.ts";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { gitApi, settingsApi, shortPath, type RepoStatus, type Settings, type WorktreeRepo } from "../api.ts";
+import { StarIcon } from "./Icons.tsx";
 import { WorktreesPanel } from "./WorktreesPanel.tsx";
 import { cachedStatus, watchStatus } from "./useGitRepo.ts";
 
@@ -18,9 +19,11 @@ import { cachedStatus, watchStatus } from "./useGitRepo.ts";
  */
 export function WorktreesView({
   settings,
+  onSettings,
   onOpenWorktree,
 }: {
   settings: Settings | null;
+  onSettings?: (s: Settings) => void;
   /** Start a session in one of these checkouts. */
   onOpenWorktree?: (path: string) => void;
 }) {
@@ -44,6 +47,30 @@ export function WorktreesView({
    * this list, and the same signal the badges use already fires for all three.
    */
   useEffect(() => watchStatus(load), [load]);
+
+  const pinned = settings?.ui.pinnedRepos ?? [];
+  const togglePin = (repoKey: string) => {
+    const next = pinned.includes(repoKey) ? pinned.filter((k) => k !== repoKey) : [...pinned, repoKey];
+    settingsApi
+      .save({ ui: { pinnedRepos: next } })
+      .then((r) => onSettings?.(r.settings))
+      .catch(() => {});
+  };
+
+  /**
+   * Pinned repositories first, in the order they were pinned; then the rest by name;
+   * the dashboard's own PR clones last — they are managed for you, not by you.
+   */
+  const ordered = useMemo(() => {
+    if (!repos) return [];
+    const rank = (r: WorktreeRepo) => (pinned.includes(r.repoKey) ? 0 : r.review ? 2 : 1);
+    return [...repos].sort(
+      (a, b) =>
+        rank(a) - rank(b) ||
+        (rank(a) === 0 ? pinned.indexOf(a.repoKey) - pinned.indexOf(b.repoKey) : 0) ||
+        a.name.localeCompare(b.name),
+    );
+  }, [repos, pinned.join("\n")]);
 
   if (error)
     return (
@@ -76,13 +103,22 @@ export function WorktreesView({
 
   return (
     <div className="wt-repos">
-      {repos.map((repo) => (
-        <RepoGroup
-          key={repo.repoKey}
-          repo={repo}
-          worktreeRoot={settings?.ui.worktreeRoot}
-          onOpenWorktree={onOpenWorktree}
-        />
+      {ordered.map((repo, i) => (
+        <div key={repo.repoKey}>
+          {repo.review && (i === 0 || !ordered[i - 1].review) && (
+            <p className="hint wt-section">
+              Review checkouts — clones the Reviews tab made for its sessions. Older ones are removed on their own; the limit is under
+              Settings → Reviews.
+            </p>
+          )}
+          <RepoGroup
+            repo={repo}
+            pinned={pinned.includes(repo.repoKey)}
+            onTogglePin={() => togglePin(repo.repoKey)}
+            worktreeRoot={settings?.ui.worktreeRoot}
+            onOpenWorktree={onOpenWorktree}
+          />
+        </div>
       ))}
     </div>
   );
@@ -103,10 +139,14 @@ export function WorktreesView({
  */
 function RepoGroup({
   repo,
+  pinned,
+  onTogglePin,
   worktreeRoot,
   onOpenWorktree,
 }: {
   repo: WorktreeRepo;
+  pinned: boolean;
+  onTogglePin: () => void;
   worktreeRoot?: string;
   onOpenWorktree?: (path: string) => void;
 }) {
@@ -132,7 +172,20 @@ function RepoGroup({
       status={status?.isRepo ? status : null}
       initialTrees={repo.worktrees}
       title={repo.name}
-      subtitle={shortPath(repo.mainRoot ?? repo.root, 3)}
+      subtitle={shortPath(repo.mainRoot ?? repo.repoKey, 3)}
+      titleExtra={
+        <>
+          {repo.review && <span className="chip muted">review checkouts</span>}
+          <button
+            className={`icon-btn ghost square wt-pin ${pinned ? "on" : ""}`}
+            title={pinned ? "Unpin — back into alphabetical order" : "Pin this repository to the top"}
+            aria-pressed={pinned}
+            onClick={onTogglePin}
+          >
+            <StarIcon filled={pinned} />
+          </button>
+        </>
+      }
       worktreeRoot={worktreeRoot}
       currentPath={null}
       layout="tiles"

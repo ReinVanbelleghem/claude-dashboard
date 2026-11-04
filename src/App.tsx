@@ -2,18 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   agentApi,
   agentBus,
+  type AgentSummary,
   api,
-  settingsApi,
   fmtResets,
   fmtTokens,
   fmtUsd,
-  type AgentSummary,
   type LivePayload,
+  type NotifyPayload,
   type Overview,
   type Restorable,
-  type NotifyPayload,
-  type Settings,
+  servicesApi,
   type SessionRow,
+  type Settings,
+  settingsApi,
   type UsagePayload,
 } from "./api.ts";
 import {
@@ -25,12 +26,30 @@ import {
   setBusy,
   type Appearance,
 } from "./appearance.ts";
-import { ChartIcon, ClockIcon, GearIcon, NineDotsIcon, PulseIcon, SunMoonIcon, WorktreeIcon } from "./components/Icons.tsx";
-import { BrandMark } from "./components/BrandMark.tsx";
+import {
+  ArtifactIcon,
+  ChartIcon,
+  ClockIcon,
+  GearIcon,
+  NineDotsIcon,
+  PanelLeftIcon,
+  PullRequestIcon,
+  PulseIcon,
+  SearchIcon,
+  SunMoonIcon,
+  TerminalIcon,
+  WorktreeIcon,
+} from "./components/Icons.tsx";
+import { PrPage, routePr, type PrRoute } from "./components/pr/PrPage.tsx";
+import { ReviewsView } from "./components/pr/ReviewsView.tsx";
+import { ServicesView } from "./components/services/ServicesView.tsx";
+import type { ServicesState } from "../shared/services.ts";
+import { Sidebar } from "./components/Sidebar.tsx";
 import { AnswerNext } from "./components/AnswerNext.tsx";
 import { Tile } from "./components/Charts.tsx";
 import { DesktopView } from "./components/DesktopView.tsx";
 import { FindBar } from "./components/FindBar.tsx";
+import { ArtifactsView } from "./components/ArtifactsView.tsx";
 import { HistoryView } from "./components/HistoryView.tsx";
 import { LiveView } from "./components/LiveView.tsx";
 import { FoldersModal } from "./components/FoldersModal.tsx";
@@ -48,6 +67,7 @@ import {
   clampRect,
   defaultRect,
   hitTestTile,
+  layerPoint,
   readTiles,
   rectForZone,
   writeTiles,
@@ -55,17 +75,9 @@ import {
   type TileRect,
   type TileState,
 } from "./tiles.ts";
+import { PAGES, isPageVisible, visiblePages, type Tab } from "./pages.ts";
 
-type Tab = "desktop" | "live" | "history" | "worktrees" | "usage" | "settings";
-const TAB_LABEL: Record<Tab, string> = {
-  // Icon-only — see the dock nav render, which special-cases this one.
-  desktop: "",
-  live: "Live",
-  history: "History",
-  worktrees: "Worktrees",
-  usage: "Usage",
-  settings: "Settings",
-};
+const TAB_LABEL: Record<Tab, string> = Object.fromEntries(PAGES.map((p) => [p.key, p.label])) as Record<Tab, string>;
 
 /** Icons for the non-desktop dock tabs, keyed the same way so a glyph is trivial
  * to swap: change the value here, nothing else. `desktop` is deliberately
@@ -73,16 +85,21 @@ const TAB_LABEL: Record<Tab, string> = {
 const TAB_ICON: Record<Exclude<Tab, "desktop">, () => JSX.Element> = {
   live: PulseIcon,
   history: ClockIcon,
+  artifacts: ArtifactIcon,
   worktrees: WorktreeIcon,
+  services: TerminalIcon,
+  reviews: PullRequestIcon,
   usage: ChartIcon,
   settings: GearIcon,
 };
 
-/** The only route: #/session/<id> for the full-page session view. */
+/** #/session/<id> for the full-page session view; #/pr/… is the other full page. */
 function routeSessionId(): string | null {
   const m = window.location.hash.match(/^#\/session\/(.+)$/);
   return m ? decodeURIComponent(m[1]) : null;
 }
+
+const routePrNow = () => routePr(window.location.hash);
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("live");
@@ -91,6 +108,15 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [pageId, setPageId] = useState<string | null>(routeSessionId);
+  const [prRoute, setPrRoute] = useState<PrRoute | null>(routePrNow);
+  /** Bumped when the daemon reports the artifact folder changed, to re-pull the list. */
+  const [artifactTick, setArtifactTick] = useState(0);
+  /** Pushed by the daemon whenever the tmux picture changes; null until the first. */
+  const [services, setServices] = useState<ServicesState | null>(null);
+  useEffect(() => {
+    if (tab !== "services" || services) return;
+    servicesApi.state().then(setServices).catch(() => {});
+  }, [tab, services]);
   const [tiles, setTiles] = useState<TileState[]>(readTiles);
   const nextZ = useRef(1 + tiles.reduce((m, t) => Math.max(m, t.z), 0));
   // Live sessions explicitly closed out of the dock (red light) rather than just
@@ -139,6 +165,32 @@ export default function App() {
   const [showPalette, setShowPalette] = useState(false);
   const [showFind, setShowFind] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
+  // Read from the last settings payload, but kept local too so the toggle is
+  // instant and survives the window before settings arrive.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("sidebar-collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    if (settings?.ui.sidebarCollapsed !== undefined) setSidebarCollapsed(settings.ui.sidebarCollapsed);
+  }, [settings?.ui.sidebarCollapsed]);
+  useEffect(() => {
+    document.documentElement.dataset.sidebar = sidebarCollapsed ? "rail" : "open";
+    try {
+      localStorage.setItem("sidebar-collapsed", sidebarCollapsed ? "1" : "0");
+    } catch {
+      // Private mode; the setting still round-trips through the daemon.
+    }
+  }, [sidebarCollapsed]);
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((v) => {
+      void settingsApi.save({ ui: { sidebarCollapsed: !v } }).then((r) => setSettings(r.settings)).catch(() => {});
+      return !v;
+    });
+  }, []);
   // Read from localStorage rather than settings.json so the first paint is
   // already in the right theme; the server copy syncs in a moment later.
   const [appearance, setAppearance] = useState<Appearance>(readStored);
@@ -154,6 +206,7 @@ export default function App() {
       const id = routeSessionId();
       setPageId(id);
       if (id) setOpenId(null);
+      setPrRoute(routePrNow());
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -185,7 +238,19 @@ export default function App() {
         e.preventDefault();
         setShowPalette((v) => !v);
       }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        toggleSidebar();
+      }
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "f") {
+        /**
+         * An open artifact is a cross-origin iframe, so this find — which walks the
+         * current document's nodes — cannot see a word of it, and would quietly
+         * search the page behind the overlay instead. The overlay runs its own ⌘F
+         * against a bridge inside the frame, so the only thing to do here is stand
+         * down and let that handler take the key.
+         */
+        if (document.querySelector(".artifact-overlay")) return;
         e.preventDefault();
         setShowFind(true);
         document.querySelector<HTMLInputElement>(".find-input")?.select();
@@ -236,6 +301,14 @@ export default function App() {
     api.overview().then((o) => setProjects(o.projects)).catch(() => {});
   }, []);
 
+  // Turning off the page you are standing on, or reopening with one already off,
+  // would otherwise leave the dock with nothing selected and the body blank. Live
+  // is never hideable, so there is always somewhere to land.
+  useEffect(() => {
+    if (!settings) return;
+    if (!isPageVisible(tab, settings.ui.hiddenPages)) setTab("live");
+  }, [settings, tab]);
+
   // One SSE connection drives every view. EventSource reconnects on its own, so
   // the only thing to manage here is the connected flag.
   const esRef = useRef<EventSource | null>(null);
@@ -270,6 +343,8 @@ export default function App() {
       };
     });
     es.addEventListener("index", () => refreshRecent());
+    es.addEventListener("artifacts", () => setArtifactTick((n) => n + 1));
+    es.addEventListener("services", (e) => setServices(JSON.parse((e as MessageEvent).data)));
 
     /**
      * Something wrote to a repository, possibly in another tab or another worktree of it.
@@ -296,6 +371,11 @@ export default function App() {
         agentBus.publish({ type: name, ...JSON.parse((e as MessageEvent).data) }),
       );
     }
+    // Review pages: a run's record or an explanation changed on the daemon.
+    es.addEventListener("pr-run", (e) => agentBus.publish({ type: "pr-run", run: JSON.parse((e as MessageEvent).data) }));
+    es.addEventListener("pr-explain", (e) =>
+      agentBus.publish({ type: "pr-explain", explanation: JSON.parse((e as MessageEvent).data) }),
+    );
     return () => es.close();
   }, [refreshRecent]);
 
@@ -340,6 +420,8 @@ export default function App() {
   const closePage = useCallback(() => {
     window.location.hash = "";
   }, []);
+  // A PR page is a full page too: tiles hide and the dock deselects the same way.
+  const onFullPage = !!pageId || !!prRoute;
   const closeDrawer = useCallback(() => setOpenId(null), []);
 
   // Persisted so a reload finds the same windows in the same places; re-saved
@@ -429,7 +511,7 @@ export default function App() {
   // tiles nobody asked to hide — only an actual change should trigger it.
   const desktopMounted = useRef(false);
   useEffect(() => {
-    const onDesktop = tab === "desktop" && !pageId;
+    const onDesktop = tab === "desktop" && !onFullPage;
     if (!desktopMounted.current) {
       desktopMounted.current = true;
       return;
@@ -448,7 +530,7 @@ export default function App() {
       if (openIds.size === 0) return prev;
       return prev.map((t) => (openIds.has(t.id) ? { ...t, minimized: true, hiddenByTab: true } : t));
     });
-  }, [tab, pageId]);
+  }, [tab, onFullPage]);
 
   const updateTileRect = useCallback((id: string, rect: TileRect) => {
     setTiles((prev) => prev.map((t) => (t.id === id ? { ...t, rect } : t)));
@@ -479,7 +561,7 @@ export default function App() {
       const id = e.dataTransfer?.getData(SESSION_DRAG_MIME);
       if (!id) return;
       e.preventDefault();
-      const point = { x: e.clientX, y: e.clientY };
+      const point = layerPoint(e.clientX, e.clientY);
       setTiles((prev) => {
         const target = hitTestTile(prev, point);
         if (target && target.id !== id) {
@@ -571,12 +653,14 @@ export default function App() {
   // Surface the blocked-session count in the tab title so it is visible from
   // another desktop, which is the whole point of the dashboard.
   useEffect(() => {
-    document.title = blocked > 0 ? `(${blocked}) Claude Sessions` : "Claude Sessions";
+    if (prRoute) return;
+    const name = settings?.ui.appName?.trim() || "Claude Dashboard";
+    document.title = blocked > 0 ? `(${blocked}) ${name}` : name;
     // The title only reads if the tab is wide enough to show it; the favicon dot
     // survives a tab squeezed down to its icon, and the Dock badge survives the
     // window being hidden altogether, which is where this matters most.
     setAttention(blocked);
-  }, [blocked]);
+  }, [blocked, prRoute, settings?.ui.appName]);
 
   // A tab icon cannot animate on its own — a favicon is rendered as one static frame,
   // so SMIL and CSS inside it never run. This hands the driver the on/off signal and
@@ -589,77 +673,82 @@ export default function App() {
   // The header used to hold these three groups; they now live at the two ends
   // and the nav slot of the always-on dock bar (built once here, per render,
   // and handed to TileLayer/TileDock to place around the session chips).
-  const dockLeading = (
-    <div className="brand">
-      {/* Same glyph as the tab icon, badge included, so the window and the dock
-          read as one thing. The rings are the in-page equivalent of the tab
-          badge: they only run while a session is waiting. */}
+  const appName = settings?.ui.appName?.trim() || "Claude Dashboard";
+  const pageIcon = (t: Tab) => (t === "desktop" ? NineDotsIcon : TAB_ICON[t]);
+  const goTo = (t: Tab) => {
+    setTab(t);
+    // Leaving the full-page view is implicit in picking a page.
+    if (onFullPage) window.location.hash = "";
+  };
+
+  const sidebar = (
+    <Sidebar
+      pages={visiblePages(settings?.ui.hiddenPages, settings?.ui.pageOrder)}
+      tab={onFullPage ? null : tab}
+      onSelect={goTo}
+      iconFor={pageIcon}
+      collapsed={sidebarCollapsed}
+      appearance={appearance}
+      blocked={blocked}
+      thinking={thinking}
+      liveCount={liveHere + liveExternal}
+      connected={connected}
+      name={appName}
+      onHome={() => {
+        setTab("live");
+        if (onFullPage) closePage();
+      }}
+    />
+  );
+
+  const crumb = pageId
+    ? (agentFor(pageId)?.title ?? "Session")
+    : prRoute
+      ? "Pull request"
+      : TAB_LABEL[tab] || "Desktop";
+
+  const topbar = (
+    <header className="topbar">
       <button
-        className="brand-home"
-        title="Back to Live"
-        aria-label="Back to Live"
-        onClick={() => {
-          setTab("live");
-          if (pageId) closePage();
-        }}
+        className="icon-btn square topbar-collapse"
+        onClick={toggleSidebar}
+        title={sidebarCollapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
+        aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
       >
-        <BrandMark appearance={appearance} blocked={blocked} thinking={thinking} />
+        <PanelLeftIcon />
       </button>
-      {/* Both kinds, because this is the one place that should answer "is
-          anything running". live.counts.alive is external sessions only — the
-          dashboard's own are deliberately excluded from that payload — so on
-          its own it read "0 live" with two sessions on screen, one thinking. */}
-      <small title={`${liveHere} started here · ${liveExternal} external`}>
-        {liveHere + liveExternal} live
-      </small>
-      <span
-        className={`conn ${connected ? "" : "off"}`}
-        title={connected ? "streaming" : "reconnecting"}
+      <nav className="topbar-crumbs" aria-label="Breadcrumb">
+        <button className="topbar-crumb" onClick={() => goTo("live")}>
+          {appName}
+        </button>
+        <span className="topbar-crumb-sep" aria-hidden>
+          ›
+        </span>
+        <span className="topbar-crumb current">{crumb}</span>
+      </nav>
+      <span style={{ flex: 1 }} />
+      <button className="topbar-search" onClick={() => setShowPalette(true)} title="Search sessions, pages and commands">
+        <SearchIcon />
+        <span>Search…</span>
+        <kbd>⌘K</kbd>
+      </button>
+      <button
+        className="icon-btn square mode-toggle"
+        title={`Switch to ${appearance.theme === "dark" ? "light" : "dark"} mode — full theme and icon options live in Settings → Appearance`}
+        aria-label={`Switch to ${appearance.theme === "dark" ? "light" : "dark"} mode`}
+        onClick={() => changeAppearance({ theme: appearance.theme === "dark" ? "light" : "dark" })}
       >
-        <i className="dot" />
-      </span>
-    </div>
-  );
-
-  const dockNav = (
-    <nav className="dock-nav">
-      {(["desktop", "live", "history", "worktrees", "usage", "settings"] as Tab[]).map((t) => {
-        const Icon = t === "desktop" ? NineDotsIcon : TAB_ICON[t];
-        return (
-          <button
-            key={t}
-            className="dock-nav-btn dock-nav-btn-icon"
-            aria-selected={tab === t && !pageId}
-            title={t === "desktop" ? "Desktop — a blank canvas for arranging tiles" : TAB_LABEL[t]}
-            onClick={() => {
-              setTab(t);
-              // Leaving the full-page view is implicit in picking a tab.
-              if (pageId) window.location.hash = "";
-            }}
-          >
-            <Icon />
-            {t === "live" && blocked > 0 && <span className="badge">{blocked}</span>}
-          </button>
-        );
-      })}
-    </nav>
-  );
-
-  // The icon is the mode you are about to get, which is what the word here used
-  // to say. The tooltip carries the same sentence for anything not looking.
-  const dockTrailing = (
-    <button
-      className="icon-btn mode-toggle"
-      title={`Switch to ${appearance.theme === "dark" ? "light" : "dark"} mode — full theme and icon options live in Settings → Appearance`}
-      aria-label={`Switch to ${appearance.theme === "dark" ? "light" : "dark"} mode`}
-      onClick={() => changeAppearance({ theme: appearance.theme === "dark" ? "light" : "dark" })}
-    >
-      <SunMoonIcon />
-    </button>
+        <SunMoonIcon />
+      </button>
+    </header>
   );
 
   return (
-      <div className="shell">
+    <div className="app">
+      {sidebar}
+      <div className="app-main">
+        {topbar}
+        <div className="shell">
       <AnswerNext
         queue={blockedQueue}
         external={needsInput}
@@ -677,8 +766,8 @@ export default function App() {
           onBack={closePage}
           // Adopting a past session: resume it under dashboard ownership. The route
           // already points at this session id, so the page turns interactive in place.
-          onContinue={async (sessionId, cwd) => {
-            await agentApi.start({ cwd, resume: sessionId });
+          onContinue={async (sessionId, cwd, title) => {
+            await agentApi.start({ cwd, resume: sessionId, title: title ?? undefined });
           }}
           // A branch checked out in another worktree cannot be switched to here, so
           // the offer is to start a session in the checkout that does hold it.
@@ -694,7 +783,28 @@ export default function App() {
           past to reach the thing you came for, and Desktop is meant to be blank on
           purpose — a clean backdrop for arranging tiles against, not another page
           with its own content competing for the same space. */}
-      {!pageId && usage && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && (
+      {prRoute && !pageId && (
+        <PrPage
+          route={prRoute}
+          agents={agents}
+          settings={settings}
+          onSettings={setSettings}
+          onBack={() => {
+            setTab("reviews");
+            window.location.hash = "";
+          }}
+        />
+      )}
+
+      {/* Services and Artifacts draw their own header, with tools beside the title;
+          Desktop is a blank canvas on purpose. Every other page gets the same one. */}
+      {!onFullPage && !["desktop", "services", "artifacts"].includes(tab) && (
+        <div className="page-head-row">
+          <h1 className="page-title">{TAB_LABEL[tab]}</h1>
+        </div>
+      )}
+
+      {!onFullPage && usage && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "services" && (
         <div className="kpis">
           {/* Tokens here are fresh tokens: cache reads are excluded and shown
               separately, since they are ~97% of raw volume at a tenth the rate. */}
@@ -736,8 +846,18 @@ export default function App() {
         </div>
       )}
 
-      {!pageId && tab === "desktop" && <DesktopView />}
-      {!pageId && tab === "live" && (
+      {!onFullPage && tab === "desktop" && <DesktopView />}
+      {!onFullPage && tab === "reviews" && (
+        <ReviewsView
+          settings={settings}
+          onSettings={setSettings}
+          onOpenSettings={() => {
+            localStorage.setItem("settings-section", "code");
+            setTab("settings");
+          }}
+        />
+      )}
+      {!onFullPage && tab === "live" && (
         <LiveView
           live={live}
           agents={agents}
@@ -752,10 +872,14 @@ export default function App() {
           onSettings={setSettings}
         />
       )}
-      {!pageId && tab === "history" && <HistoryView onOpen={openSession} />}
-      {!pageId && tab === "worktrees" && (
+      {!onFullPage && tab === "history" && <HistoryView onOpen={openSession} />}
+      {!onFullPage && tab === "artifacts" && (
+        <ArtifactsView onOpenSession={openSession} reloadKey={artifactTick} />
+      )}
+      {!onFullPage && tab === "worktrees" && (
         <WorktreesView
           settings={settings}
+          onSettings={setSettings}
           // The same offer the session page makes: a checkout is only useful with a
           // session in it, and the new-session dialog is where a session is configured.
           onOpenWorktree={(path) => {
@@ -764,8 +888,19 @@ export default function App() {
           }}
         />
       )}
-      {!pageId && tab === "usage" && <UsageView usage={usage} onOpen={openSession} />}
-      {!pageId && tab === "settings" && (
+      {!onFullPage && tab === "services" && (
+        <ServicesView
+          state={services}
+          settings={settings}
+          onSettings={setSettings}
+          onOpenSettings={() => {
+            localStorage.setItem("settings-section", "services");
+            setTab("settings");
+          }}
+        />
+      )}
+      {!onFullPage && tab === "usage" && <UsageView usage={usage} onOpen={openSession} />}
+      {!onFullPage && tab === "settings" && (
         <SettingsView
           settings={settings}
           onSettings={setSettings}
@@ -791,9 +926,6 @@ export default function App() {
         onMinimize={minimizeTile}
         onOpen={openTile}
         onToggleMinimizeAll={toggleMinimizeAll}
-        dockLeading={dockLeading}
-        dockNav={dockNav}
-        dockTrailing={dockTrailing}
       />
 
       {openId && (
@@ -815,11 +947,13 @@ export default function App() {
           projects={projects}
           recent={recent}
           appearance={appearance}
+          hiddenPages={settings?.ui.hiddenPages}
+          pageOrder={settings?.ui.pageOrder}
           onClose={() => setShowPalette(false)}
           onOpenSession={openSession}
           onTab={(t) => {
             setTab(t);
-            if (pageId) window.location.hash = "";
+            if (onFullPage) window.location.hash = "";
           }}
           onNewSession={() => setShowNew(true)}
           onNewIn={(cwd) => {
@@ -859,6 +993,8 @@ export default function App() {
           }}
         />
       )}
+        </div>
       </div>
+    </div>
   );
 }

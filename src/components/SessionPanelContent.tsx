@@ -7,6 +7,7 @@ import {
   type SessionDetail,
   type Settings,
 } from "../api.ts";
+import { SessionArtifacts } from "./ArtifactsView.tsx";
 import { HBars } from "./Charts.tsx";
 import { Receipt } from "./Receipt.tsx";
 import { LiveConversation } from "./Conversation.tsx";
@@ -167,6 +168,17 @@ export function SessionPanelContent({
               thing that otherwise means scrolling down to the composer's own Stop/End —
               is the more useful thing to reach from the header. Only an owned, still-
               running agent has anything here to end. */}
+          {agent && agent.sessionId && agent.status !== "ended" && agent.status !== "error" && (
+            <button
+              className="icon-btn"
+              title="Restart this session — same conversation, fresh process. Picks up an MCP server or setting authorized since it started."
+              onClick={() => {
+                agentApi.restart(agent.key).catch(() => {});
+              }}
+            >
+              Restart
+            </button>
+          )}
           {chrome === "minimal" && agent && agent.status !== "ended" && agent.status !== "error" && (
             <button
               className="icon-btn"
@@ -254,6 +266,8 @@ export function SessionPanelContent({
               </div>
 
               {data.receipt && <Receipt receipt={data.receipt} />}
+
+              <SessionArtifacts sessionId={id} />
 
               {data.prLinks.length > 0 && (
                 <div className="panel">

@@ -1,150 +1,141 @@
 /**
- * Inline SVG icons. Small enough to hand-write, and inlining them keeps the
- * dashboard dependency-free and offline — no icon font, no sprite fetch.
- * All of them inherit `currentColor` so they follow the theme.
+ * Inline SVG icons, in one outline style: 24-unit grid, 1.75 stroke, round caps
+ * and joins, `currentColor` throughout so they follow the theme. Hand-written and
+ * inlined, so the dashboard stays dependency-free and offline.
  */
+import type { ReactNode } from "react";
+
+function I({ children, className = "", style }: { children: ReactNode; className?: string; style?: React.CSSProperties }) {
+  return (
+    <svg
+      className={`icon ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={style}
+    >
+      {children}
+    </svg>
+  );
+}
 
 export function FolderIcon({ open = false }: { open?: boolean }) {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+    <I>
       {open ? (
-        <path
-          d="M2.5 6.5A1.5 1.5 0 014 5h3.6c.4 0 .78.16 1.06.44L9.9 6.5H16A1.5 1.5 0 0117.5 8H6.8a1.5 1.5 0 00-1.43 1.05L3.6 15H4a1.5 1.5 0 01-1.5-1.5v-7z"
-          fill="currentColor"
-          opacity="0.9"
-        />
+        <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
       ) : (
-        <path
-          d="M2.5 6A1.5 1.5 0 014 4.5h3.38c.4 0 .78.16 1.06.44l1.12 1.12H16A1.5 1.5 0 0117.5 7.5v6A1.5 1.5 0 0116 15H4a1.5 1.5 0 01-1.5-1.5V6z"
-          fill="currentColor"
-          opacity="0.9"
-        />
+        <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
       )}
-    </svg>
+    </I>
   );
 }
 
 export function GitIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <circle cx="6" cy="5" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <circle cx="6" cy="15" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <circle cx="14" cy="10" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M6 7.1v5.8M8.1 14A5 5 0 0012 10.6" fill="none" stroke="currentColor" strokeWidth="1.6" />
-    </svg>
+    <I>
+      <path d="M6 3v12" />
+      <circle cx="18" cy="6" r="3" />
+      <circle cx="6" cy="18" r="3" />
+      <path d="M18 9a9 9 0 0 1-9 9" />
+    </I>
   );
 }
 
-/**
- * A session with no project: a magnifier, not a folder, because what it marks is a
- * question rather than a place on disk.
- */
 export function SearchIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <circle cx="8.8" cy="8.8" r="5" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M12.5 12.5L17 17" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
+    <I>
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.3-4.3" />
+    </I>
   );
 }
 
-/**
- * A worktree: one repository, a second checkout hanging off it. Deliberately a
- * relative of GitIcon rather than a folder — what it marks is a branch that lives
- * somewhere else, not a directory.
- */
 export function WorktreeIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <circle cx="5" cy="4.5" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M5 6.4v9.1h4.4M5 10.5h4.4" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <rect x="11.2" y="8.4" width="6" height="4.2" rx="1.1" fill="none" stroke="currentColor" strokeWidth="1.6" />
-    </svg>
+    <I>
+      <circle cx="12" cy="18" r="3" />
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="6" r="3" />
+      <path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9" />
+      <path d="M12 12v3" />
+    </I>
+  );
+}
+
+export function PullRequestIcon() {
+  return (
+    <I>
+      <circle cx="18" cy="18" r="3" />
+      <circle cx="6" cy="6" r="3" />
+      <path d="M13 6h3a2 2 0 0 1 2 2v7" />
+      <path d="M6 9v12" />
+    </I>
   );
 }
 
 export function StarIcon({ filled = false }: { filled?: boolean }) {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
+    <I>
       <path
-        d="M10 2.8l2.2 4.5 4.9.7-3.5 3.5.8 4.9L10 14.1l-4.4 2.3.8-4.9L2.9 8l4.9-.7L10 2.8z"
+        d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"
         fill={filled ? "currentColor" : "none"}
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinejoin="round"
       />
-    </svg>
+    </I>
   );
 }
 
 export function TrashIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <path
-        d="M4.5 6.5h11M8 6.5V5a1 1 0 011-1h2a1 1 0 011 1v1.5M6 6.5l.6 8a1.5 1.5 0 001.5 1.4h3.8a1.5 1.5 0 001.5-1.4l.6-8"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
-    </svg>
+    <I>
+      <path d="M3 6h18" />
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </I>
   );
 }
 
 export function RefreshIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <path
-        d="M15.5 8.5a5.5 5.5 0 10-1.4 5.3M15.5 8.5V4.5M15.5 8.5h-4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <I>
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+      <path d="M8 16H3v5" />
+    </I>
   );
 }
 
 export function PlusIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <path d="M10 4.5v11M4.5 10h11" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
+    <I>
+      <path d="M5 12h14" />
+      <path d="M12 5v14" />
+    </I>
   );
 }
 
-/**
- * "Open this in the editor". Angle brackets rather than the VS Code mark: the logo
- * is a two-tone ribbon that reads as a smudge at 14px in one colour, and the rest of
- * the set is monochrome line work.
- */
 export function EditorIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <path
-        d="M7.4 6.5L3.5 10l3.9 3.5M12.6 6.5L16.5 10l-3.9 3.5M11.2 4.8l-2.4 10.4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <I>
+      <path d="m16 18 6-6-6-6" />
+      <path d="m8 6-6 6 6 6" />
+    </I>
   );
 }
 
 export function PencilIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <path
-        d="M4 16l.9-3.3 7.7-7.7a1.6 1.6 0 012.3 0l.1.1a1.6 1.6 0 010 2.3l-7.7 7.7L4 16z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <I>
+      <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+      <path d="m15 5 4 4" />
+    </I>
   );
 }
 
@@ -254,58 +245,34 @@ export function FileTypeIcon({ name }: { name: string }) {
 
 export function DocIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <path
-        d="M5.5 3.5h6l3.5 3.5v9a1 1 0 01-1 1h-8.5a1 1 0 01-1-1v-11a1 1 0 011-1zM11.5 3.5V7H15"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <I>
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M10 9H8" />
+      <path d="M16 13H8" />
+      <path d="M16 17H8" />
+    </I>
   );
 }
 
 export function CheckIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <path d="M4.5 10.5l3.5 3.5 7.5-8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
+    <I>
+      <path d="M20 6 9 17l-5-5" />
+    </I>
   );
 }
 
-/**
- * The mode toggle's face: a sun and a moon in one 24×24 box, both always present so
- * CSS can swap them with a transition. Which one shows is decided by the theme on the
- * root element, not by a prop — the swap has to animate, and a remount cannot.
- *
- * The rays are generated rather than written out: eight identical lines differing only
- * by angle is a loop, and hand-rounded coordinates for each would be noise.
- */
+/** Sun and moon stacked; CSS cross-fades them with the theme. */
 export function SunMoonIcon() {
-  const rays = Array.from({ length: 8 }, (_, i) => {
-    const angle = (i * Math.PI) / 4;
-    const at = (r: number) => [12 + Math.cos(angle) * r, 12 + Math.sin(angle) * r] as const;
-    const [x1, y1] = at(7.4);
-    const [x2, y2] = at(10);
-    return { x1, y1, x2, y2 };
-  });
   return (
-    <svg className="icon sun-moon" viewBox="0 0 24 24" aria-hidden="true">
+    <I className="sun-moon">
       <g className="sm-sun">
-        <circle cx="12" cy="12" r="4.2" fill="currentColor" />
-        <g stroke="currentColor" strokeWidth="1.9" strokeLinecap="round">
-          {rays.map((r, i) => (
-            <line key={i} x1={r.x1.toFixed(2)} y1={r.y1.toFixed(2)} x2={r.x2.toFixed(2)} y2={r.y2.toFixed(2)} />
-          ))}
-        </g>
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2v2M12 20v2m-7.07-15.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32 1.41-1.41" />
       </g>
-      <path
-        className="sm-moon"
-        d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"
-        fill="currentColor"
-      />
-    </svg>
+      <path className="sm-moon" d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+    </I>
   );
 }
 
@@ -315,180 +282,302 @@ export function SunMoonIcon() {
  * the slash is the one convention everyone already reads correctly.
  */
 export function BellIcon({ muted = false }: { muted?: boolean }) {
-  return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <path
-        d="M10 3.2a4 4 0 014 4v2.4l1.2 2.2H4.8L6 9.6V7.2a4 4 0 014-4zM8.4 14.2a1.7 1.7 0 003.2 0"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      {muted && (
-        <path d="M4.4 4.4l11.2 11.2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      )}
-    </svg>
+  return muted ? (
+    <I>
+      <path d="M10.268 21a2 2 0 0 0 3.464 0" />
+      <path d="M17 17H4a1 1 0 0 1-.74-1.673C4.59 13.956 6 12.499 6 8a6 6 0 0 1 .258-1.742" />
+      <path d="m2 2 20 20" />
+      <path d="M8.668 3.01A6 6 0 0 1 18 8c0 2.687.77 4.653 1.707 6.05" />
+    </I>
+  ) : (
+    <I>
+      <path d="M10.268 21a2 2 0 0 0 3.464 0" />
+      <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
+    </I>
   );
 }
 
 export function CopyIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <rect x="7.2" y="7.2" width="8.6" height="8.6" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M12.8 4.2H5.8a1.6 1.6 0 00-1.6 1.6v7" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
+    <I>
+      <rect x="9" y="9" width="13" height="13" rx="2" />
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+    </I>
   );
 }
 
-/**
- * Attach. Drawn inside a 20-unit box with the stroke kept two units clear of every
- * edge — at 16 the clip's curves ran into the viewBox and the corners came out
- * shaved once the stroke was applied.
- */
 export function ClipIcon() {
   return (
-    <svg viewBox="0 0 20 20" width="14" height="14" fill="none" aria-hidden="true">
-      <path
-        d="M12.5 5.5 6.9 11.1a2.2 2.2 0 0 0 3.1 3.1l5.6-5.6a4 4 0 0 0-5.7-5.7L4.3 8.5a5.8 5.8 0 0 0 8.2 8.2l3.1-3.1"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <I>
+      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </I>
   );
 }
 
-/** A `!`-prefixed message hands off to the shell instead of the model. */
 export function TerminalIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <rect x="2.5" y="4" width="15" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <path
-        d="M5.6 7.8 8.6 10l-3 2.2M10 12.3h4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <I>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="m7 11 2-2-2-2" />
+      <path d="M11 13h4" />
+    </I>
   );
 }
 
-/** The side drawer: a panel docked to the right edge of the screen. */
 export function DrawerOpenIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <rect x="2.5" y="3.5" width="15" height="13" rx="1.8" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="11.5" y="3.5" width="6" height="13" rx="1" fill="currentColor" opacity="0.85" />
-    </svg>
+    <I>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M15 3v18" />
+    </I>
   );
 }
 
-/** The full page: the whole screen taken over by one surface. */
 export function FullPageIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <rect x="2.5" y="3.5" width="15" height="13" rx="1.8" fill="currentColor" opacity="0.85" />
-      <rect x="2.5" y="3.5" width="15" height="13" rx="1.8" fill="none" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
+    <I>
+      <path d="M15 3h6v6" />
+      <path d="m21 3-7 7" />
+      <path d="m3 21 7-7" />
+      <path d="M9 21H3v-6" />
+    </I>
   );
 }
 
-/** A floating tile: its own small window over the rest of the screen. */
 export function TileWindowIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <rect x="2.5" y="3.5" width="15" height="13" rx="1.8" fill="none" stroke="currentColor" strokeWidth="1.4" opacity="0.6" />
-      <rect x="8" y="8" width="9" height="7" rx="1.3" fill="currentColor" opacity="0.85" />
-      <rect x="8" y="8" width="9" height="7" rx="1.3" fill="none" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
+    <I>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="M10 4v4" />
+      <path d="M2 8h20" />
+      <path d="M6 4v4" />
+    </I>
   );
 }
 
-/** Live: a heartbeat trace, since this tab is what's happening right now. */
 export function PulseIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <path
-        d="M2.5 10.5h3.2l1.6-4.2 3 8 1.7-6.4 1.3 2.6h4.2"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <I>
+      <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />
+    </I>
   );
 }
 
-/** History: a clock face, for looking back over past sessions. */
 export function ClockIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <circle cx="10" cy="10.5" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M10 7v3.7l2.6 1.6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
+    <I>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 6v6l4 2" />
+    </I>
   );
 }
 
-/** Usage: a small bar chart, for the tab that totals up tokens and cost. */
+export function ArtifactIcon() {
+  return (
+    <I>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M9 21V9" />
+    </I>
+  );
+}
+
 export function ChartIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <path
-        d="M3.5 16.5v-5.2M8.2 16.5V6.3M12.9 16.5v-8.6M17.5 16.5V3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-      />
-    </svg>
+    <I>
+      <path d="M3 3v16a2 2 0 0 0 2 2h16" />
+      <path d="M18 17V9" />
+      <path d="M13 17V5" />
+      <path d="M8 17v-3" />
+    </I>
   );
 }
 
-/** Settings: a gear, for the tab that adjusts everything else. */
 export function GearIcon() {
-  const teeth = Array.from({ length: 8 }, (_, i) => {
-    const angle = (i * Math.PI) / 4;
-    const at = (r: number) => [10 + Math.cos(angle) * r, 10 + Math.sin(angle) * r] as const;
-    const [x1, y1] = at(6.1);
-    const [x2, y2] = at(8);
-    return { x1, y1, x2, y2 };
-  });
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <g stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
-        {teeth.map((t, i) => (
-          <line key={i} x1={t.x1.toFixed(2)} y1={t.y1.toFixed(2)} x2={t.x2.toFixed(2)} y2={t.y2.toFixed(2)} />
-        ))}
-      </g>
-      <circle cx="10" cy="10" r="4.4" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      <circle cx="10" cy="10" r="1.6" fill="currentColor" />
-    </svg>
+    <I>
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
+    </I>
   );
 }
 
-/** The nine-dot "app grid" glyph — here, minimize/restore every open tile at once. */
 export function NineDotsIcon() {
-  const positions = [3, 9.5, 16];
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      {positions.flatMap((cy) => positions.map((cx) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="1.5" fill="currentColor" />))}
-    </svg>
+    <I>
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+    </I>
   );
 }
 
-/** Every open tile dropping into the dock at once — a window frame with an
- * arrow tucking down into it, distinct from the nine-dot page-grid glyph now
- * that both live in the same bar. */
 export function ShowDesktopIcon() {
   return (
-    <svg className="icon" viewBox="0 0 20 20" aria-hidden="true">
-      <rect x="2.5" y="3" width="15" height="9" rx="1.4" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M10 8v6M7 11.5l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
+    <I>
+      <rect x="2" y="3" width="20" height="14" rx="2" />
+      <path d="M8 21h8" />
+      <path d="M12 17v4" />
+    </I>
+  );
+}
+
+export function CommentIcon() {
+  return (
+    <I>
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </I>
+  );
+}
+
+export function EyeIcon() {
+  return (
+    <I>
+      <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
+      <circle cx="12" cy="12" r="3" />
+    </I>
+  );
+}
+
+export function EyeOffIcon() {
+  return (
+    <I>
+      <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" />
+      <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" />
+      <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" />
+      <path d="m2 2 20 20" />
+    </I>
+  );
+}
+
+export function PlayIcon() {
+  return (
+    <I>
+      <path d="M6 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L7.5 3.64A1 1 0 0 0 6 4.5z" />
+    </I>
+  );
+}
+
+export function StopIcon() {
+  return (
+    <I>
+      <rect x="4" y="4" width="16" height="16" rx="2.5" />
+    </I>
+  );
+}
+
+export function PromptIcon() {
+  return (
+    <I>
+      <path d="m4 17 6-6-6-6" />
+      <path d="M12 19h8" />
+    </I>
+  );
+}
+
+export function MoreIcon() {
+  return (
+    <I>
+      <circle cx="12" cy="12" r="1" fill="currentColor" />
+      <circle cx="19" cy="12" r="1" fill="currentColor" />
+      <circle cx="5" cy="12" r="1" fill="currentColor" />
+    </I>
+  );
+}
+
+export function LogsIcon() {
+  return (
+    <I>
+      <path d="M15 12h-5" />
+      <path d="M15 8h-5" />
+      <path d="M19 17V5a2 2 0 0 0-2-2H4" />
+      <path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3" />
+    </I>
+  );
+}
+
+export function ChevronIcon({ dir = "down" }: { dir?: "up" | "down" }) {
+  return (
+    <I style={dir === "up" ? { transform: "rotate(180deg)" } : undefined}>
+      <path d="m6 9 6 6 6-6" />
+    </I>
+  );
+}
+
+export function GripIcon() {
+  return (
+    <I>
+      {[5, 12, 19].flatMap((y) =>
+        [9, 15].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1" fill="currentColor" />),
+      )}
+    </I>
+  );
+}
+
+export function PanelLeftIcon() {
+  return (
+    <I>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M9 3v18" />
+    </I>
+  );
+}
+
+export function HomeIcon() {
+  return (
+    <I>
+      <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
+      <path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    </I>
+  );
+}
+
+export function ArrowUpIcon() {
+  return (
+    <I>
+      <path d="m5 12 7-7 7 7" />
+      <path d="M12 19V5" />
+    </I>
+  );
+}
+
+export function TagIcon() {
+  return (
+    <I>
+      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" />
+      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
+    </I>
+  );
+}
+
+export function XIcon() {
+  return (
+    <I>
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </I>
+  );
+}
+
+export function PinIcon({ filled = false }: { filled?: boolean }) {
+  return (
+    <I>
+      <path d="M12 17v5" />
+      <path
+        d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"
+        fill={filled ? "currentColor" : "none"}
+      />
+    </I>
+  );
+}
+
+export function ExternalIcon() {
+  return (
+    <I>
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+    </I>
   );
 }

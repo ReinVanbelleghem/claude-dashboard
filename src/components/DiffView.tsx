@@ -22,8 +22,8 @@ export type ReviewProps = {
  * markdown code blocks use, keyed off the file extension.
  */
 
-type Line = { kind: "ctx" | "add" | "del"; text: string; oldNo: number | null; newNo: number | null };
-type Hunk = { header: string; lines: Line[] };
+export type Line = { kind: "ctx" | "add" | "del"; text: string; oldNo: number | null; newNo: number | null };
+export type Hunk = { header: string; lines: Line[] };
 export type FilePatch = {
   path: string;
   from: string | null;
@@ -521,7 +521,7 @@ function LineReview({
  * one-to-one, which is the common case for an edited line; anything left over
  * becomes a row with one side blank.
  */
-function pair(lines: Line[]): { left: Line | null; right: Line | null }[] {
+export function pair(lines: Line[]): { left: Line | null; right: Line | null }[] {
   const rows: { left: Line | null; right: Line | null }[] = [];
   let i = 0;
   while (i < lines.length) {

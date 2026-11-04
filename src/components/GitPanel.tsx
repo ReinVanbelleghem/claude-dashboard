@@ -448,11 +448,11 @@ export const GitPanel = memo(function GitPanel({
               </button>
             </div>
             <span style={{ flex: 1 }} />
-            {root && (
+            {(cwd || root) && (
               <a
                 className="icon-btn"
-                href={`vscode://file${root}`}
-                title={`Open ${root} in VS Code`}
+                href={`vscode://file${cwd || root}`}
+                title={`Open ${cwd || root} in VS Code`}
               >
                 <EditorIcon /> Open in VS Code
               </a>

@@ -45,6 +45,11 @@ has_bun()    { ensure_bun_on_path; have bun; }
 has_git()    { have git; }
 has_claude() { have claude; }
 has_notifier() { have terminal-notifier; }
+# The Services page: tmux runs the stack, python3 brokers the browser terminal
+# (bun cannot open a pty itself), docker lists and drives compose containers.
+has_tmux()    { have tmux; }
+has_python3() { have python3; }
+has_docker()  { have docker && docker compose version >/dev/null 2>&1; }
 has_claude_home() { [ -d "${CLAUDE_HOME:-$HOME/.claude}" ]; }
 
 port_busy() {
@@ -65,6 +70,22 @@ git_install_hint() {
 
 claude_install_hint() {
   echo "npm install -g @anthropic-ai/claude-code    # then run: claude"
+}
+
+tmux_install_hint() {
+  case "$OS" in
+    macos) echo "brew install tmux" ;;
+    linux) echo "sudo apt install tmux      # or your distro's package manager" ;;
+    *)     echo "https://github.com/tmux/tmux/wiki/Installing" ;;
+  esac
+}
+
+docker_install_hint() {
+  case "$OS" in
+    macos) echo "brew install --cask docker    # or Docker Desktop / OrbStack" ;;
+    linux) echo "https://docs.docker.com/engine/install/" ;;
+    *)     echo "https://docs.docker.com/get-docker/" ;;
+  esac
 }
 
 # ── the fast path used by start.sh ────────────────────────────────────────────

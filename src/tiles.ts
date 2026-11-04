@@ -61,8 +61,25 @@ export function popOutSession(id: string) {
  */
 function viewport() {
   const el = document.documentElement;
-  return { w: el.clientWidth, h: el.clientHeight };
+  return { w: el.clientWidth - layerInset(), h: el.clientHeight - layerTop() };
 }
+
+const cssPx = (name: string): number => {
+  const n = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+  return Number.isFinite(n) ? n : 0;
+};
+
+/**
+ * How far the tile layer starts from the window's left edge — the sidebar's
+ * width, read from the CSS variable that sizes both, so the two never disagree.
+ */
+export const layerInset = (): number => cssPx("--sidebar-w");
+
+/** And from the top: the top bar's height, so a tile snapped up stops under it. */
+export const layerTop = (): number => cssPx("--topbar-h");
+
+/** A pointer position in the tile layer's own coordinates. */
+export const layerPoint = (clientX: number, clientY: number) => ({ x: clientX - layerInset(), y: clientY - layerTop() });
 
 /** The vertical span actually free for a tile — the viewport height, minus
  * the dock's clearance at the bottom. Shared by `rectForZone` and the
@@ -361,8 +378,10 @@ export type SnapZone =
 const EDGE_MARGIN = 28;
 
 /** What a drag would snap to if released with the pointer at (x, y) — or null for a free drop. */
-export function snapZoneAt(x: number, y: number): SnapZone | null {
+export function snapZoneAt(clientX: number, clientY: number): SnapZone | null {
   const { w: vw, h: vh } = viewport();
+  const x = clientX - layerInset();
+  const y = clientY - layerTop();
   if (y < 6) return "maximize";
   const nearLeft = x < EDGE_MARGIN;
   const nearRight = x > vw - EDGE_MARGIN;

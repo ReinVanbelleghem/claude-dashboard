@@ -12,6 +12,7 @@ require_deps_or_die
 
 API_PORT="${PORT:-5757}"
 UI_PORT=5758
+ARTIFACT_PORT_SHOWN="${ARTIFACT_PORT:-5759}"
 
 if [ ! -d node_modules ]; then
   echo "→ installing dependencies…"
@@ -35,6 +36,7 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 echo "→ daemon   http://localhost:$API_PORT"
+echo "→ artifacts http://localhost:$ARTIFACT_PORT_SHOWN"
 # NOT --watch by default: the daemon is the parent process of every session you
 # start from the dashboard, so reloading it on a file save kills those sessions
 # mid-conversation. Opt in with DASHBOARD_WATCH=1 when working on the server.
