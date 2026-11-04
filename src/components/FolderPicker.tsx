@@ -74,8 +74,14 @@ export function FolderPicker({
 
   return createPortal(
     <>
-      <div className={`scrim ${stacked ? "stacked" : ""}`} onClick={onClose} />
-      <div className={`modal wide folder-picker ${stacked ? "stacked" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
+      <div className={`scrim ${stacked ? "stacked" : ""}`} style={stacked ? { zIndex: 90 } : undefined} onClick={onClose} />
+      <div
+        className={`modal wide folder-picker ${stacked ? "stacked" : ""}`}
+        style={stacked ? { zIndex: 91 } : undefined}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
         <div className="modal-head">
           <div>
             <h3>{title}</h3>
@@ -166,6 +172,7 @@ export function FolderField({
   wantRepo,
   optional = true,
   mono = true,
+  stacked = false,
 }: {
   label?: string;
   value: string;
@@ -176,6 +183,8 @@ export function FolderField({
   wantRepo?: boolean;
   optional?: boolean;
   mono?: boolean;
+  /** The field sits inside another modal, so the picker has to layer above it. */
+  stacked?: boolean;
 }) {
   const [picking, setPicking] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -214,6 +223,7 @@ export function FolderField({
           hint={pickerHint}
           initial={draft || placeholder}
           wantRepo={wantRepo}
+          stacked={stacked}
           onPick={(p) => {
             setPicking(false);
             commit(p);

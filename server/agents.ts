@@ -1,14 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { claudeEnv, DATA_DIR } from "./paths.ts";
 import {
@@ -719,6 +710,7 @@ export function startAgent(opts: StartOptions): string {
         description: x.description ?? "",
         argumentHint: (x as { argumentHint?: string }).argumentHint,
       }));
+      rememberCommands(agent.commands);
       emit("agent-commands", { key, commands: agent.commands });
     })
     .catch(() => {});
@@ -805,6 +797,33 @@ function applyTaskEvent(agent: Agent, msg: Record<string, any>) {
 
   emit("agent-tasks", { key: agent.key, tasks: [...agent.tasks.values()] });
   touch(agent);
+}
+
+/**
+ * The slash commands a session reports — skills, plugins, built-ins — are the same
+ * for every session on this machine, give or take a skill added since. Keeping the
+ * last list, on disk too, lets a template's prompt offer them before any session
+ * exists.
+ */
+type Command = { name: string; description: string; argumentHint?: string };
+const COMMANDS_CACHE = join(DATA_DIR, "commands.json");
+let knownCommands: Command[] | null = null;
+function rememberCommands(list: Command[]) {
+  knownCommands = list;
+  try {
+    writeFileSync(COMMANDS_CACHE, JSON.stringify(list));
+  } catch {
+    // A cache miss on the next boot is the only consequence.
+  }
+}
+export function getKnownCommands(): Command[] {
+  if (knownCommands) return knownCommands;
+  try {
+    knownCommands = JSON.parse(readFileSync(COMMANDS_CACHE, "utf8")) as Command[];
+  } catch {
+    knownCommands = [];
+  }
+  return knownCommands;
 }
 
 /**

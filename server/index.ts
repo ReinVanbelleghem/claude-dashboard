@@ -9,6 +9,7 @@ import {
   forgetAgent,
   forgetRestorable,
   getAgent,
+  getKnownCommands,
   getPlanLimits,
   IMAGE_FILE_RE,
   IMAGE_MEDIA_TYPES,
@@ -966,6 +967,8 @@ const server = Bun.serve<PtyData, never>({
       });
       return json({ key, agent: getAgent(key) });
     }
+
+    if (p === "/api/commands" && req.method === "GET") return json({ commands: getKnownCommands() });
 
     // ── templates ─────────────────────────────────────────────────────────
     if (p === "/api/templates/runs" && req.method === "GET") {

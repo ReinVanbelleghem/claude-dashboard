@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { fmtAgo, modelApi, settingsApi, shortPath, templateApi, type AgentSummary, type Settings } from "../api.ts";
+import { dirApi, fmtAgo, modelApi, settingsApi, shortPath, templateApi, type AgentSummary, type Favourite, type Settings } from "../api.ts";
 import {
   blankSchedule,
   blankTemplate,
@@ -13,8 +13,9 @@ import {
 } from "../../shared/templates.ts";
 import { MODES, MODE_HELP, MODE_LABEL, STARTER_MODELS } from "./Conversation.tsx";
 import { FolderField } from "./FolderPicker.tsx";
-import { ClockIcon, CopyIcon, PencilIcon, PlayIcon, PlusIcon, TemplateIcon, TrashIcon } from "./Icons.tsx";
+import { ClockIcon, CopyIcon, FolderIcon, PencilIcon, PlayIcon, PlusIcon, SearchIcon, TemplateIcon, TrashIcon } from "./Icons.tsx";
 import { Select } from "./Select.tsx";
+import { PromptBox } from "./PromptBox.tsx";
 
 /**
  * Session templates: recipes you run often, each optionally on a schedule.
@@ -256,7 +257,7 @@ function PickCwd({ template, onClose, onPick }: { template: Template; onClose: (
             <p className="hint">This template has no fixed directory. Where should this run?</p>
           </div>
         </div>
-        <FolderField value={cwd} onChange={setCwd} placeholder="~/src/my-app" optional={false} pickerTitle="Pick the working directory" />
+        <FolderField value={cwd} onChange={setCwd} placeholder="~/src/my-app" optional={false} stacked pickerTitle="Pick the working directory" />
         <div className="svc-modal-foot">
           <button className="icon-btn ghost" onClick={onClose}>
             Cancel
@@ -289,8 +290,21 @@ function TemplateEditor({
   const [arming, setArming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [models, setModels] = useState<{ value: string; label: string; hint?: string }[]>(STARTER_MODELS);
+  const [favourites, setFavourites] = useState<Favourite[]>([]);
+  // "Other" stays open once chosen, even while the path is still empty.
+  const [custom, setCustom] = useState<boolean>(false);
   const edit = (patch: Partial<Template>) => setT((x) => ({ ...x, ...patch }));
   const editSchedule = (patch: Partial<Schedule>) => setT((x) => ({ ...x, schedule: { ...(x.schedule ?? blankSchedule()), ...patch } }));
+
+  useEffect(() => {
+    dirApi
+      .favourites()
+      .then((r) => {
+        setFavourites(r.favourites);
+        if (template.cwd && !r.favourites.some((f) => f.path === template.cwd)) setCustom(true);
+      })
+      .catch(() => {});
+  }, [template.cwd]);
 
   useEffect(() => {
     const custom = settings?.ui.customModels ?? [];
@@ -326,6 +340,7 @@ function TemplateEditor({
   const scheduleNeedsCwd = !!sched?.enabled && !t.research && !t.cwd.trim();
   const canSave = t.name.trim().length > 0 && cronOk && !scheduleNeedsCwd;
   const preview = renderTitle(t.titlePattern, { name: t.name || "Template", cwd: t.cwd, now: new Date() });
+  const onFavourite = !t.research && !custom && favourites.some((f) => f.path === t.cwd);
 
   return (
     <div className="svc-scrim" onClick={onClose} role="dialog" aria-modal="true" aria-label={isNew ? "New template" : "Edit template"}>
@@ -333,7 +348,6 @@ function TemplateEditor({
         <div className="svc-modal-title">
           <div>
             <h3>{isNew ? "New template" : t.name || "Template"}</h3>
-            <p className="hint">Everything the new-session dialog asks, decided once.</p>
           </div>
           {!isNew && (
             <button
@@ -348,119 +362,179 @@ function TemplateEditor({
         </div>
 
         <div className="tpl-editor-body">
-          <div className="set-grid">
-            <label className="field">
-              <span>Name</span>
-              <input className="search" value={t.name} placeholder="Morning inbox" autoFocus onChange={(e) => edit({ name: e.target.value })} />
-            </label>
-            <label className="field">
-              <span>Session title</span>
-              <input className="search" value={t.titlePattern} placeholder="{name} · {date}" onChange={(e) => edit({ titlePattern: e.target.value })} />
-              <span className="tpl-hint">
-                {"{name} {date} {time} {repo}"} · preview: <b>{preview}</b>
-              </span>
-            </label>
-          </div>
-
-          <label className="set-row">
-            <input type="checkbox" checked={t.research} onChange={(e) => edit({ research: e.target.checked })} />
-            <span className="set-text">
-              <span className="set-label">Research session</span>
-              <span className="set-help">No repository, no files, no shell. For questions, not code.</span>
-            </span>
-          </label>
-
-          {!t.research && (
-            <FolderField
-              label="Working directory"
-              value={t.cwd}
-              placeholder="Leave empty to be asked when you run it"
-              onChange={(cwd) => edit({ cwd })}
-              pickerTitle="Pick the working directory"
-              pickerHint="The checkout the session starts in."
-            />
-          )}
-
-          <div className="set-grid">
-            <label className="field">
-              <span>Model</span>
-              <Select value={t.model} options={[{ value: "", label: "Dashboard default" }, ...models]} onChange={(v) => edit({ model: v })} />
-            </label>
-            <label className="field">
-              <span>Permission mode</span>
-              <Select
-                value={t.permissionMode}
-                options={MODES.map((m) => ({ value: m, label: MODE_LABEL[m], hint: MODE_HELP[m] }))}
-                onChange={(v) => edit({ permissionMode: v as Template["permissionMode"] })}
-              />
-            </label>
-          </div>
-
-          <label className="field">
-            <span>First prompt</span>
-            <textarea className="search tpl-prompt-input" rows={6} value={t.prompt} placeholder="Sent as soon as the session is up." onChange={(e) => edit({ prompt: e.target.value })} />
-          </label>
-
-          <h3 className="set-h">Schedule</h3>
-          <label className="set-row">
-            <input type="checkbox" checked={!!sched?.enabled} onChange={(e) => editSchedule({ enabled: e.target.checked })} />
-            <span className="set-text">
-              <span className="set-label">Run on a schedule</span>
-              <span className="set-help">The daemon starts it for you. Needs a fixed working directory.</span>
-            </span>
-          </label>
-          {sched?.enabled && (
-            <div className="tpl-schedule-edit">
-              <div className="scope" role="radiogroup">
-                {(["weekly", "interval", "cron"] as const).map((k) => (
-                  <button key={k} role="radio" aria-checked={sched.kind === k} className={`scope-btn ${sched.kind === k ? "on" : ""}`} onClick={() => editSchedule({ kind: k })}>
-                    {k === "weekly" ? "Days and time" : k === "interval" ? "Every N hours" : "Cron"}
-                  </button>
-                ))}
-              </div>
-              {sched.kind === "weekly" && (
-                <div className="tpl-weekly">
-                  <div className="tpl-days">
-                    {DAY_NAMES.map((d, i) => (
-                      <button
-                        key={d}
-                        className={`tag-chip ${sched.days.includes(i) ? "on" : ""}`}
-                        aria-pressed={sched.days.includes(i)}
-                        onClick={() => editSchedule({ days: sched.days.includes(i) ? sched.days.filter((x) => x !== i) : [...sched.days, i] })}
-                      >
-                        {d}
-                      </button>
-                    ))}
-                  </div>
-                  <label className="field tpl-time">
-                    <span>At</span>
-                    <input className="search" type="time" value={sched.time} onChange={(e) => editSchedule({ time: e.target.value })} />
-                  </label>
-                </div>
-              )}
-              {sched.kind === "interval" && (
-                <label className="field tpl-time">
-                  <span>Every (hours)</span>
-                  <input className="search" type="number" min={1} max={168} value={sched.everyHours} onChange={(e) => editSchedule({ everyHours: Math.max(1, Number(e.target.value) || 1) })} />
-                </label>
-              )}
-              {sched.kind === "cron" && (
-                <label className="field">
-                  <span>Cron expression (minute hour day month weekday, local time)</span>
-                  <input className={`search mono ${cronOk ? "" : "bad"}`} value={sched.cron} onChange={(e) => editSchedule({ cron: e.target.value })} />
-                  {!cronOk && <span className="tpl-hint warn">That does not parse. Example: 0 9 * * 1-5</span>}
-                </label>
-              )}
-              <label className="set-row">
-                <input type="checkbox" checked={sched.skipIfRunning} onChange={(e) => editSchedule({ skipIfRunning: e.target.checked })} />
-                <span className="set-text">
-                  <span className="set-label">Skip when a run is still going</span>
-                  <span className="set-help">Otherwise a slow run and the next one overlap.</span>
-                </span>
+          <section className="tpl-section">
+            <div className="tpl-row">
+              <label className="field">
+                <span>Name</span>
+                <input className="search" value={t.name} placeholder="Morning inbox" autoFocus onChange={(e) => edit({ name: e.target.value })} />
               </label>
-              {scheduleNeedsCwd && <p className="tpl-hint warn">A scheduled template needs a working directory, since nobody is there to pick one.</p>}
+              <label className="field">
+                <span>Session title</span>
+                <input className="search" value={t.titlePattern} placeholder="{name} · {date}" onChange={(e) => edit({ titlePattern: e.target.value })} />
+              </label>
             </div>
-          )}
+            <p className="tpl-hint">
+              <code>{"{name}"}</code> <code>{"{date}"}</code> <code>{"{time}"}</code> <code>{"{repo}"}</code> expand · sessions will be called <b>{preview}</b>
+            </p>
+          </section>
+
+          <section className="tpl-section">
+            <h3 className="set-h">Where it runs</h3>
+            <div className="folder-grid tpl-folders">
+              <button
+                className={`folder-card pick dashed ${t.research ? "active" : ""}`}
+                onClick={() => {
+                  edit({ research: true, cwd: "" });
+                  setCustom(false);
+                }}
+                title="No file or shell access — connectors and web search only"
+              >
+                <span className="folder-ic">
+                  <SearchIcon />
+                </span>
+                <span className="folder-name">Research</span>
+                <span className="folder-sub">no project</span>
+              </button>
+              {favourites.map((f) => (
+                <button
+                  key={f.path}
+                  className={`folder-card pick ${onFavourite && t.cwd === f.path ? "active" : ""}`}
+                  onClick={() => {
+                    edit({ research: false, cwd: f.path });
+                    setCustom(false);
+                  }}
+                  title={f.path}
+                >
+                  <span className="folder-ic">
+                    <FolderIcon />
+                  </span>
+                  <span className="folder-name">{f.label}</span>
+                  <span className="folder-sub">{shortPath(f.path, 2)}</span>
+                </button>
+              ))}
+              <button
+                className={`folder-card pick dashed ${custom ? "active" : ""}`}
+                onClick={() => {
+                  edit({ research: false });
+                  setCustom(true);
+                }}
+              >
+                <span className="folder-ic">
+                  <FolderIcon open />
+                </span>
+                <span className="folder-name">Other folder</span>
+                <span className="folder-sub">browse or type a path</span>
+              </button>
+              <button
+                className={`folder-card pick dashed ${!t.research && !custom && !t.cwd ? "active" : ""}`}
+                onClick={() => {
+                  edit({ research: false, cwd: "" });
+                  setCustom(false);
+                }}
+                title="The directory is chosen each time the template is run"
+              >
+                <span className="folder-ic">
+                  <PlayIcon />
+                </span>
+                <span className="folder-name">Ask when run</span>
+                <span className="folder-sub">cannot be scheduled</span>
+              </button>
+            </div>
+            {custom && (
+              <FolderField
+                value={t.cwd}
+                placeholder="~/src/my-app"
+                optional={false}
+                stacked
+                onChange={(cwd) => edit({ cwd })}
+                pickerTitle="Pick the working directory"
+                pickerHint="The checkout the session starts in."
+              />
+            )}
+          </section>
+
+          <section className="tpl-section">
+            <h3 className="set-h">How it runs</h3>
+            <div className="tpl-row">
+              <label className="field">
+                <span>Model</span>
+                <Select value={t.model} options={[{ value: "", label: "Dashboard default" }, ...models]} onChange={(v) => edit({ model: v })} />
+              </label>
+              <label className="field">
+                <span>Permission mode</span>
+                <Select
+                  value={t.permissionMode}
+                  options={MODES.map((m) => ({ value: m, label: MODE_LABEL[m], hint: MODE_HELP[m] }))}
+                  onChange={(v) => edit({ permissionMode: v as Template["permissionMode"] })}
+                />
+              </label>
+            </div>
+            <label className="field">
+              <span>First prompt</span>
+              <PromptBox className="search tpl-prompt-input" rows={5} value={t.prompt} placeholder="Sent as soon as the session is up. Type / for skills and commands." onChange={(prompt) => edit({ prompt })} />
+            </label>
+          </section>
+
+          <section className="tpl-section">
+            <div className="tpl-section-head">
+              <h3 className="set-h">Schedule</h3>
+              <label className="switch">
+                <input type="checkbox" checked={!!sched?.enabled} onChange={(e) => editSchedule({ enabled: e.target.checked })} />
+                <span>{sched?.enabled ? "On" : "Off"}</span>
+              </label>
+            </div>
+            {sched?.enabled ? (
+              <div className="tpl-schedule-edit">
+                <div className="scope" role="radiogroup">
+                  {(["weekly", "interval", "cron"] as const).map((k) => (
+                    <button key={k} role="radio" aria-checked={sched.kind === k} className={`scope-btn ${sched.kind === k ? "on" : ""}`} onClick={() => editSchedule({ kind: k })}>
+                      {k === "weekly" ? "Days and time" : k === "interval" ? "Every N hours" : "Cron"}
+                    </button>
+                  ))}
+                </div>
+                {sched.kind === "weekly" && (
+                  <div className="tpl-weekly">
+                    <div className="tpl-days">
+                      {DAY_NAMES.map((d, i) => (
+                        <button
+                          key={d}
+                          className={`tag-chip ${sched.days.includes(i) ? "on" : ""}`}
+                          aria-pressed={sched.days.includes(i)}
+                          onClick={() => editSchedule({ days: sched.days.includes(i) ? sched.days.filter((x) => x !== i) : [...sched.days, i] })}
+                        >
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                    <label className="field tpl-time">
+                      <span>At</span>
+                      <input className="search" type="time" value={sched.time} onChange={(e) => editSchedule({ time: e.target.value })} />
+                    </label>
+                  </div>
+                )}
+                {sched.kind === "interval" && (
+                  <label className="field tpl-time">
+                    <span>Every (hours)</span>
+                    <input className="search" type="number" min={1} max={168} value={sched.everyHours} onChange={(e) => editSchedule({ everyHours: Math.max(1, Number(e.target.value) || 1) })} />
+                  </label>
+                )}
+                {sched.kind === "cron" && (
+                  <label className="field">
+                    <span>Cron expression · minute hour day month weekday, local time</span>
+                    <input className={`search mono ${cronOk ? "" : "bad"}`} value={sched.cron} onChange={(e) => editSchedule({ cron: e.target.value })} />
+                    {!cronOk && <span className="tpl-hint warn">That does not parse. Example: 0 9 * * 1-5</span>}
+                  </label>
+                )}
+                <label className="check">
+                  <input type="checkbox" checked={sched.skipIfRunning} onChange={(e) => editSchedule({ skipIfRunning: e.target.checked })} />
+                  <span>Skip a fire while the previous run is still going</span>
+                </label>
+                {scheduleNeedsCwd && <p className="tpl-hint warn">A scheduled template needs a fixed folder, since nobody is there to pick one.</p>}
+              </div>
+            ) : (
+              <p className="tpl-hint">Off: run it from the card, the palette, or the new-session dialog.</p>
+            )}
+          </section>
         </div>
 
         <div className="svc-modal-foot">

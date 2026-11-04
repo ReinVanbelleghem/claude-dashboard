@@ -1142,6 +1142,8 @@ export const agentApi = {
     title?: string;
     templateId?: string;
   }) => post<{ key: string }>("/api/agents", opts),
+  /** Slash commands the last session reported, for prompts written before a session exists. */
+  commands: () => get<{ commands: SlashCommand[] }>("/api/commands"),
   message: (key: string, text: string, images: OutboundImage[] = []) =>
     post(`/api/agents/${key}/message`, { text, ...(images.length ? { images } : {}) }),
   /** `answers` is only meaningful for AskUserQuestion — see answerPermission. */

@@ -804,13 +804,13 @@ export default function App() {
 
       {/* Services and Artifacts draw their own header, with tools beside the title;
           Desktop is a blank canvas on purpose. Every other page gets the same one. */}
-      {!onFullPage && !["desktop", "services", "artifacts"].includes(tab) && (
+      {!onFullPage && !["desktop", "services", "artifacts", "templates"].includes(tab) && (
         <div className="page-head-row">
           <h1 className="page-title">{TAB_LABEL[tab]}</h1>
         </div>
       )}
 
-      {!onFullPage && usage && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "services" && (
+      {!onFullPage && usage && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "services" && tab !== "templates" && (
         <div className="kpis">
           {/* Tokens here are fresh tokens: cache reads are excluded and shown
               separately, since they are ~97% of raw volume at a tenth the rate. */}

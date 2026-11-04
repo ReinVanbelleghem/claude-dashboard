@@ -94,7 +94,7 @@ function commandRank(name: string, typed: string): number | null {
   return null;
 }
 
-function rankCommands<T extends { name: string }>(commands: T[], typed: string): T[] {
+export function rankCommands<T extends { name: string }>(commands: T[], typed: string): T[] {
   return commands
     .map((c) => ({ c, rank: commandRank(c.name, typed) }))
     .filter((x): x is { c: T; rank: number } => x.rank !== null)
