@@ -157,6 +157,29 @@ export default function App() {
     });
   }, []);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
+  /**
+   * A tile opened the moment a session starts is keyed by the agent key, because
+   * the CLI has not reported a session id yet. Everything else — the dock, the
+   * roster, history — keys by session id once there is one, so the same session
+   * would show twice. Re-key the tile as soon as the id lands; if a tile under the
+   * id already exists, the key-named one is the duplicate and goes.
+   */
+  useEffect(() => {
+    setTiles((prev) => {
+      let changed = false;
+      const next: TileState[] = [];
+      for (const t of prev) {
+        const a = agents.find((x) => x.key === t.id);
+        if (!a?.sessionId || a.sessionId === t.id) {
+          next.push(t);
+          continue;
+        }
+        changed = true;
+        if (!prev.some((x) => x.id === a.sessionId)) next.push({ ...t, id: a.sessionId });
+      }
+      return changed ? next : prev;
+    });
+  }, [agents]);
   const [restorable, setRestorable] = useState<Restorable[]>([]);
   const [projects, setProjects] = useState<Overview["projects"]>([]);
   const [showNew, setShowNew] = useState(false);
