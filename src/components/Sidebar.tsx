@@ -20,6 +20,7 @@ export function Sidebar({
   blocked,
   thinking,
   liveCount,
+  reviewsUnseen,
   connected,
   name,
   onHome,
@@ -34,6 +35,8 @@ export function Sidebar({
   blocked: number;
   thinking: number;
   liveCount: number;
+  /** Watched pull requests with changes not yet looked at. */
+  reviewsUnseen: number;
   connected: boolean;
   name: string;
   onHome: () => void;
@@ -72,6 +75,7 @@ export function Sidebar({
               </span>
               <span className="sidebar-item-label">{label}</span>
               {p.key === "live" && blocked > 0 && <span className="badge">{blocked}</span>}
+              {p.key === "reviews" && reviewsUnseen > 0 && <span className="badge soft">{reviewsUnseen}</span>}
             </button>
           );
         })}

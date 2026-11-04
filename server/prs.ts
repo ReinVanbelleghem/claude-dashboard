@@ -3,12 +3,13 @@ import {
   type PrFilter,
   type PrInlineComment,
   type PrOverview,
+  type PrRef,
   type PrReviewer,
   type PrSummary,
   type PrTimelineItem,
   type Person,
 } from "../shared/pr.ts";
-import { graphql, rest, viewerLogin, viewerTeams } from "./github.ts";
+import { GithubError, graphql, rest, viewerLogin, viewerTeams } from "./github.ts";
 import { listThreads } from "./prReview.ts";
 import { getSettings } from "./settings.ts";
 
@@ -31,7 +32,7 @@ const PEOPLE_CACHE_MS = 10 * 60_000;
 const TEMPLATE_CACHE_MS = 60 * 60_000;
 
 const PR_FIELDS = `
-  number title url isDraft headRefName baseRefName headRefOid baseRefOid
+  number title url isDraft state headRefName baseRefName headRefOid baseRefOid
   createdAt updatedAt additions deletions changedFiles reviewDecision
   author { login avatarUrl ... on User { name } }
   repository { name owner { login } }
@@ -49,6 +50,7 @@ type GqlPr = {
   title: string;
   url: string;
   isDraft: boolean;
+  state: PrSummary["state"];
   headRefName: string;
   baseRefName: string;
   headRefOid: string;
@@ -106,23 +108,39 @@ function toSummary(pr: GqlPr, login: string, teams: Set<string>): PrSummary {
     ciState,
     labels: pr.labels.nodes,
     reviewRequestedFromMe: requested,
+    state: pr.state,
   };
 }
 
 const searchCache = new Map<string, { at: number; value: GqlPr[] }>();
 const inflight = new Map<string, Promise<{ at: number; value: GqlPr[] }>>();
 
+/**
+ * GitHub gives a GraphQL query ten seconds and answers 502 past that. A hundred
+ * closed PRs with their review requests sometimes needs more, so a timeout is
+ * retried at half the size rather than shown as a dead page.
+ */
+async function searchPage(q: string, first: number): Promise<GqlPr[]> {
+  try {
+    const data = await graphql<{ search: { nodes: (GqlPr | Record<string, never>)[] } }>(
+      `query($q: String!, $first: Int!) { search(type: ISSUE, query: $q, first: $first) { nodes { ... on PullRequest { ${PR_FIELDS} } } } }`,
+      { q, first },
+    );
+    return data.search.nodes.filter((n): n is GqlPr => "number" in n);
+  } catch (e) {
+    if (first > 25 && e instanceof GithubError && (e.status === 502 || e.status === 504)) return searchPage(q, Math.floor(first / 2));
+    throw e;
+  }
+}
+
 async function search(q: string, refresh: boolean): Promise<{ at: number; value: GqlPr[] }> {
   const hit = searchCache.get(q);
   if (!refresh && hit && Date.now() - hit.at < SEARCH_CACHE_MS) return hit;
   let pending = inflight.get(q);
   if (!pending) {
-    pending = graphql<{ search: { nodes: (GqlPr | Record<string, never>)[] } }>(
-      `query($q: String!) { search(type: ISSUE, query: $q, first: 100) { nodes { ... on PullRequest { ${PR_FIELDS} } } } }`,
-      { q },
-    )
-      .then((data) => {
-        const entry = { at: Date.now(), value: data.search.nodes.filter((n): n is GqlPr => "number" in n) };
+    pending = searchPage(q, 100)
+      .then((nodes) => {
+        const entry = { at: Date.now(), value: nodes };
         searchCache.set(q, entry);
         return entry;
       })
@@ -136,21 +154,56 @@ export function trackedRepos(): string[] {
   return getSettings().reviews.repos.map((r) => r.trim()).filter(Boolean);
 }
 
+const STATE_TERM: Record<NonNullable<PrFilter["state"]>, string | null> = { open: "is:open", closed: "is:closed", merged: "is:merged", all: null };
+
+/**
+ * The free query wins over the switches: a qualifier it names (`is:`, `state:`,
+ * `draft:`, `review:`) is left out of the generated part, so `state:closed` does not
+ * end up beside an implied `is:open` and quietly match nothing.
+ */
 function searchStrings(filter: PrFilter, login: string): string[] {
   const repos = filter.repos?.length ? filter.repos : trackedRepos();
-  const base = ["is:pr", "is:open", ...repos.map((r) => `repo:${r}`)];
+  const query = filter.query?.trim() ?? "";
+  const names = (q: string) => new RegExp(`(^|\\s)-?(${q}):`, "i").test(query);
+  const base = ["is:pr", ...repos.map((r) => `repo:${r}`)];
+  const state = STATE_TERM[filter.state ?? "open"];
+  if (state && !names("is|state")) base.push(state);
   if (filter.reviewRequestedFromMe) base.push("review-requested:@me");
-  if (filter.hideApproved) base.push("-review:approved");
-  if (!filter.includeDrafts) base.push("draft:false");
-  if (filter.query?.trim()) base.push(filter.query.trim());
+  if (filter.hideApproved && !names("review")) base.push("-review:approved");
+  if (!filter.includeDrafts && !names("draft")) base.push("draft:false");
+  if (query) base.push(query);
   const authors = [...new Set((filter.authors ?? []).map((a) => (a === "@me" ? login : a)))];
   if (!authors.length) return [[...base, "sort:updated-desc"].join(" ")];
   return authors.map((a) => [...base, `author:${a}`, "sort:updated-desc"].join(" "));
 }
 
+/**
+ * The watched PRs as list rows, whatever their state. One request with an alias per
+ * PR rather than a search, since GitHub's search cannot name pull requests by number
+ * and a watched PR that is merged would not match the open-only views anyway.
+ */
+async function watchedPage(watched: PrRef[], refresh: boolean): Promise<{ at: number; value: GqlPr[] }> {
+  if (!watched.length) return { at: Date.now(), value: [] };
+  const key = `watched:${watched.map((w) => `${w.owner}/${w.repo}#${w.number}`).join(",")}`;
+  const hit = searchCache.get(key);
+  if (!refresh && hit && Date.now() - hit.at < SEARCH_CACHE_MS) return hit;
+  const parts = watched.map(
+    (w, i) =>
+      `p${i}: repository(owner: ${JSON.stringify(w.owner)}, name: ${JSON.stringify(w.repo)}) { pullRequest(number: ${w.number}) { ${PR_FIELDS} } }`,
+  );
+  const data = await graphql<Record<string, { pullRequest: GqlPr | null } | null>>(`{ ${parts.join("\n")} }`);
+  const entry = { at: Date.now(), value: Object.values(data).flatMap((r) => (r?.pullRequest ? [r.pullRequest] : [])) };
+  searchCache.set(key, entry);
+  return entry;
+}
+
 /** `fetchedAt` is the age of the oldest search behind the list, so the client can decide to refresh. */
 export async function listPrs(filter: PrFilter, refresh = false): Promise<{ prs: PrSummary[]; fetchedAt: number }> {
   const login = await viewerLogin();
+  if (filter.watched) {
+    const [teams, page] = await Promise.all([viewerTeams(), watchedPage(getSettings().reviews.watched, refresh)]);
+    return { prs: page.value.map((pr) => toSummary(pr, login, teams)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), fetchedAt: page.at };
+  }
   const [teams, results] = await Promise.all([
     viewerTeams(),
     Promise.all(searchStrings(filter, login).map((q) => search(q, refresh))),

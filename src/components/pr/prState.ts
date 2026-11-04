@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { agentBus, prApi, type Explanation, type PrRef, type PrRun } from "../../api.ts";
+import { agentBus, prApi, prKey, type Explanation, type PrRef, type PrRun, type PrWatch } from "../../api.ts";
 
 /**
  * Small hooks shared by the review pages. Live data arrives over the one SSE
@@ -36,6 +36,29 @@ export function usePrRuns(pr: PrRef | null): { runs: PrRun[]; reload: () => void
     };
   }, [key]);
   return { runs, reload };
+}
+
+/**
+ * The daemon's list of watched PRs. Fetched once, then kept current from the
+ * `pr-watch` pushes, so every tab and a reload agree on what is unseen.
+ */
+export function usePrWatches(): { watches: PrWatch[]; byKey: Map<string, PrWatch>; unseenCount: number } {
+  const [watches, setWatches] = useState<PrWatch[]>([]);
+  useEffect(() => {
+    prApi
+      .watches()
+      .then((r) => setWatches(r.watches))
+      .catch(() => {});
+    const off = agentBus.subscribe((e) => {
+      if (e.type === "pr-watch") setWatches(e.watches);
+    });
+    return () => {
+      off();
+    };
+  }, []);
+  const byKey = useMemo(() => new Map(watches.map((w) => [prKey(w), w])), [watches]);
+  const unseenCount = useMemo(() => watches.filter((w) => w.unseen.length > 0).length, [watches]);
+  return { watches, byKey, unseenCount };
 }
 
 export function useExplanations(pr: PrRef): { explanations: Explanation[]; reload: () => void } {

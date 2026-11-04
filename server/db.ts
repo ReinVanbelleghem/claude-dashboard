@@ -278,6 +278,25 @@ function migrate(db: Database) {
       finished_at      TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_pr_explanations_pr ON pr_explanations(owner, repo, number);
+
+    -- The last snapshot of a watched PR, so the next poll can say what changed.
+    CREATE TABLE IF NOT EXISTS pr_watch_state (
+      owner           TEXT NOT NULL,
+      repo            TEXT NOT NULL,
+      number          INTEGER NOT NULL,
+      head_sha        TEXT,
+      review_decision TEXT,
+      ci_state        TEXT,
+      mergeable       TEXT,
+      state           TEXT,
+      last_comment_id TEXT,
+      last_review_id  TEXT,
+      last_polled_at  TEXT,
+      last_seen_at    TEXT,
+      closed_at       TEXT,
+      snapshot        TEXT NOT NULL,
+      PRIMARY KEY (owner, repo, number)
+    );
   `);
 
   if (needsArtifactBackfill) {

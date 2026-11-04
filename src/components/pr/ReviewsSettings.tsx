@@ -5,10 +5,11 @@ import { TrashIcon, GripIcon } from "../Icons.tsx";
 import { useSortable } from "../../useSortable.ts";
 import { FolderField } from "../FolderPicker.tsx";
 import { Select } from "../Select.tsx";
+import { usePrWatches } from "./prState.ts";
 
 /**
  * Settings → Reviews: which repositories to search, the actions that start review
- * sessions, the explain model, and where PR checkouts live.
+ * sessions, the explain model, where PR checkouts live, and which PRs are watched.
  */
 const VARS = ["pr_url", "pr_number", "owner", "repo", "title", "head_ref", "base_ref", "head_sha", "base_sha", "author", "body"];
 /** The session composer's own list, so an action starts in any mode a session can run in. */
@@ -32,6 +33,7 @@ export function ReviewsSettings({ settings, save, models }: { settings: Settings
   const [selected, setSelected] = useState<string | null>(r.actions[0]?.id ?? null);
   const [draft, setDraft] = useState<ReviewAction | null>(null);
   const [tools, setTools] = useState("");
+  const { watches } = usePrWatches();
 
   useEffect(() => {
     prApi.status().then(setStatus).catch(() => setStatus({ ok: false, login: null }));
@@ -279,6 +281,76 @@ export function ReviewsSettings({ settings, save, models }: { settings: Settings
             <span className="set-help">Older checkouts no session is using are removed when a new one is made.</span>
           </label>
         </div>
+      </div>
+
+      <div className="panel">
+        <h2>Watching</h2>
+        <p className="hint">
+          The daemon polls each watched PR and tells you about new commits, reviews, comments, CI verdicts, conflicts, merges and closes. The switch
+          for the alert itself is under Notifications.
+        </p>
+        <div className="set-grid">
+          <label className="field">
+            <span>Poll every (minutes)</span>
+            <input
+              className="search"
+              type="number"
+              min={1}
+              max={60}
+              defaultValue={r.watchIntervalMinutes}
+              onBlur={(e) => {
+                const v = Math.max(1, Math.round(Number(e.target.value) || 0));
+                e.target.value = String(v);
+                if (v !== r.watchIntervalMinutes) save({ reviews: { watchIntervalMinutes: v } });
+              }}
+            />
+            <span className="set-help">One GitHub call per watched PR per poll. A minute is the floor.</span>
+          </label>
+          <label className="field">
+            <span>Unwatch merged or closed after (days)</span>
+            <input
+              className="search"
+              type="number"
+              min={0}
+              max={365}
+              defaultValue={r.watchUnwatchAfterDays}
+              onBlur={(e) => {
+                const v = Math.max(0, Math.round(Number(e.target.value) || 0));
+                e.target.value = String(v);
+                if (v !== r.watchUnwatchAfterDays) save({ reviews: { watchUnwatchAfterDays: v } });
+              }}
+            />
+            <span className="set-help">Keeps the list from filling with finished work. Zero keeps them until you unwatch.</span>
+          </label>
+        </div>
+        <h3 className="set-h">Watched pull requests</h3>
+        {watches.length === 0 ? (
+          <p className="set-help">None yet. Press the bell on a PR row or page, or w with a row selected.</p>
+        ) : (
+          <ul className="pr-watch-list">
+            {watches.map((w) => (
+              <li key={`${w.owner}/${w.repo}#${w.number}`} className="pr-watch-item">
+                <a className="pr-watch-ref" href={`#/pr/${w.owner}/${w.repo}/${w.number}`}>
+                  {w.repo}#{w.number}
+                </a>
+                <span className="pr-watch-title" title={w.title}>
+                  {w.title}
+                </span>
+                {w.state !== "OPEN" && <span className={`pr-badge ${w.state === "MERGED" ? "accent" : "bad"}`}>{w.state.toLowerCase()}</span>}
+                {w.unseen.length > 0 && <span className="pr-badge pending">{w.unseen.length} unseen</span>}
+                {w.error && (
+                  <span className="pr-badge bad" title={w.error}>
+                    poll failed
+                  </span>
+                )}
+                <span className="pr-watch-since">since {new Date(w.since).toLocaleDateString()}</span>
+                <button className="icon-btn tiny" onClick={() => void prApi.unwatch(w).catch(() => {})}>
+                  <TrashIcon /> Unwatch
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </>
   );

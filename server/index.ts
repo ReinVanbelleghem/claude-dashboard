@@ -117,6 +117,7 @@ import {
   slugToPath,
 } from "./paths.ts";
 import { handlePrRoute } from "./prRoutes.ts";
+import { initPrWatch } from "./prWatch.ts";
 import { initExplain, onAgentItem as explainOnItem, onRoster as explainOnRoster } from "./prExplain.ts";
 import { initReview } from "./prReview.ts";
 import { reviewRepoLabel } from "./prRepos.ts";
@@ -153,6 +154,7 @@ const NOTIFY_KINDS: NotifyEventKind[] = [
   "awaitingPermission",
   "turnComplete",
   "sessionError",
+  "prWatch",
 ];
 import { sessionReceipt, usageSummary } from "./usage.ts";
 
@@ -247,6 +249,7 @@ async function broadcastServices(force = false): Promise<void> {
 initReview(db);
 initRuns(db, broadcast);
 initExplain(db, broadcast);
+initPrWatch(db, broadcast);
 // Every roster change already flows through here, which makes it the natural
 // place to re-evaluate what deserves a notification — agents.ts stays unaware.
 setAgentEmitter((event, data) => {

@@ -332,6 +332,14 @@ SQLite index.
   commit answers with a summary and a few parts; drill into a part, ask a question, or
   select text inside an explanation to go one level deeper, each as another turn of the
   same session shown as a child node.
+- **Watch** — the bell on a row or PR header (or `w`) puts a PR on the daemon's poll
+  list. Every couple of minutes (Settings → Reviews) it fetches each watched PR once and
+  turns what moved — commits, reviews, comments, the review decision, a CI verdict, a
+  merge conflict, a merge or close — into unseen changes: chips on the row, a *Since you
+  last looked* strip on the PR page that clears on open, a count on the sidebar entry,
+  and one notification per PR per poll through the usual channels and quiet hours. The
+  list lives in `settings.json` and survives a reindex; merged and closed PRs drop off it
+  after a configurable number of days.
 
 Checkouts are made under `~/.claude-dashboard/pr` (configurable), one bare clone per
 repository and one worktree per reviewed commit, so your own clones are never touched.

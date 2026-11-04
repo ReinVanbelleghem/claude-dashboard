@@ -41,6 +41,7 @@ const MUTE_KIND_LABEL: Record<NotifyEventKind, string> = {
   awaitingPermission: "Permission needed",
   turnComplete: "Done",
   sessionError: "Error",
+  prWatch: "PR activity",
 };
 
 const EVENTS: { kind: NotifyEventKind; label: string; help: string }[] = [
@@ -63,6 +64,11 @@ const EVENTS: { kind: NotifyEventKind; label: string; help: string }[] = [
     kind: "sessionError",
     label: "Session error",
     help: "A session stopped unexpectedly or reported an error.",
+  },
+  {
+    kind: "prWatch",
+    label: "Watched pull request changed",
+    help: "A PR you watch on the Reviews page got a commit, review, comment, CI verdict, conflict, merge or close. One alert per PR per poll.",
   },
 ];
 

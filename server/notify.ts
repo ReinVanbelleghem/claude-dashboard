@@ -71,6 +71,7 @@ const KIND: Record<NotifyEventKind, { icon: string; headline: string; sound: str
   needsInput: { icon: "💬", headline: "Needs you", sound: "Ping", urgent: true },
   turnComplete: { icon: "✅", headline: "Done", sound: "Glass", urgent: false },
   sessionError: { icon: "⚠️", headline: "Error", sound: "Basso", urgent: false },
+  prWatch: { icon: "🔔", headline: "PR activity", sound: "Glass", urgent: false },
 };
 
 /**
@@ -120,18 +121,35 @@ export function reconcile(subjects: NotifySubject[]) {
   }
 }
 
-async function fire(entry: Tracked) {
+/** The switches every notification passes, whether it describes a state or an event. */
+function allowed(subject: NotifySubject): boolean {
   const s = getSettings();
   const n = s.notifications;
-  const { subject } = entry;
-
-  if (!n.enabled) return;
-  if (!n.events[subject.kind]) return;
-  if (inQuietHours(s, new Date())) return;
+  if (!n.enabled) return false;
+  if (!n.events[subject.kind]) return false;
+  if (inQuietHours(s, new Date())) return false;
   // Muted for this session specifically. Checked per kind, so a session can go quiet
   // about finishing its turns and still shout when it breaks — which is the whole
   // point for something running on a loop.
-  if (subject.muteIds.some((id) => n.mutes[id]?.kinds.includes(subject.kind))) return;
+  return !subject.muteIds.some((id) => n.mutes[id]?.kinds.includes(subject.kind));
+}
+
+/**
+ * Something that already happened, as opposed to a state that persists. The PR
+ * poller sees a diff once and will never see it again, so the delay-and-still-true
+ * check in `reconcile` would silence every one of them; the channel and quiet-hour
+ * switches still apply. `href` is where a click lands when it is not a session.
+ */
+export async function fireEvent(subject: NotifySubject, href: string) {
+  if (!allowed(subject)) return;
+  await send(subject, href, Date.now());
+}
+
+async function fire(entry: Tracked) {
+  const n = getSettings().notifications;
+  const { subject } = entry;
+
+  if (!allowed(subject)) return;
 
   // You are already looking at it, so an alert would only tell you what is on
   // your screen. Matches on the agent key too, since a fresh session has no id.
@@ -147,10 +165,14 @@ async function fire(entry: Tracked) {
   const now = Date.now();
   if (entry.firedAt && now - entry.firedAt < n.cooldownSeconds * 1000) return;
   entry.firedAt = now;
+  await send(subject, `#/session/${encodeURIComponent(subject.sessionId ?? subject.key)}`, now);
+}
 
+async function send(subject: NotifySubject, href: string, now: number) {
+  const n = getSettings().notifications;
   const kind = KIND[subject.kind];
   const title = `${kind.icon} ${kind.headline} · ${subject.label}`;
-  const url = deepLink(subject.sessionId ?? subject.key);
+  const url = deepLink(href);
   const payload = {
     kind: subject.kind,
     title,
@@ -160,6 +182,7 @@ async function fire(entry: Tracked) {
     sessionId: subject.sessionId,
     key: subject.key,
     url,
+    href,
     at: now,
   };
 
@@ -174,9 +197,9 @@ async function fire(entry: Tracked) {
   }
 }
 
-function deepLink(id: string): string {
+function deepLink(hash: string): string {
   const base = getSettings().notifications.dashboardUrl.replace(/\/$/, "");
-  return `${base}/#/session/${encodeURIComponent(id)}`;
+  return `${base}/${hash}`;
 }
 
 /** Resolved once — an every-notification `which` would be silly. */
@@ -262,7 +285,7 @@ async function googleChat(text: string) {
 export async function sendTestNotification() {
   const s = getSettings();
   const n = s.notifications;
-  const url = deepLink("test");
+  const url = deepLink("#/session/test");
   const payload = {
     kind: "needsInput" as NotifyEventKind,
     title: `${KIND.needsInput.icon} Test · Claude Sessions`,

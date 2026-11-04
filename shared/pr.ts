@@ -29,9 +29,47 @@ export type PrSummary = PrRef & {
   ciState: "SUCCESS" | "FAILURE" | "PENDING" | "ERROR" | null;
   labels: { name: string; color: string }[];
   reviewRequestedFromMe: boolean;
+  state: "OPEN" | "MERGED" | "CLOSED";
 };
 
+export type PrState = "open" | "closed" | "merged" | "all";
+
 export type PrDetail = PrSummary & { body: string };
+
+// ── watch ─────────────────────────────────────────────────────────────────────
+export type PrWatchChangeKind = "commit" | "review" | "comment" | "decision" | "ci" | "conflict" | "merged" | "closed";
+
+/** One thing that happened on a watched PR since it was last looked at. */
+export type PrWatchChange = {
+  kind: PrWatchChangeKind;
+  /** When the poll saw it, not when GitHub recorded it. */
+  at: string;
+  text: string;
+  url: string | null;
+  actor?: string;
+  state?: string;
+  /** Commits that landed in the same poll are one change with a count. */
+  count?: number;
+};
+
+export type PrWatchEntry = PrRef & { since: string };
+
+/** A watched PR as the daemon holds it: the last snapshot plus what piled up unseen. */
+export type PrWatch = PrRef & {
+  since: string;
+  title: string;
+  url: string;
+  state: "OPEN" | "MERGED" | "CLOSED";
+  headSha: string;
+  reviewDecision: PrSummary["reviewDecision"];
+  ciState: PrSummary["ciState"];
+  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  unseen: PrWatchChange[];
+  lastPolledAt: string | null;
+  lastSeenAt: string | null;
+  /** The last poll's failure, when it had one; cleared by the next success. */
+  error: string | null;
+};
 
 export type PrFilter = {
   /** Empty means the tracked repos from settings. */
@@ -40,7 +78,11 @@ export type PrFilter = {
   hideApproved?: boolean;
   authors?: string[];
   includeDrafts?: boolean;
+  /** Absent means open. */
+  state?: PrState;
   query?: string;
+  /** The daemon's watched list instead of a search; every other field is ignored. */
+  watched?: boolean;
 };
 
 export type SavedView = { id: string; name: string; filter: PrFilter };

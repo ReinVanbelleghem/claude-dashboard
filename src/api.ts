@@ -22,6 +22,8 @@ import type {
   PrRef,
   PrRun,
   PrSummary,
+  PrWatch,
+  PrWatchEntry,
   ReviewAction,
   ReviewPermissionMode,
   ReviewEvent,
@@ -346,7 +348,8 @@ export type NotifyEventKind =
   | "needsInput"
   | "awaitingPermission"
   | "turnComplete"
-  | "sessionError";
+  | "sessionError"
+  | "prWatch";
 
 /** What one session has been silenced about, and what to call it in Settings. */
 export type SessionMute = { kinds: NotifyEventKind[]; label: string };
@@ -418,6 +421,11 @@ export type Settings = {
     explainPermissionMode: ReviewPermissionMode;
     checkoutRoot: string;
     keepCheckouts: number;
+    /** PRs the daemon polls for changes. In settings so a reindex keeps them. */
+    watched: PrWatchEntry[];
+    watchIntervalMinutes: number;
+    /** Merged or closed PRs leave the list after this many days; 0 keeps them. */
+    watchUnwatchAfterDays: number;
   };
 };
 
@@ -449,6 +457,8 @@ export type NotifyPayload = {
   sessionId: string | null;
   key: string;
   url: string;
+  /** The in-app route a click should land on: a session, or a PR page. */
+  href?: string;
   at: number;
 };
 
@@ -964,6 +974,10 @@ export const prApi = {
   people: (q: string, repos: string[] = []) =>
     get<{ people: Person[] }>(`/api/pr/people?q=${encodeURIComponent(q)}${repos.length ? `&repos=${encodeURIComponent(repos.join(","))}` : ""}`),
   detail: (pr: PrRef) => get<{ pr: PrDetail }>(prPath(pr)),
+  watches: () => get<{ watches: PrWatch[] }>("/api/pr/watch"),
+  watch: (pr: PrRef) => post<{ watches: PrWatch[] }>(`${prPath(pr)}/watch`),
+  unwatch: (pr: PrRef) => post<{ watches: PrWatch[] }>(`${prPath(pr)}/unwatch`),
+  markSeen: (pr: PrRef) => post<{ watches: PrWatch[] }>(`${prPath(pr)}/seen`),
   template: (pr: PrRef) => get<{ body: string }>(`${prPath(pr)}/template`),
   files: (pr: PrRef) => get<FilesResponse>(`${prPath(pr)}/files`),
   file: (pr: PrRef, sha: string, path: string) =>
@@ -1178,7 +1192,9 @@ type AgentBusEvent =
   | { type: "agent-meter"; key: string; meter: AgentMeter }
   /** A review run's record changed — status, findings, replies — or it was deleted. */
   | { type: "pr-run"; run: PrRun | { id: string; deleted: true } }
-  | { type: "pr-explain"; explanation: Explanation | { ids: string[]; deleted: true } };
+  | { type: "pr-explain"; explanation: Explanation | { ids: string[]; deleted: true } }
+  /** The daemon's full list of watched PRs, after a poll or a watch/seen change. */
+  | { type: "pr-watch"; watches: PrWatch[] };
 
 const busSubscribers = new Set<(e: AgentBusEvent) => void>();
 
@@ -1209,8 +1225,20 @@ export function toolSummary(name: string, input: unknown): string {
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path);
-  if (!res.ok) throw new Error(`${path} → ${res.status}`);
+  if (!res.ok) throw new Error(await errorText(res, path));
   return res.json() as Promise<T>;
+}
+
+/** The daemon's own wording when it gave one, otherwise the path and the status. */
+async function errorText(res: Response, path: string): Promise<string> {
+  const text = await res.text().catch(() => "");
+  try {
+    const body = JSON.parse(text) as { error?: string };
+    if (body.error) return `${body.error} (${res.status})`;
+  } catch {
+    // Not JSON; fall through to the generic line.
+  }
+  return `${path} → ${res.status}`;
 }
 
 export const api = {

@@ -44,6 +44,7 @@ import {
 } from "./components/Icons.tsx";
 import { PrPage, routePr, type PrRoute } from "./components/pr/PrPage.tsx";
 import { ReviewsView } from "./components/pr/ReviewsView.tsx";
+import { usePrWatches } from "./components/pr/prState.ts";
 import { ServicesView } from "./components/services/ServicesView.tsx";
 import { TemplatesView } from "./components/TemplatesView.tsx";
 import type { ServicesState } from "../shared/services.ts";
@@ -193,6 +194,7 @@ export default function App() {
   const [showPalette, setShowPalette] = useState(false);
   const [showFind, setShowFind] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const prWatches = usePrWatches();
   // Read from the last settings payload, but kept local too so the toggle is
   // instant and survives the window before settings arrive.
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
@@ -366,7 +368,8 @@ export default function App() {
       } as NotificationOptions);
       note.onclick = () => {
         window.focus();
-        if (p.sessionId) window.location.hash = `#/session/${encodeURIComponent(p.sessionId)}`;
+        if (p.href) window.location.hash = p.href;
+        else if (p.sessionId) window.location.hash = `#/session/${encodeURIComponent(p.sessionId)}`;
         note.close();
       };
     });
@@ -405,6 +408,7 @@ export default function App() {
     es.addEventListener("pr-explain", (e) =>
       agentBus.publish({ type: "pr-explain", explanation: JSON.parse((e as MessageEvent).data) }),
     );
+    es.addEventListener("pr-watch", (e) => agentBus.publish({ type: "pr-watch", ...JSON.parse((e as MessageEvent).data) }));
     return () => es.close();
   }, [refreshRecent]);
 
@@ -721,6 +725,7 @@ export default function App() {
       blocked={blocked}
       thinking={thinking}
       liveCount={liveHere + liveExternal}
+      reviewsUnseen={prWatches.unseenCount}
       connected={connected}
       name={appName}
       onHome={() => {
@@ -816,6 +821,7 @@ export default function App() {
         <PrPage
           route={prRoute}
           agents={agents}
+          watches={prWatches.watches}
           settings={settings}
           onSettings={setSettings}
           onBack={() => {
@@ -897,6 +903,7 @@ export default function App() {
       {!onFullPage && tab === "reviews" && (
         <ReviewsView
           settings={settings}
+          watches={prWatches.watches}
           onSettings={setSettings}
           onOpenSettings={() => {
             localStorage.setItem("settings-section", "code");

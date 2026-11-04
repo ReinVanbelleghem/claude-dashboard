@@ -4,6 +4,7 @@ import * as explain from "./prExplain.ts";
 import * as review from "./prReview.ts";
 import * as runs from "./prRuns.ts";
 import { getPr, listPeople, listPrs, prOverview, prTemplate, trackedRepos } from "./prs.ts";
+import * as watch from "./prWatch.ts";
 
 /**
  * `/api/pr/...` — everything the review pages ask the daemon.
@@ -55,6 +56,8 @@ async function route(req: Request, url: URL, seg: string[]): Promise<Response> {
       }
     }
   }
+
+  if (seg[0] === "watch" && method === "GET") return json({ watches: watch.listWatches() });
 
   if (seg[0] === "reset" && method === "POST") {
     resetGithub();
@@ -138,6 +141,9 @@ async function route(req: Request, url: URL, seg: string[]): Promise<Response> {
   if (!action && method === "GET") return json({ pr: await getPr(pr.owner, pr.repo, pr.number) });
   if (action === "template" && method === "GET") return json({ body: await prTemplate(pr.owner, pr.repo) });
   if (action === "overview" && method === "GET") return json(await prOverview(pr.owner, pr.repo, pr.number));
+  if (action === "watch" && method === "POST") return json({ watches: watch.watch(pr) });
+  if (action === "unwatch" && method === "POST") return json({ watches: watch.unwatch(pr) });
+  if (action === "seen" && method === "POST") return json({ watches: watch.markSeen(pr) });
 
   if (action === "comment" && method === "POST") {
     const b = await body<{ body?: string }>(req);
