@@ -33,6 +33,41 @@ export type PrSummary = PrRef & {
 
 export type PrDetail = PrSummary & { body: string };
 
+// ── watch ─────────────────────────────────────────────────────────────────────
+export type PrWatchChangeKind = "commit" | "review" | "comment" | "decision" | "ci" | "conflict" | "merged" | "closed";
+
+/** One thing that happened on a watched PR since it was last looked at. */
+export type PrWatchChange = {
+  kind: PrWatchChangeKind;
+  /** When the poll saw it, not when GitHub recorded it. */
+  at: string;
+  text: string;
+  url: string | null;
+  actor?: string;
+  state?: string;
+  /** Commits that landed in the same poll are one change with a count. */
+  count?: number;
+};
+
+export type PrWatchEntry = PrRef & { since: string };
+
+/** A watched PR as the daemon holds it: the last snapshot plus what piled up unseen. */
+export type PrWatch = PrRef & {
+  since: string;
+  title: string;
+  url: string;
+  state: "OPEN" | "MERGED" | "CLOSED";
+  headSha: string;
+  reviewDecision: PrSummary["reviewDecision"];
+  ciState: PrSummary["ciState"];
+  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  unseen: PrWatchChange[];
+  lastPolledAt: string | null;
+  lastSeenAt: string | null;
+  /** The last poll's failure, when it had one; cleared by the next success. */
+  error: string | null;
+};
+
 export type PrFilter = {
   /** Empty means the tracked repos from settings. */
   repos: string[];

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./paths.ts";
 import { DEFAULT_PROVISION, type ProvisionRule } from "./provision.ts";
-import type { ReviewAction, ReviewPermissionMode, SavedView } from "../shared/pr.ts";
+import type { PrWatchEntry, ReviewAction, ReviewPermissionMode, SavedView } from "../shared/pr.ts";
 import {
   DEFAULT_COMPOSE,
   DEFAULT_SERVICE_PATHS,
@@ -23,7 +23,8 @@ export type NotifyEventKind =
   | "needsInput"
   | "awaitingPermission"
   | "turnComplete"
-  | "sessionError";
+  | "sessionError"
+  | "prWatch";
 
 /**
  * One session's silence, keyed by its transcript id — or by the agent key while it
@@ -215,6 +216,15 @@ export type Settings = {
     checkoutRoot: string;
     /** Checkouts kept around after a session ends; older ones are removed. */
     keepCheckouts: number;
+    /**
+     * Pull requests the poller follows. In settings rather than the database so a
+     * reindex keeps them and a second machine sharing the settings file sees them.
+     */
+    watched: PrWatchEntry[];
+    /** Minutes between polls of the watched list. Never below one. */
+    watchIntervalMinutes: number;
+    /** A merged or closed PR drops off the list this many days later. Zero keeps it. */
+    watchUnwatchAfterDays: number;
   };
   /**
    * Local dev services: what the Services page can start, where, and the compose
@@ -268,6 +278,7 @@ const DEFAULTS: Settings = {
       // an opt-in rather than something that surprises you on first run.
       turnComplete: false,
       sessionError: true,
+      prWatch: true,
     },
     channels: { native: true, browser: true, googleChat: false },
     googleChatWebhook: "",
@@ -308,6 +319,9 @@ const DEFAULTS: Settings = {
     explainPermissionMode: "default",
     checkoutRoot: "",
     keepCheckouts: 6,
+    watched: [],
+    watchIntervalMinutes: 2,
+    watchUnwatchAfterDays: 7,
   },
   services: { defs: [], paths: DEFAULT_SERVICE_PATHS, compose: DEFAULT_COMPOSE, importedAt: null },
   templates: [],
