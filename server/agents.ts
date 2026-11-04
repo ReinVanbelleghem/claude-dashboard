@@ -803,6 +803,22 @@ function applyTaskEvent(agent: Agent, msg: Record<string, any>) {
 }
 
 /**
+ * The plan windows are per account, not per session, so the freshest report from
+ * any session is the one the usage cards show. Null until a session has reported.
+ */
+export type PlanLimits = { fiveHour: Limit | null; sevenDay: Limit | null; reportedAt: number };
+let plan: PlanLimits | null = null;
+const planListeners = new Set<(p: PlanLimits) => void>();
+export const getPlanLimits = (): PlanLimits | null => plan;
+export const onPlanLimits = (fn: (p: PlanLimits) => void): void => void planListeners.add(fn);
+
+function notePlan(fiveHour: Limit | null, sevenDay: Limit | null) {
+  if (!fiveHour && !sevenDay) return;
+  plan = { fiveHour: fiveHour ?? plan?.fiveHour ?? null, sevenDay: sevenDay ?? plan?.sevenDay ?? null, reportedAt: Date.now() };
+  for (const fn of planListeners) fn(plan);
+}
+
+/**
  * Re-read context fill and plan usage after a turn. The usage call is marked
  * experimental in the SDK, so either half failing just leaves its last value.
  */
@@ -824,6 +840,7 @@ async function refreshMeter(agent: Agent) {
     const rl = usage.value.rate_limits;
     m.fiveHour = limit(rl?.five_hour) ?? m.fiveHour;
     m.sevenDay = limit(rl?.seven_day) ?? m.sevenDay;
+    notePlan(limit(rl?.five_hour), limit(rl?.seven_day));
   }
   emit("agent-meter", { key: agent.key, meter: m });
 }
@@ -950,6 +967,7 @@ async function consume(agent: Agent) {
             pct: info.utilization * 100,
             resetsAt: info.resetsAt ? info.resetsAt * 1000 : null,
           };
+          notePlan(slot === "fiveHour" ? agent.meter[slot] : null, slot === "sevenDay" ? agent.meter[slot] : null);
           emit("agent-meter", { key: agent.key, meter: agent.meter });
           break;
         }

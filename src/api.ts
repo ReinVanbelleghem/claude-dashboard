@@ -72,6 +72,11 @@ export type UsageWindow = { start: number; end: number; resetsInMs: number };
 
 export type UsagePayload = {
   now: number;
+  /**
+   * Claude's own plan windows, as `claude /usage` shows them, reported by a running
+   * session. Null until one has; the cards fall back to the local estimate.
+   */
+  plan?: { fiveHour: PlanLimit | null; sevenDay: PlanLimit | null; reportedAt: number } | null;
   budgets: {
     sessionTokens: number;
     weeklyTokens: number;

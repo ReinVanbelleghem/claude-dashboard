@@ -3,26 +3,26 @@ import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import {
+  agentsUnder,
   answerPermission,
   cachedModels,
   forgetAgent,
   forgetRestorable,
   getAgent,
+  getPlanLimits,
   IMAGE_FILE_RE,
   IMAGE_MEDIA_TYPES,
   IMAGES_DIR,
-  type ImageMediaType,
-  type InboundImage,
+  interruptAgent,
+  listAgents,
   listRestorable,
+  onPlanLimits,
+  ownedSessionIds,
   pruneImages,
   renameAgent,
   renamePastSession,
   restartAgent,
   restoreAgent,
-  interruptAgent,
-  listAgents,
-  agentsUnder,
-  ownedSessionIds,
   rosterPayload,
   sendMessage,
   setAgentEmitter,
@@ -31,6 +31,8 @@ import {
   startAgent,
   stopAgent,
   stopAllAgents,
+  type ImageMediaType,
+  type InboundImage,
 } from "./agents.ts";
 import {
   addComment,
@@ -537,12 +539,17 @@ setInterval(() => void broadcastServices(), 2_000);
 void sweepViewSessions();
 
 // Transcripts are append-heavy; poll rather than watch recursively so we get one
+/** The local estimate plus, when a session has reported them, Claude's own plan windows. */
+const usageWithPlan = () => ({ ...usageSummary(db, cfg, Date.now()), plan: getPlanLimits() });
+// A fresh plan report changes the cards even when no transcript line was written.
+onPlanLimits(() => broadcast("usage", usageWithPlan()));
+
 // coalesced pass instead of an event per line written.
 setInterval(async () => {
   try {
     if ((await indexOnce(db)) > 0) {
       broadcast("index", { at: Date.now() });
-      broadcast("usage", usageSummary(db, cfg, Date.now()));
+      broadcast("usage", usageWithPlan());
     }
     /**
      * Runs after the index pass rather than inside it: this one spawns git, and the
@@ -1673,7 +1680,7 @@ const server = Bun.serve<PtyData, never>({
       }
     }
     if (p === "/api/live") return json(livePayload());
-    if (p === "/api/usage") return json(usageSummary(db, cfg, Date.now()));
+    if (p === "/api/usage") return json(usageWithPlan());
     if (p === "/api/overview") return json(overview());
     if (p === "/api/config") return json({ budgets: cfg.budgets, pricing: cfg.pricing });
 
@@ -1728,7 +1735,7 @@ const server = Bun.serve<PtyData, never>({
           };
           clients.add(client);
           client.send("live", livePayload());
-          client.send("usage", usageSummary(db, cfg, Date.now()));
+          client.send("usage", usageWithPlan());
           client.send("agents", rosterPayload());
           client.send("settings", getSettings());
           if (lastServices) client.send("services", JSON.parse(lastServices));

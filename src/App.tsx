@@ -808,16 +808,26 @@ export default function App() {
         <div className="kpis">
           {/* Tokens here are fresh tokens: cache reads are excluded and shown
               separately, since they are ~97% of raw volume at a tenth the rate. */}
-          <Tile
-            label="Current session"
-            value={fmtTokens(usage.session.fresh)}
-            sub={fmtResets(usage.sessionWindow.resetsInMs)}
-            pct={usage.remaining.sessionPct}
-            note={[
-              `${Math.round(usage.remaining.sessionPct)}% used`,
-              fmtTokens(usage.budgets.sessionTokens),
-            ]}
-          />
+          {usage.plan?.fiveHour ? (
+            <Tile
+              label="Current session"
+              value={`${Math.round(usage.plan.fiveHour.pct)}%`}
+              sub={usage.plan.fiveHour.resetsAt ? fmtResets(usage.plan.fiveHour.resetsAt - usage.now) : "5-hour window"}
+              pct={usage.plan.fiveHour.pct}
+              note={[`${fmtTokens(usage.session.fresh)} fresh tokens here`, "from Claude"]}
+            />
+          ) : (
+            <Tile
+              label="Current session"
+              value={fmtTokens(usage.session.fresh)}
+              sub={fmtResets(usage.sessionWindow.resetsInMs)}
+              pct={usage.remaining.sessionPct}
+              note={[
+                `${Math.round(usage.remaining.sessionPct)}% used`,
+                fmtTokens(usage.budgets.sessionTokens),
+              ]}
+            />
+          )}
           <Tile
             label="Today"
             value={fmtUsd(usage.day.costUsd)}
@@ -828,16 +838,26 @@ export default function App() {
               fmtUsd(usage.budgets.dailyCostUsd),
             ]}
           />
-          <Tile
-            label="Weekly · all models"
-            value={fmtTokens(usage.week.fresh)}
-            sub={fmtResets(usage.weeklyWindow.resetsInMs)}
-            pct={usage.remaining.weeklyPct}
-            note={[
-              `${Math.round(usage.remaining.weeklyPct)}% used`,
-              `${fmtTokens(usage.budgets.weeklyTokens)}${usage.boostActive ? " boosted" : ""}`,
-            ]}
-          />
+          {usage.plan?.sevenDay ? (
+            <Tile
+              label="Weekly · all models"
+              value={`${Math.round(usage.plan.sevenDay.pct)}%`}
+              sub={usage.plan.sevenDay.resetsAt ? fmtResets(usage.plan.sevenDay.resetsAt - usage.now) : "7-day window"}
+              pct={usage.plan.sevenDay.pct}
+              note={[`${fmtTokens(usage.week.fresh)} fresh tokens here`, "from Claude"]}
+            />
+          ) : (
+            <Tile
+              label="Weekly · all models"
+              value={fmtTokens(usage.week.fresh)}
+              sub={fmtResets(usage.weeklyWindow.resetsInMs)}
+              pct={usage.remaining.weeklyPct}
+              note={[
+                `${Math.round(usage.remaining.weeklyPct)}% used`,
+                `${fmtTokens(usage.budgets.weeklyTokens)}${usage.boostActive ? " boosted" : ""}`,
+              ]}
+            />
+          )}
           <Tile
             label="All time"
             value={fmtTokens(usage.allTime.fresh)}
