@@ -81,6 +81,8 @@ export type PrFilter = {
   /** Absent means open. */
   state?: PrState;
   query?: string;
+  /** The daemon's watched list instead of a search; every other field is ignored. */
+  watched?: boolean;
 };
 
 export type SavedView = { id: string; name: string; filter: PrFilter };

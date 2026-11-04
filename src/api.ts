@@ -1225,8 +1225,20 @@ export function toolSummary(name: string, input: unknown): string {
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path);
-  if (!res.ok) throw new Error(`${path} → ${res.status}`);
+  if (!res.ok) throw new Error(await errorText(res, path));
   return res.json() as Promise<T>;
+}
+
+/** The daemon's own wording when it gave one, otherwise the path and the status. */
+async function errorText(res: Response, path: string): Promise<string> {
+  const text = await res.text().catch(() => "");
+  try {
+    const body = JSON.parse(text) as { error?: string };
+    if (body.error) return `${body.error} (${res.status})`;
+  } catch {
+    // Not JSON; fall through to the generic line.
+  }
+  return `${path} → ${res.status}`;
 }
 
 export const api = {

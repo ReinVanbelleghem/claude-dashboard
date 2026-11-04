@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { prApi, prKey, settingsApi, type Person, type PrFilter, type PrState, type PrSummary, type PrWatch, type SavedView, type Settings } from "../../api.ts";
-import { EyeOffIcon, RefreshIcon, TrashIcon, GripIcon, ChevronIcon, CheckIcon } from "../Icons.tsx";
+import { BellIcon, EyeOffIcon, RefreshIcon, TrashIcon, GripIcon, ChevronIcon, CheckIcon } from "../Icons.tsx";
 import { Select } from "../Select.tsx";
 import { useSortable } from "../../useSortable.ts";
 import { CiDot, DraftBadge, ReviewBadge, StateBadge } from "./PrBadges.tsx";
@@ -17,6 +17,8 @@ import { isTyping, prHash, relativeTime, useHiddenPrs } from "./prState.ts";
  * top so what moved is what you see first.
  */
 const EMPTY: PrFilter = { repos: [] };
+/** Built in rather than saved: it lists the daemon's watched PRs, so it has no filter to edit. */
+const WATCHED_VIEW: SavedView = { id: "watched", name: "Watched", filter: { repos: [], watched: true } };
 const same = (a: PrFilter, b: PrFilter) => JSON.stringify(a) === JSON.stringify(b);
 const VIEW_KEY = "reviews-view";
 /** A list older than this is shown at once and refreshed behind it. */
@@ -34,9 +36,11 @@ export function ReviewsView({
   onOpenSettings: () => void;
 }) {
   const watchByKey = useMemo(() => new Map(watches.map((w) => [prKey(w), w])), [watches]);
-  const views = settings?.reviews.views ?? [];
+  const savedViews = settings?.reviews.views ?? [];
+  const views = [...savedViews, WATCHED_VIEW];
   const [viewId, setViewId] = useState<string | null>(() => localStorage.getItem(VIEW_KEY));
   const active = views.find((v) => v.id === viewId) ?? views[0] ?? null;
+  const onWatched = active?.id === WATCHED_VIEW.id;
   useEffect(() => {
     if (active) localStorage.setItem(VIEW_KEY, active.id);
   }, [active?.id]);
@@ -44,7 +48,7 @@ export function ReviewsView({
   /** Edits to the active view's filter, before they are saved (or discarded by switching view). */
   const [draft, setDraft] = useState<{ viewId: string | null; filter: PrFilter }>({ viewId: null, filter: EMPTY });
   const filter = active && draft.viewId === active.id ? draft.filter : (active?.filter ?? EMPTY);
-  const dirty = !!active && !same(filter, active.filter);
+  const dirty = !!active && !onWatched && !same(filter, active.filter);
 
   const [allPrs, setPrs] = useState<PrSummary[]>([]);
   const { hidden, hide, unhide, clear: clearHidden } = useHiddenPrs(active?.id ?? null);
@@ -114,10 +118,15 @@ export function ReviewsView({
     const t = setInterval(() => load(true), 60_000);
     return () => clearInterval(t);
   }, [load]);
+  // A PR watched or unwatched from a row or page should appear or go at once.
+  const watchedKeys = watches.map(prKey).join(",");
+  useEffect(() => {
+    if (onWatched) load(true);
+  }, [watchedKeys]);
   // Warm the daemon's cache for the other views, so switching to one is instant.
   useEffect(() => {
     if (!active || loading) return;
-    for (const v of views) if (v.id !== active.id) prApi.list(v.filter).catch(() => {});
+    for (const v of savedViews) if (v.id !== active.id) prApi.list(v.filter).catch(() => {});
   }, [active?.id, loading]);
 
   const open = useCallback((pr: PrSummary) => {
@@ -169,20 +178,20 @@ export function ReviewsView({
 
   const saveViews = (next: SavedView[]) =>
     settingsApi
-      .save({ reviews: { views: next } })
+      .save({ reviews: { views: next.filter((v) => v.id !== WATCHED_VIEW.id) } })
       .then((r) => onSettings(r.settings))
       .catch(() => {});
 
   const saveView = () => {
     if (!active) return;
-    void saveViews(views.map((v) => (v.id === active.id ? { ...v, filter } : v)));
+    void saveViews(savedViews.map((v) => (v.id === active.id ? { ...v, filter } : v)));
     setDraft({ viewId: null, filter: EMPTY });
   };
   const saveAsNew = () => {
     const name = window.prompt("View name")?.trim();
     if (!name) return;
     const id = `view-${Date.now().toString(36)}`;
-    void saveViews([...views, { id, name, filter }]);
+    void saveViews([...savedViews, { id, name, filter }]);
     setDraft({ viewId: null, filter: EMPTY });
     setViewId(id);
   };
@@ -223,14 +232,15 @@ export function ReviewsView({
     );
   }
 
-  const noRepos = !filter.repos?.length && (status?.repos.length ?? 0) === 0 && !loading && prs.length === 0;
+  const noRepos = !onWatched && !filter.repos?.length && (status?.repos.length ?? 0) === 0 && !loading && prs.length === 0;
   /** Repositories the list came from, so the author picker knows people even with none configured. */
   const seenRepos = useMemo(() => [...new Set(prs.map((p) => `${p.owner}/${p.repo}`))], [prs]);
 
   return (
     <div className="pr-layout">
       <ViewSidebar
-        views={views}
+        views={savedViews}
+        watchedUnseen={watches.filter((w) => w.unseen.length > 0).length}
         activeId={active?.id ?? null}
         onSelect={(id) => {
           setViewId(id);
@@ -243,14 +253,20 @@ export function ReviewsView({
         login={status?.login ?? null}
       />
       <div className="pr-main">
-        <FilterBar
-          filter={filter}
-          repos={seenRepos}
-          onChange={(next) => setDraft({ viewId: active?.id ?? null, filter: next })}
-          dirty={dirty}
-          onSave={saveView}
-          onSaveAsNew={saveAsNew}
-        />
+        {onWatched ? (
+          <div className="pr-filters-note">
+            Everything you watch, in any state, unseen changes first. The bell on a row or page, or <kbd>w</kbd>, watches a PR.
+          </div>
+        ) : (
+          <FilterBar
+            filter={filter}
+            repos={seenRepos}
+            onChange={(next) => setDraft({ viewId: active?.id ?? null, filter: next })}
+            dirty={dirty}
+            onSave={saveView}
+            onSaveAsNew={saveAsNew}
+          />
+        )}
         <div className="pr-toolbar">
           <input
             type="checkbox"
@@ -350,7 +366,9 @@ export function ReviewsView({
           ))}
           {!loading && !error && prs.length === 0 && !noRepos && (
             <div className="empty">
-              {hiddenCount > 0 ? (
+              {onWatched && hiddenCount === 0 ? (
+                "You are not watching any pull request yet."
+              ) : hiddenCount > 0 ? (
                 <>
                   All {hiddenCount} matching pull request{hiddenCount === 1 ? " is" : "s are"} hidden.{" "}
                   <button className="link-btn inline" onClick={() => setShowHidden(true)}>
@@ -458,12 +476,15 @@ function PrRow({
 
 function ViewSidebar({
   views,
+  watchedUnseen,
   activeId,
   onSelect,
   onSave,
   login,
 }: {
   views: SavedView[];
+  /** Watched PRs with unseen changes, shown on the built-in Watched view. */
+  watchedUnseen: number;
   activeId: string | null;
   onSelect: (id: string) => void;
   onSave: (views: SavedView[]) => Promise<void>;
@@ -529,6 +550,15 @@ function ViewSidebar({
           </span>
         </div>
       ))}
+      <div className={`pr-view fixed ${activeId === WATCHED_VIEW.id ? "on" : ""}`}>
+        <span className="pr-view-icon">
+          <BellIcon />
+        </span>
+        <button className="pr-view-name" onClick={() => onSelect(WATCHED_VIEW.id)}>
+          {WATCHED_VIEW.name}
+        </button>
+        {watchedUnseen > 0 && <span className="badge soft">{watchedUnseen}</span>}
+      </div>
       {login && <div className="pr-side-foot">Signed in as {login}</div>}
     </aside>
   );
