@@ -31,7 +31,7 @@ const PEOPLE_CACHE_MS = 10 * 60_000;
 const TEMPLATE_CACHE_MS = 60 * 60_000;
 
 const PR_FIELDS = `
-  number title url isDraft headRefName baseRefName headRefOid baseRefOid
+  number title url isDraft state headRefName baseRefName headRefOid baseRefOid
   createdAt updatedAt additions deletions changedFiles reviewDecision
   author { login avatarUrl ... on User { name } }
   repository { name owner { login } }
@@ -49,6 +49,7 @@ type GqlPr = {
   title: string;
   url: string;
   isDraft: boolean;
+  state: PrSummary["state"];
   headRefName: string;
   baseRefName: string;
   headRefOid: string;
@@ -106,6 +107,7 @@ function toSummary(pr: GqlPr, login: string, teams: Set<string>): PrSummary {
     ciState,
     labels: pr.labels.nodes,
     reviewRequestedFromMe: requested,
+    state: pr.state,
   };
 }
 
@@ -136,13 +138,24 @@ export function trackedRepos(): string[] {
   return getSettings().reviews.repos.map((r) => r.trim()).filter(Boolean);
 }
 
+const STATE_TERM: Record<NonNullable<PrFilter["state"]>, string | null> = { open: "is:open", closed: "is:closed", merged: "is:merged", all: null };
+
+/**
+ * The free query wins over the switches: a qualifier it names (`is:`, `state:`,
+ * `draft:`, `review:`) is left out of the generated part, so `state:closed` does not
+ * end up beside an implied `is:open` and quietly match nothing.
+ */
 function searchStrings(filter: PrFilter, login: string): string[] {
   const repos = filter.repos?.length ? filter.repos : trackedRepos();
-  const base = ["is:pr", "is:open", ...repos.map((r) => `repo:${r}`)];
+  const query = filter.query?.trim() ?? "";
+  const names = (q: string) => new RegExp(`(^|\\s)-?(${q}):`, "i").test(query);
+  const base = ["is:pr", ...repos.map((r) => `repo:${r}`)];
+  const state = STATE_TERM[filter.state ?? "open"];
+  if (state && !names("is|state")) base.push(state);
   if (filter.reviewRequestedFromMe) base.push("review-requested:@me");
-  if (filter.hideApproved) base.push("-review:approved");
-  if (!filter.includeDrafts) base.push("draft:false");
-  if (filter.query?.trim()) base.push(filter.query.trim());
+  if (filter.hideApproved && !names("review")) base.push("-review:approved");
+  if (!filter.includeDrafts && !names("draft")) base.push("draft:false");
+  if (query) base.push(query);
   const authors = [...new Set((filter.authors ?? []).map((a) => (a === "@me" ? login : a)))];
   if (!authors.length) return [[...base, "sort:updated-desc"].join(" ")];
   return authors.map((a) => [...base, `author:${a}`, "sort:updated-desc"].join(" "));

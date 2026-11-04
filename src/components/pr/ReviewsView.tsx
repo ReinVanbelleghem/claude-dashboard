@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { prApi, prKey, settingsApi, type Person, type PrFilter, type PrSummary, type PrWatch, type SavedView, type Settings } from "../../api.ts";
+import { prApi, prKey, settingsApi, type Person, type PrFilter, type PrState, type PrSummary, type PrWatch, type SavedView, type Settings } from "../../api.ts";
 import { EyeOffIcon, RefreshIcon, TrashIcon, GripIcon, ChevronIcon, CheckIcon } from "../Icons.tsx";
 import { Select } from "../Select.tsx";
 import { useSortable } from "../../useSortable.ts";
-import { CiDot, DraftBadge, ReviewBadge } from "./PrBadges.tsx";
+import { CiDot, DraftBadge, ReviewBadge, StateBadge } from "./PrBadges.tsx";
 import { ActivityChips, WatchToggle } from "./PrWatchBits.tsx";
 import { isTyping, prHash, relativeTime, useHiddenPrs } from "./prState.ts";
 
@@ -406,6 +406,7 @@ function PrRow({
         {pr.title}
       </span>
       {pr.reviewRequestedFromMe && <span className="pr-badge pending">requested from you</span>}
+      <StateBadge state={pr.state} />
       <DraftBadge isDraft={pr.isDraft} />
       <span className="pr-row-labels">
         {pr.labels.slice(0, 3).map((l) => (
@@ -533,6 +534,13 @@ function ViewSidebar({
   );
 }
 
+const STATES: { value: PrState; label: string; hint: string }[] = [
+  { value: "open", label: "Open", hint: "Still being worked on" },
+  { value: "merged", label: "Merged", hint: "Landed on the base branch" },
+  { value: "closed", label: "Closed", hint: "Closed without merging" },
+  { value: "all", label: "Any state", hint: "Open, merged and closed" },
+];
+
 function FilterBar({
   filter,
   repos,
@@ -551,10 +559,33 @@ function FilterBar({
   const [query, setQuery] = useState(filter.query ?? "");
   useEffect(() => setQuery(filter.query ?? ""), [filter.query]);
   const commit = () => {
-    if (query !== (filter.query ?? "")) onChange({ ...filter, query });
+    if (query.trim() !== (filter.query ?? "").trim()) onChange({ ...filter, query: query.trim() });
   };
+  /**
+   * Applied as you type, after a pause, so the list answers the field rather than
+   * waiting for a blur nobody knows to do. Enter skips the pause.
+   */
+  const pending = query.trim() !== (filter.query ?? "").trim();
+  useEffect(() => {
+    if (!pending) return;
+    const t = setTimeout(commit, 500);
+    return () => clearTimeout(t);
+  }, [query]);
   return (
     <div className="pr-filters">
+      <Select
+        compact
+        value={filter.state ?? "open"}
+        onChange={(v) => onChange({ ...filter, state: v === "open" ? undefined : (v as PrState) })}
+        options={STATES}
+        ariaLabel="Pull request state"
+        renderTrigger={({ open }) => (
+          <span className={`icon-btn tiny ${filter.state && filter.state !== "open" ? "on" : ""} ${open ? "open" : ""}`}>
+            {STATES.find((o) => o.value === (filter.state ?? "open"))?.label}
+            <ChevronIcon />
+          </span>
+        )}
+      />
       <label className="check">
         <input type="checkbox" checked={!!filter.reviewRequestedFromMe} onChange={(e) => onChange({ ...filter, reviewRequestedFromMe: e.target.checked })} />
         <span>Review requested from me</span>
@@ -568,14 +599,18 @@ function FilterBar({
         <input type="checkbox" checked={!!filter.includeDrafts} onChange={(e) => onChange({ ...filter, includeDrafts: e.target.checked })} />
         <span>Drafts</span>
       </label>
-      <input
-        className="search pr-query"
-        value={query}
-        placeholder="GitHub query, e.g. label:bug -author:app/dependabot"
-        onChange={(e) => setQuery(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => e.key === "Enter" && commit()}
-      />
+      <span className={`pr-query-wrap ${pending ? "pending" : ""}`}>
+        <input
+          className="search pr-query"
+          value={query}
+          placeholder="GitHub query, e.g. label:bug -author:app/dependabot is:merged"
+          title="GitHub search qualifiers. is:, state:, draft: and review: here override the switches."
+          onChange={(e) => setQuery(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => e.key === "Enter" && commit()}
+        />
+        {pending && <span className="pr-query-hint">applying…</span>}
+      </span>
       {dirty && (
         <button className="icon-btn primary tiny" onClick={onSave}>
           Save view

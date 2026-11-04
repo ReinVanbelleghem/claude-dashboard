@@ -5243,6 +5243,10 @@ tr.click:focus-visible {
 .pr-filters { gap: 8px 12px; }
 .pr-filters > * { height: 30px; display: inline-flex; align-items: center; box-sizing: border-box; }
 .pr-filters .check { gap: 7px; font-size: 12px; }
+.pr-query-wrap { position: relative; flex: 1 1 260px; min-width: 200px; }
+.pr-query-wrap .pr-query { width: 100%; }
+.pr-query-hint { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--text-muted); pointer-events: none; }
+.pr-query-wrap.pending .pr-query { padding-right: 72px; }
 .pr-filters .check input, .pr-toolbar input[type="checkbox"] { width: 14px; height: 14px; margin: 0; }
 .pr-filters .search, .pr-query { flex: 1; min-width: 220px; margin: 0; padding: 0 10px; font-size: 12px; line-height: 28px; }
 .pr-filters .icon-btn.tiny { padding: 0 10px; }

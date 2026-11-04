@@ -29,7 +29,10 @@ export type PrSummary = PrRef & {
   ciState: "SUCCESS" | "FAILURE" | "PENDING" | "ERROR" | null;
   labels: { name: string; color: string }[];
   reviewRequestedFromMe: boolean;
+  state: "OPEN" | "MERGED" | "CLOSED";
 };
+
+export type PrState = "open" | "closed" | "merged" | "all";
 
 export type PrDetail = PrSummary & { body: string };
 
@@ -75,6 +78,8 @@ export type PrFilter = {
   hideApproved?: boolean;
   authors?: string[];
   includeDrafts?: boolean;
+  /** Absent means open. */
+  state?: PrState;
   query?: string;
 };
 

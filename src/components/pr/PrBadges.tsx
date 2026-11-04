@@ -30,6 +30,12 @@ export function ReviewBadge({ decision }: { decision: PrSummary["reviewDecision"
   return <span className={`pr-badge ${d.cls}`}>{d.label}</span>;
 }
 
+/** Only the states a list of open PRs would not already imply. */
+export function StateBadge({ state }: { state: PrSummary["state"] }) {
+  if (state === "OPEN") return null;
+  return <span className={`pr-badge ${state === "MERGED" ? "accent" : "bad"}`}>{state === "MERGED" ? "Merged" : "Closed"}</span>;
+}
+
 export function DraftBadge({ isDraft }: { isDraft: boolean }) {
   return isDraft ? <span className="pr-badge pending">Draft</span> : null;
 }

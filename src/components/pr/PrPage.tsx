@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { prApi, prKey, type AgentSummary, type PrDetail, type PrRef, type PrWatch, type PrWatchChange, type Settings } from "../../api.ts";
 import { RefreshIcon } from "../Icons.tsx";
-import { CiDot, ContextLinks, DraftBadge, ReviewBadge } from "./PrBadges.tsx";
+import { CiDot, ContextLinks, DraftBadge, ReviewBadge, StateBadge } from "./PrBadges.tsx";
 import { PrCommitsTab } from "./PrCommitsTab.tsx";
 import { PrFilesTab } from "./PrFilesTab.tsx";
 import { PrOverviewTab } from "./PrOverviewTab.tsx";
@@ -151,6 +151,7 @@ export function PrPage({
             <h1 title={detail?.title}>{detail?.title ?? `${pr.repo}#${pr.number}`}</h1>
             <span className="pr-head-number">#{pr.number}</span>
             {detail && <ContextLinks body={detail.body} template={template} />}
+            {detail && <StateBadge state={detail.state} />}
             {detail && <DraftBadge isDraft={detail.isDraft} />}
             {detail && <ReviewBadge decision={detail.reviewDecision} />}
             {detail && <CiDot state={detail.ciState} withLabel />}
