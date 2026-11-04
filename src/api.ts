@@ -6,6 +6,7 @@ import type {
   ServicesState,
   StartResult,
 } from "../shared/services.ts";
+import type { Template, TemplateRun } from "../shared/templates.ts";
 import type { Appearance } from "./appearance.ts";
 import type {
   DraftComment,
@@ -270,6 +271,8 @@ export type AgentSummary = {
   lastError: string | null;
   /** Messages typed mid-turn that have not been picked up yet. */
   queued: number;
+  /** The template this session was started from, if any. */
+  templateId?: string | null;
 };
 
 /**
@@ -349,6 +352,8 @@ export type NotifyEventKind =
 export type SessionMute = { kinds: NotifyEventKind[]; label: string };
 
 export type Settings = {
+  /** Session recipes, each optionally on a schedule. */
+  templates: Template[];
   /** Local dev services the Services page can start. */
   services: { defs: Service[]; paths: ServicePaths; compose: ComposeSettings; importedAt: string | null };
   notifications: {
@@ -418,6 +423,8 @@ export type Settings = {
 
 /** A patch is merged server-side, so callers send only what changed. */
 export type SettingsPatch = {
+  /** Replaced wholesale — the editor always sends the full list. */
+  templates?: Template[];
   /** Replaced wholesale — the editor always sends the full list. Compose merges. */
   services?: Partial<Omit<Settings["services"], "compose">> & { compose?: Partial<ComposeSettings> };
   notifications?: Partial<
@@ -1133,6 +1140,7 @@ export const agentApi = {
     resume?: string;
     prompt?: string;
     title?: string;
+    templateId?: string;
   }) => post<{ key: string }>("/api/agents", opts),
   message: (key: string, text: string, images: OutboundImage[] = []) =>
     post(`/api/agents/${key}/message`, { text, ...(images.length ? { images } : {}) }),
@@ -1319,3 +1327,11 @@ export function containerPtyUrl(service: string, mode: "logs" | "shell", cols: n
   const params = new URLSearchParams({ container: service, mode, cols: String(cols), rows: String(rows) });
   return `${scheme}://${location.host}/pty?${params}`;
 }
+
+// ── templates ─────────────────────────────────────────────────────────────────
+export type { Template, TemplateRun, Schedule } from "../shared/templates.ts";
+
+export const templateApi = {
+  runs: () => get<{ runs: TemplateRun[]; next: Record<string, number | null> }>("/api/templates/runs"),
+  run: (id: string, cwd?: string) => post<{ key: string }>(`/api/templates/${encodeURIComponent(id)}/run`, cwd ? { cwd } : {}),
+};

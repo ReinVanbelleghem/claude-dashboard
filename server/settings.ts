@@ -11,6 +11,7 @@ import {
   type Service,
   type ServicePaths,
 } from "../shared/services.ts";
+import type { Template } from "../shared/templates.ts";
 import { importLegacyServices, legacyConfigPath } from "./servicesImport.ts";
 
 /**
@@ -219,6 +220,8 @@ export type Settings = {
    * Local dev services: what the Services page can start, where, and the compose
    * project shown under it. Optionally imported once from a services file.
    */
+  /** Session recipes, each optionally on a schedule. Replaced wholesale on save. */
+  templates: Template[];
   services: {
     defs: Service[];
     paths: ServicePaths;
@@ -307,6 +310,7 @@ const DEFAULTS: Settings = {
     keepCheckouts: 6,
   },
   services: { defs: [], paths: DEFAULT_SERVICE_PATHS, compose: DEFAULT_COMPOSE, importedAt: null },
+  templates: [],
 };
 
 const SETTINGS_PATH = join(DATA_DIR, "settings.json");
@@ -339,6 +343,7 @@ function merge(base: Settings, patch: DeepPartial<Settings>): Settings {
     reviews: { ...base.reviews, ...(r as Partial<Settings["reviews"]>) },
     // Service definitions are replaced wholesale: the editor always sends the full
     // list, and a merged half-list would resurrect services the user just deleted.
+    templates: Array.isArray(patch.templates) ? (patch.templates as Template[]) : base.templates,
     services: {
       ...base.services,
       ...((patch.services ?? {}) as Partial<Settings["services"]>),

@@ -328,6 +328,19 @@ function migrate(db: Database) {
   ensureColumn(db, "artifacts", "pinned", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "artifacts", "hidden", "INTEGER NOT NULL DEFAULT 0");
 
+  /** One row per session a template started, by hand or on its schedule. */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS template_runs (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      template_id TEXT NOT NULL,
+      agent_key   TEXT NOT NULL,
+      session_id  TEXT,
+      started_at  INTEGER NOT NULL,
+      trigger     TEXT NOT NULL DEFAULT 'manual'
+    );
+    CREATE INDEX IF NOT EXISTS idx_template_runs_template ON template_runs(template_id, started_at DESC);
+  `);
+
   // Added with dashboard-set titles: marks a title the user chose, so a later
   // auto-generated one cannot quietly replace it.
   ensureColumn(db, "sessions", "title_custom", "INTEGER NOT NULL DEFAULT 0");

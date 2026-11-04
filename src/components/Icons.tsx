@@ -581,3 +581,14 @@ export function ExternalIcon() {
     </I>
   );
 }
+
+export function TemplateIcon() {
+  return (
+    <I>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M9 21V9" />
+      <path d="M14 14h3M14 17h3" />
+    </I>
+  );
+}

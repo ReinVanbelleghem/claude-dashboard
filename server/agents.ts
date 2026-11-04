@@ -157,6 +157,7 @@ type Agent = {
   suggestion: string | null;
   /** Context fill and plan limits, as the terminal's status line reports them. */
   meter: Meter;
+  templateId: string | null;
   stderr: string[];
   /**
    * A title that has not reached the transcript yet. A session renamed before its
@@ -307,6 +308,7 @@ export function agentSummary(a: Agent) {
     sessionId: a.sessionId,
     cwd: a.cwd,
     research: a.research,
+    templateId: a.templateId,
     title: a.title,
     model: a.model,
     permissionMode: a.permissionMode,
@@ -589,6 +591,8 @@ export type StartOptions = {
    * session's verdict arrives as data rather than prose to parse.
    */
   outputSchema?: Record<string, unknown>;
+  /** The template this session was started from, if any. */
+  templateId?: string;
 };
 
 /**
@@ -654,6 +658,7 @@ export function startAgent(opts: StartOptions): string {
     commands: null,
     suggestion: null,
     meter: { context: null, fiveHour: null, sevenDay: null },
+    templateId: opts.templateId ?? null,
     stderr: [],
     pendingTitle: null,
     push: queue.push,

@@ -135,6 +135,7 @@ import {
 } from "./services.ts";
 import { closePty, openPty, sweepViewSessions, writePty, type PtyData } from "./servicesPty.ts";
 import { composeDir, containerAction, containerArgv } from "./containers.ts";
+import { listRuns, nextFires, runTemplate, startScheduler } from "./templates.ts";
 import { MAX_DROP_BYTES, pruneDropped, storeDropped } from "./dropped.ts";
 import { needsInput, readRegistry } from "./registry.ts";
 import {
@@ -544,6 +545,13 @@ const usageWithPlan = () => ({ ...usageSummary(db, cfg, Date.now()), plan: getPl
 // A fresh plan report changes the cards even when no transcript line was written.
 onPlanLimits(() => broadcast("usage", usageWithPlan()));
 
+// Scheduled templates: a one-minute tick, with the page told about every run.
+startScheduler(db, (t, r) => {
+  if (r.ok) console.log(`template "${t.name}" started on schedule (${r.key})`);
+  else console.log(`template "${t.name}" skipped: ${r.error}`);
+  broadcast("template-runs", { runs: listRuns(db), next: nextFires(db) });
+});
+
 // coalesced pass instead of an event per line written.
 setInterval(async () => {
   try {
@@ -937,6 +945,7 @@ const server = Bun.serve<PtyData, never>({
             resume?: string;
             prompt?: string;
             title?: string;
+            templateId?: string;
           }
         | null;
       // A research session is the one case with nothing to point at: it gets the
@@ -953,8 +962,24 @@ const server = Bun.serve<PtyData, never>({
         resume: body?.resume || undefined,
         prompt: body?.prompt || undefined,
         title: body?.title || undefined,
+        templateId: body?.templateId || undefined,
       });
       return json({ key, agent: getAgent(key) });
+    }
+
+    // ── templates ─────────────────────────────────────────────────────────
+    if (p === "/api/templates/runs" && req.method === "GET") {
+      return json({ runs: listRuns(db), next: nextFires(db) });
+    }
+    if (p.startsWith("/api/templates/") && p.endsWith("/run") && req.method === "POST") {
+      const id = decodeURIComponent(p.slice("/api/templates/".length, -"/run".length));
+      const t = getSettings().templates.find((x) => x.id === id);
+      if (!t) return json({ error: "unknown template" }, 404);
+      const body = (await req.json().catch(() => ({}))) as { cwd?: string };
+      const r = runTemplate(db, t, "manual", body.cwd);
+      if (!r.ok) return json({ error: r.error }, 400);
+      broadcast("template-runs", { runs: listRuns(db), next: nextFires(db) });
+      return json({ key: r.key });
     }
 
     // ── services ──────────────────────────────────────────────────────────

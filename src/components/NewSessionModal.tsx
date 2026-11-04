@@ -12,6 +12,7 @@ import {
   type Worktree,
 } from "../api.ts";
 import { MODES, MODE_HELP, MODE_LABEL, STARTER_MODELS } from "./Conversation.tsx";
+import { renderTitle } from "../../shared/templates.ts";
 import { BranchPicker, type BranchChoice } from "./BranchPicker.tsx";
 import { FoldersModal } from "./FoldersModal.tsx";
 import { FolderIcon, GitIcon, PlusIcon, SearchIcon, WorktreeIcon } from "./Icons.tsx";
@@ -84,6 +85,9 @@ export function NewSessionModal({
    * it gives the model a codebase to answer from that nobody asked about.
    */
   const [research, setResearch] = useState(false);
+  /** A template chosen at the top: its prompt rides along on start. */
+  const [fromTemplate, setFromTemplate] = useState<string | null>(null);
+  const templatePrompt = () => settings?.templates.find((t) => t.id === fromTemplate)?.prompt.trim() || undefined;
   /**
    * Which checkout of the chosen repository to run in: "here" for the directory as
    * picked, "new" for a fresh worktree, or the path of one that already exists. A
@@ -213,6 +217,8 @@ export function NewSessionModal({
           model: model === "default" ? undefined : model,
           permissionMode: mode,
           title: title.trim() || undefined,
+          prompt: templatePrompt(),
+          templateId: fromTemplate ?? undefined,
         });
         onStarted(key);
         return;
@@ -240,6 +246,8 @@ export function NewSessionModal({
       }
       const { key } = await agentApi.start({
         cwd: dir,
+        prompt: templatePrompt(),
+        templateId: fromTemplate ?? undefined,
         model: model === "default" ? undefined : model,
         permissionMode: mode,
         title: title.trim() || undefined,
@@ -291,6 +299,33 @@ export function NewSessionModal({
             </p>
           </div>
         </div>
+
+        {(settings?.templates?.length ?? 0) > 0 && (
+          <div className="field">
+            <span className="field-head">Start from a template</span>
+            <Select
+              value={fromTemplate ?? ""}
+              placeholder="Blank session"
+              options={[
+                { value: "", label: "Blank session" },
+                ...(settings?.templates ?? []).map((t) => ({ value: t.id, label: t.name || "Untitled", hint: t.prompt.split("\n")[0] })),
+              ]}
+              onChange={(id) => {
+                setFromTemplate(id || null);
+                const t = settings?.templates.find((x) => x.id === id);
+                if (!t) return;
+                setResearch(t.research);
+                if (t.cwd) {
+                  setCwd(t.cwd);
+                  setCustom(true);
+                }
+                if (t.model) setModel(t.model);
+                setMode(t.permissionMode);
+                setTitle(renderTitle(t.titlePattern, { name: t.name, cwd: t.cwd, now: new Date() }));
+              }}
+            />
+          </div>
+        )}
 
         <div className="field">
           <span className="field-head">

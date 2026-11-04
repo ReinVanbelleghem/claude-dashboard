@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { visiblePages, type Tab } from "../pages.ts";
-import { api, fmtAgo, shortPath, type AgentSummary, type Overview, type SessionRow } from "../api.ts";
+import {
+  api,
+  fmtAgo,
+  shortPath,
+  type AgentSummary,
+  type Overview,
+  type SessionRow,
+  type Template,
+} from "../api.ts";
 import { ACCENTS, type Appearance } from "../appearance.ts";
 
 /**
@@ -14,7 +22,7 @@ import { ACCENTS, type Appearance } from "../appearance.ts";
  * lands. Typing never waits on the network.
  */
 
-type Group = "Commands" | "Live" | "Sessions" | "Projects";
+type Group = "Commands" | "Templates" | "Live" | "Sessions" | "Projects";
 
 
 export type PaletteItem = {
@@ -87,6 +95,8 @@ export function Palette({
   onNewSession,
   onNewIn,
   onManageFolders,
+  templates = [],
+  onRunTemplate,
   onFind,
   onAppearance,
 }: {
@@ -97,6 +107,8 @@ export function Palette({
   /** Dock pages turned off in settings, so the palette cannot jump to one. */
   hiddenPages: string[] | undefined;
   pageOrder?: string[];
+  templates?: Template[];
+  onRunTemplate?: (id: string) => void;
   onClose: () => void;
   onOpenSession: (id: string, opts?: { full?: boolean }) => void;
   onTab: (tab: Tab) => void;
@@ -188,6 +200,17 @@ export function Palette({
     });
     // A page turned off in settings is not reachable from here either — otherwise
     // the palette is a back door into a view the dock says you do not want.
+    for (const t of templates) {
+      add({
+        id: `cmd:tpl:${t.id}`,
+        group: "Templates",
+        icon: "▶",
+        label: `Run ${t.name || "template"}`,
+        hint: t.research ? "research" : t.cwd ? shortPath(t.cwd, 2) : "asks where",
+        boost: 10,
+        run: () => onRunTemplate?.(t.id),
+      });
+    }
     for (const { key: t, hint } of visiblePages(hiddenPages, pageOrder)) {
       if (t === "desktop") continue;
       add({

@@ -16,6 +16,7 @@ import {
   type Settings,
   settingsApi,
   type UsagePayload,
+  templateApi,
 } from "./api.ts";
 import {
   applyAppearance,
@@ -37,12 +38,14 @@ import {
   PulseIcon,
   SearchIcon,
   SunMoonIcon,
+  TemplateIcon,
   TerminalIcon,
   WorktreeIcon,
 } from "./components/Icons.tsx";
 import { PrPage, routePr, type PrRoute } from "./components/pr/PrPage.tsx";
 import { ReviewsView } from "./components/pr/ReviewsView.tsx";
 import { ServicesView } from "./components/services/ServicesView.tsx";
+import { TemplatesView } from "./components/TemplatesView.tsx";
 import type { ServicesState } from "../shared/services.ts";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { AnswerNext } from "./components/AnswerNext.tsx";
@@ -88,6 +91,7 @@ const TAB_ICON: Record<Exclude<Tab, "desktop">, () => JSX.Element> = {
   artifacts: ArtifactIcon,
   worktrees: WorktreeIcon,
   services: TerminalIcon,
+  templates: TemplateIcon,
   reviews: PullRequestIcon,
   usage: ChartIcon,
   settings: GearIcon,
@@ -113,6 +117,7 @@ export default function App() {
   const [artifactTick, setArtifactTick] = useState(0);
   /** Pushed by the daemon whenever the tmux picture changes; null until the first. */
   const [services, setServices] = useState<ServicesState | null>(null);
+  const [templateRunsKey, setTemplateRunsKey] = useState(0);
   useEffect(() => {
     if (tab !== "services" || services) return;
     servicesApi.state().then(setServices).catch(() => {});
@@ -345,6 +350,7 @@ export default function App() {
     es.addEventListener("index", () => refreshRecent());
     es.addEventListener("artifacts", () => setArtifactTick((n) => n + 1));
     es.addEventListener("services", (e) => setServices(JSON.parse((e as MessageEvent).data)));
+    es.addEventListener("template-runs", () => setTemplateRunsKey((k) => k + 1));
 
     /**
      * Something wrote to a repository, possibly in another tab or another worktree of it.
@@ -906,6 +912,15 @@ export default function App() {
           }}
         />
       )}
+      {!onFullPage && tab === "templates" && (
+        <TemplatesView
+          settings={settings}
+          onSettings={setSettings}
+          agents={agents}
+          runsKey={templateRunsKey}
+          onOpenSession={(key) => openSession(key)}
+        />
+      )}
       {!onFullPage && tab === "services" && (
         <ServicesView
           state={services}
@@ -979,6 +994,16 @@ export default function App() {
             setShowNew(true);
           }}
           onManageFolders={() => setShowFolders(true)}
+          templates={settings?.templates ?? []}
+          onRunTemplate={(id) => {
+            const t = settings?.templates.find((x) => x.id === id);
+            if (!t) return;
+            if (!t.research && !t.cwd) {
+              setTab("templates");
+              return;
+            }
+            void templateApi.run(id).then((r) => openSession(r.key)).catch(() => setTab("templates"));
+          }}
           onFind={() => {
             setShowFind(true);
             requestAnimationFrame(() =>
