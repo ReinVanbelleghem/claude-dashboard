@@ -37,9 +37,9 @@ export function ReviewsView({
 }) {
   const watchByKey = useMemo(() => new Map(watches.map((w) => [prKey(w), w])), [watches]);
   const savedViews = settings?.reviews.views ?? [];
-  const views = [...savedViews, WATCHED_VIEW];
+  const views = [WATCHED_VIEW, ...savedViews];
   const [viewId, setViewId] = useState<string | null>(() => localStorage.getItem(VIEW_KEY));
-  const active = views.find((v) => v.id === viewId) ?? views[0] ?? null;
+  const active = views.find((v) => v.id === viewId) ?? savedViews[0] ?? WATCHED_VIEW;
   const onWatched = active?.id === WATCHED_VIEW.id;
   useEffect(() => {
     if (active) localStorage.setItem(VIEW_KEY, active.id);
@@ -505,6 +505,15 @@ function ViewSidebar({
   });
   return (
     <aside className="pr-side" ref={listRef}>
+      <div className={`pr-view-fixed ${activeId === WATCHED_VIEW.id ? "on" : ""}`}>
+        <span className="pr-view-icon">
+          <BellIcon />
+        </span>
+        <button className="pr-view-name" onClick={() => onSelect(WATCHED_VIEW.id)}>
+          {WATCHED_VIEW.name}
+        </button>
+        {watchedUnseen > 0 && <span className="badge soft">{watchedUnseen}</span>}
+      </div>
       <div className="pr-side-label">Views</div>
       {views.map((v, i) => (
         <div
@@ -550,15 +559,6 @@ function ViewSidebar({
           </span>
         </div>
       ))}
-      <div className={`pr-view fixed ${activeId === WATCHED_VIEW.id ? "on" : ""}`}>
-        <span className="pr-view-icon">
-          <BellIcon />
-        </span>
-        <button className="pr-view-name" onClick={() => onSelect(WATCHED_VIEW.id)}>
-          {WATCHED_VIEW.name}
-        </button>
-        {watchedUnseen > 0 && <span className="badge soft">{watchedUnseen}</span>}
-      </div>
       {login && <div className="pr-side-foot">Signed in as {login}</div>}
     </aside>
   );
