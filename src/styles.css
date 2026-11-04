@@ -2176,7 +2176,9 @@ a { color: var(--accent); }
 .dd-check { display: flex; margin-left: auto; color: var(--accent); flex: none; }
 .dd-check .icon { width: 15px; height: 15px; }
 .dd-menu {
-  z-index: 45;
+  /* Above every modal and sheet: a menu is open for one click and must never
+     sit behind the dialog that opened it. */
+  z-index: 200;
   min-width: 160px;
   overflow-y: auto;
   padding: 6px;
@@ -5973,7 +5975,7 @@ a.pr-side-check-name:hover { color: var(--accent); }
 
 /* Row overflow menu: fixed so the scrollable table wrapper cannot clip it. */
 .svc-menu {
-  position: fixed; z-index: 80; min-width: 190px; padding: 4px;
+  position: fixed; z-index: 200; min-width: 190px; padding: 4px;
   background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
 }
