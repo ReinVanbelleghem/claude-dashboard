@@ -1,6 +1,6 @@
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useMemo, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { Availability, CalendarPerson } from "../../api.ts";
-import { XIcon } from "../Icons.tsx";
+import { BuildingIcon, XIcon } from "../Icons.tsx";
 
 const MAX_SUGGESTIONS = 6;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -18,6 +18,7 @@ export function PeoplePicker({
   onChange,
   availability,
   placeholder,
+  colors = {},
   allowAnyEmail = false,
   rankByAvailability = false,
 }: {
@@ -26,6 +27,8 @@ export function PeoplePicker({
   onChange: (emails: string[]) => void;
   availability: Record<string, Availability>;
   placeholder: string;
+  /** The colour each person or room has in the sidebar, by address; their chip takes it. */
+  colors?: Record<string, string>;
   /** Let a typed address be added even when nobody by that address is known. */
   allowAnyEmail?: boolean;
   /** Put free choices first, for rooms where any free one will do. */
@@ -84,10 +87,18 @@ export function PeoplePicker({
       <div className="cal-people-box search">
         {selected.map((email) => {
           const state = availability[email] ?? "unknown";
+          const person = byEmail.get(email.toLowerCase());
+          const tint = colors[email.toLowerCase()];
           return (
-            <span className={`cal-person ${state}`} key={email} title={`${email}${AVAILABILITY_LABEL[state] ? ` · ${AVAILABILITY_LABEL[state]}` : ""}`}>
-              <i />
-              {byEmail.get(email.toLowerCase())?.name ?? email}
+            <span
+              className={`cal-person ${state}`}
+              key={email}
+              title={AVAILABILITY_LABEL[state] ? `${AVAILABILITY_LABEL[state]} at this time` : undefined}
+              style={tint ? ({ "--ev": tint } as CSSProperties) : undefined}
+            >
+              {person?.room ? <BuildingIcon /> : <i />}
+              {person?.name ?? email}
+              {state === "busy" && <em>busy</em>}
               <button type="button" aria-label={`Remove ${email}`} onClick={() => onChange(selected.filter((e) => e !== email))}><XIcon /></button>
             </span>
           );
@@ -118,8 +129,9 @@ export function PeoplePicker({
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => add(p.email)}
               >
+                {p.room && <BuildingIcon />}
                 <span>{p.name}</span>
-                {p.name !== p.email && <small>{p.email}</small>}
+                {!p.room && p.name !== p.email && <small>{p.email}</small>}
                 {AVAILABILITY_LABEL[state] && <em className={state}>{AVAILABILITY_LABEL[state]}</em>}
               </button>
             );

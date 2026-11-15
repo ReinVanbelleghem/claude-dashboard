@@ -7042,9 +7042,10 @@ a.task-chip.task-link:focus-visible { outline: 2px solid var(--accent); outline-
   display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 4px 2px 8px; border-radius: 999px;
   background: var(--surface-2); font-size: 12.5px; white-space: nowrap;
 }
-.cal-person i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); opacity: 0.5; }
-.cal-person.free i { background: var(--good); opacity: 1; }
-.cal-person.busy i { background: var(--critical); opacity: 1; }
+.cal-person i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ev, var(--text-muted)); }
+.cal-person > .icon { flex: none; width: 13px; height: 13px; color: var(--ev, var(--text-muted)); }
+.cal-person.busy { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--critical) 55%, transparent); }
+.cal-person em { font-style: normal; font-size: 11px; color: var(--critical); }
 .cal-person button { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--text-muted); cursor: pointer; }
 .cal-person button:hover { background: var(--surface-1); color: var(--text-primary); }
 .cal-person button .icon { width: 10px; height: 10px; }
@@ -7054,7 +7055,8 @@ a.task-chip.task-link:focus-visible { outline: 2px solid var(--accent); outline-
   background: none; color: var(--text-primary); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
 }
 .cal-people-list button.on, .cal-people-list button:hover { background: var(--surface-2); }
-.cal-people-list span { flex: none; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-people-list button > .icon { flex: none; align-self: center; width: 14px; height: 14px; color: var(--text-muted); }
+.cal-people-list span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cal-people-list small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-muted); }
 .cal-people-list em { flex: none; margin-left: auto; font-style: normal; font-size: 11.5px; }
 .cal-people-list em.free { color: var(--good); }

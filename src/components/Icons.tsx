@@ -527,6 +527,16 @@ export function RepeatIcon() {
   );
 }
 
+export function BuildingIcon() {
+  return (
+    <I>
+      <path d="M5 21V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v16" />
+      <path d="M16 9h2a2 2 0 0 1 2 2v10M3 21h18" />
+      <path d="M9 7.5h3M9 11.5h3M9 15.5h3" />
+    </I>
+  );
+}
+
 export function UsersIcon() {
   return (
     <I>

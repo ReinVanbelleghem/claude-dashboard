@@ -86,6 +86,7 @@ export function EventModal({
   people,
   googleAccounts,
   comparing,
+  colors,
   onClose,
   onEdit,
   onCreate,
@@ -100,6 +101,8 @@ export function EventModal({
   googleAccounts: string[];
   /** The people and rooms whose calendars are on show, invited from the start on a new event. */
   comparing: string[];
+  /** Sidebar colours of other people's and rooms' calendars, by lower-cased address. */
+  colors: Record<string, string>;
   onCreateTask: (draft: TaskDraft) => Promise<void>;
   onClose: () => void;
   onEdit: (event: CalendarEvent) => void;
@@ -114,7 +117,7 @@ export function EventModal({
       {target.mode === "view" ? (
         <EventDetails event={target.event} onClose={onClose} onEdit={() => onEdit(target.event)} onDelete={onDelete} />
       ) : (
-        <EventForm target={target} calendars={calendars} projects={projects} people={people} googleAccounts={googleAccounts} comparing={comparing} onClose={onClose} onCreate={onCreate} onCreateTask={onCreateTask} onUpdate={onUpdate} />
+        <EventForm target={target} calendars={calendars} projects={projects} people={people} googleAccounts={googleAccounts} comparing={comparing} colors={colors} onClose={onClose} onCreate={onCreate} onCreateTask={onCreateTask} onUpdate={onUpdate} />
       )}
     </>
   );
@@ -268,6 +271,7 @@ function EventForm({
   people,
   googleAccounts,
   comparing,
+  colors,
   onClose,
   onCreate,
   onCreateTask,
@@ -279,6 +283,7 @@ function EventForm({
   people: CalendarPerson[];
   googleAccounts: string[];
   comparing: string[];
+  colors: Record<string, string>;
   onCreateTask: (draft: TaskDraft) => Promise<void>;
   onClose: () => void;
   onCreate: (draft: EventDraft) => Promise<void>;
@@ -463,7 +468,7 @@ function EventForm({
             <section className="cal-invite">
               <div className="field">
                 <span>Guests</span>
-                <PeoplePicker people={persons} selected={guests} onChange={setGuests} availability={availability} placeholder="Name or email" allowAnyEmail />
+                <PeoplePicker people={persons} selected={guests} onChange={setGuests} availability={availability} colors={colors} placeholder="Name or email" allowAnyEmail />
               </div>
               <div className="cal-field-head">
                 <span>Room</span>
@@ -475,7 +480,7 @@ function EventForm({
                 )}
               </div>
               <div className="field">
-                <PeoplePicker people={roomChoices} selected={rooms} onChange={setRooms} availability={availability} placeholder="Pick a room, free ones first" rankByAvailability />
+                <PeoplePicker people={roomChoices} selected={rooms} onChange={setRooms} availability={availability} colors={colors} placeholder="Pick a room, free ones first" rankByAvailability />
               </div>
               {googleAccounts.length > 1 && (
                 <div className="field">

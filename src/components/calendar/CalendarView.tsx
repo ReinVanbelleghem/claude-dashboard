@@ -142,6 +142,7 @@ export function CalendarView({
   const pinned = settings?.ui.calendarOthers ?? [];
   const compared = useMemo(() => [...passing, ...pinned.filter((o) => o.shown)], [passing, pinned]);
   const comparedKey = compared.map((o) => o.email).join(",");
+  const otherColors = useMemo(() => Object.fromEntries([...pinned, ...passing].map((o) => [o.email.toLowerCase(), o.color])), [pinned, passing]);
   const shownEvents = useMemo(() => {
     const arrived = (p: CalendarEvent) => events.some((e) => e.title === p.title && e.start === p.start);
     const others = compared.flatMap((o) => (otherEvents[o.email] ?? []).map((e) => ({ ...e, calendar: o.name, color: o.color })));
@@ -529,6 +530,7 @@ export function CalendarView({
           people={people}
           googleAccounts={google.accounts}
           comparing={compared.map((o) => o.email)}
+          colors={otherColors}
           onCreateTask={createTask}
           onClose={() => setTarget(null)}
           onEdit={(event) => setTarget({ mode: "edit", event })}
