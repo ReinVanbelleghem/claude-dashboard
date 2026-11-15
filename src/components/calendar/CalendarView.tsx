@@ -36,6 +36,7 @@ import { MINUTE_MS, atMinutes, dayStart, minutesOfDay, rangeTitle, shiftAnchor, 
 const REFRESH_MS = 2 * MINUTE_MS;
 
 const ANCHOR_KEY = "calendar.anchor";
+const PRELOAD_GAP_MS = 250;
 const SIDEBAR_KEY = "calendar.sidebar";
 const OTHER_COLORS = ["#e0556a", "#e0a030", "#2bb3c0", "#b06cf0", "#d9773a", "#5b8def", "#8a9a5b", "#c85fa8"];
 
@@ -127,6 +128,10 @@ export function CalendarView({
   const [passing, setPassing] = useState<OtherCalendar[]>([]);
   const [otherEvents, setOtherEvents] = useState<Record<string, CalendarEvent[]>>({});
   const [otherProblems, setOtherProblems] = useState<Record<string, string>>({});
+  const ownCache = useRef(new Map<string, CalendarEvent[]>());
+  const shownRange = useRef("");
+  const otherCache = useRef(new Map<string, CalendarEvent[]>());
+  const loadedOthers = useRef(new Map<string, string>());
   const [sidebar, setSidebar] = useState(storedSidebar);
   const [error, setError] = useState<string | null>(null);
   const [today, setToday] = useState(() => localDay(new Date()));
@@ -155,6 +160,7 @@ export function CalendarView({
   const pinned = settings?.ui.calendarOthers ?? [];
   const compared = useMemo(() => [...passing, ...pinned.filter((o) => o.shown)], [passing, pinned]);
   const comparedKey = compared.map((o) => o.email).join(",");
+  const preloadKey = [...passing, ...pinned].map((o) => o.email).join(",");
   const otherColors = useMemo(() => Object.fromEntries([...pinned, ...passing].map((o) => [o.email.toLowerCase(), o.color])), [pinned, passing]);
   const shownEvents = useMemo(() => {
     const nameOf = (email: string) => people.find((p) => p.email.toLowerCase() === email.toLowerCase());
@@ -185,8 +191,24 @@ export function CalendarView({
       .then((r) => onSettings(r.settings))
       .catch((e: Error) => setError(e.message));
 
+  const neighbours = useMemo(
+    () =>
+      ([-1, 1] as const).map((step) => {
+        const span = visibleDays(view, shiftAnchor(view, anchor, step), weekStart);
+        return { from: dayStart(span[0]), to: dayStart(addDays(span[span.length - 1], 1)) };
+      }),
+    [view, anchor, weekStart],
+  );
+  const neighbourKey = neighbours.map((n) => `${n.from}:${n.to}`).join("|");
+
   const load = useCallback(async () => {
     const request = ++latest.current;
+    const range = `${from}:${to}`;
+    if (shownRange.current !== range) {
+      shownRange.current = range;
+      const remembered = ownCache.current.get(range);
+      if (remembered) setEvents(remembered);
+    }
     try {
       const next = await calendarApi.status();
       if (request !== latest.current) return;
@@ -198,6 +220,7 @@ export function CalendarView({
         .catch(() => {});
       if (!next.enabled) return setEvents([]);
       const payload = await calendarApi.events(from, to);
+      ownCache.current.set(`${from}:${to}`, payload.events);
       if (request !== latest.current) return;
       setEvents(payload.events);
       setError(payload.errors?.[0] ?? null);
@@ -254,13 +277,24 @@ export function CalendarView({
   }, [status?.enabled]);
 
   useEffect(() => {
-    if (comparedKey === "" || google.accounts.length === 0) return;
     let stale = false;
-    for (const email of comparedKey.split(",")) {
+    const version = `${from}:${to}:${changed}:${refreshed}`;
+    const wanted = (email: string) => email !== "" && loadedOthers.current.get(email) !== version;
+    const remembered = Object.fromEntries(
+      preloadKey
+        .split(",")
+        .map((email) => [email, otherCache.current.get(`${email}|${from}:${to}`)] as const)
+        .filter((entry): entry is [string, CalendarEvent[]] => entry[1] !== undefined),
+    );
+    if (Object.keys(remembered).length > 0) setOtherEvents((all) => ({ ...all, ...remembered }));
+
+    const fetchOther = (email: string) =>
       calendarApi
         .otherCalendar(email, from, to)
         .then((r) => {
+          otherCache.current.set(`${email}|${from}:${to}`, r.events);
           if (stale) return;
+          loadedOthers.current.set(email, version);
           setOtherEvents((all) => ({ ...all, [email]: r.events }));
           setOtherProblems(({ [email]: _gone, ...rest }) => (r.limited ? { ...rest, [email]: "Only free and busy times are shared with you." } : rest));
         })
@@ -269,11 +303,40 @@ export function CalendarView({
           setOtherEvents((all) => ({ ...all, [email]: [] }));
           setOtherProblems((all) => ({ ...all, [email]: e.message }));
         });
-    }
+
+    const canCompare = google.accounts.length > 0;
+    const preloadRest = async () => {
+      await Promise.all((canCompare ? comparedKey.split(",") : []).filter(wanted).map(fetchOther));
+      for (const email of (canCompare ? preloadKey.split(",") : []).filter(wanted)) {
+        if (stale) return;
+        await new Promise((resolve) => window.setTimeout(resolve, PRELOAD_GAP_MS));
+        if (stale) return;
+        await fetchOther(email);
+      }
+      for (const range of neighbourKey.split("|")) {
+        const [nextFrom, nextTo] = range.split(":").map(Number);
+        if (stale) return;
+        await new Promise((resolve) => window.setTimeout(resolve, PRELOAD_GAP_MS));
+        if (stale) return;
+        await calendarApi
+          .events(nextFrom, nextTo)
+          .then((payload) => ownCache.current.set(range, payload.events))
+          .catch(() => {});
+        for (const email of (canCompare ? comparedKey.split(",") : []).filter(Boolean)) {
+          if (stale) return;
+          await calendarApi
+            .otherCalendar(email, nextFrom, nextTo)
+            .then((r) => otherCache.current.set(`${email}|${range}`, r.events))
+            .catch(() => {});
+        }
+      }
+    };
+    void preloadRest();
+
     return () => {
       stale = true;
     };
-  }, [comparedKey, from, to, changed, refreshed, google.accounts.length]);
+  }, [comparedKey, preloadKey, neighbourKey, from, to, changed, refreshed, google.accounts.length]);
 
   const toggleSidebar = () =>
     setSidebar((open) => {
@@ -415,6 +478,7 @@ export function CalendarView({
     );
   }
 
+  const needsReconnect = google.needsReconnect ?? [];
   const heading = rangeTitle(view, days, anchor, today, weekStart);
 
   const grid = {
@@ -556,10 +620,10 @@ export function CalendarView({
 
       {error && <p className="cal-error">{error}</p>}
 
-      {google.needsReconnect.length > 0 && (
+      {needsReconnect.length > 0 && (
         <div className="cal-drafts cal-reconnect">
           <span>
-            <b>Sign in to Google once more</b> to show {google.needsReconnect.join(", ")}'s calendars straight from Google: changes then appear at once, with no wait for the Mac to sync.
+            <b>Sign in to Google once more</b> to show {needsReconnect.join(", ")}'s calendars straight from Google: changes then appear at once, with no wait for the Mac to sync.
           </span>
           <button className="icon-btn tiny primary" onClick={() => window.open("/api/google/connect", "_blank", "noopener")}>Sign in again</button>
         </div>
