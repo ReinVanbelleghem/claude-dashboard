@@ -20,6 +20,9 @@ function root(): string {
   return configured || join(DATA_DIR, "pr");
 }
 
+/** Where review clones, checkouts and scratch folders live: a session in here is a review, not project work. */
+export const reviewRoot = root;
+
 const reposDir = () => join(root(), "repos");
 const treesDir = () => join(root(), "worktrees");
 
@@ -75,11 +78,19 @@ export function ensureRepo(owner: string, repo: string): Promise<string> {
   });
 }
 
+/**
+ * Which of these commits the clone does not have yet.
+ *
+ * `--no-lazy-fetch` is what keeps this a question rather than a download: the clone
+ * is a partial one, so asking about an absent object makes git fetch it on the spot,
+ * without negotiating what it already has. For one new commit in a large repository
+ * that is the whole history again, minutes of it, before the real fetch is even tried.
+ */
 async function missing(dir: string, shas: string[]): Promise<string[]> {
   const out: string[] = [];
   for (const sha of shas) {
     try {
-      await git(dir, "cat-file", "-e", `${sha}^{commit}`);
+      await git(dir, "--no-lazy-fetch", "cat-file", "-e", `${sha}^{commit}`);
     } catch {
       out.push(sha);
     }

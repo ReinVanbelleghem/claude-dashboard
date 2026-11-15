@@ -5,7 +5,7 @@
  * turns them off — a page hidden in settings has to disappear from all three, and
  * three separate lists drifted apart the moment one gained a page.
  */
-export type Tab = "desktop" | "live" | "history" | "artifacts" | "worktrees" | "services" | "templates" | "reviews" | "usage" | "settings";
+export type Tab = "desktop" | "live" | "tasks" | "history" | "artifacts" | "worktrees" | "services" | "templates" | "reviews" | "usage" | "settings";
 
 export type PageDef = {
   key: Tab;
@@ -23,6 +23,7 @@ export type PageDef = {
 export const PAGES: PageDef[] = [
   { key: "desktop", label: "", hint: "a blank canvas for arranging tiles" },
   { key: "live", label: "Live", hint: "your sessions", fixed: true },
+  { key: "tasks", label: "Tasks", hint: "your to-dos, with dates and projects" },
   { key: "history", label: "History", hint: "past sessions" },
   { key: "artifacts", label: "Artifacts", hint: "generated pages" },
   { key: "worktrees", label: "Worktrees", hint: "checkouts" },
@@ -48,3 +49,8 @@ export const orderedPages = (order: string[] | undefined): PageDef[] => {
 
 export const visiblePages = (hidden: string[] | undefined, order?: string[]): PageDef[] =>
   orderedPages(order).filter((p) => isPageVisible(p.key, hidden));
+
+/** Where Settings sits until someone says otherwise: an icon at the foot of the sidebar. */
+export const DEFAULT_FOOTER_PAGES: string[] = ["settings"];
+
+export const footerPagesOf = (footer: string[] | undefined): Set<string> => new Set(footer ?? DEFAULT_FOOTER_PAGES);

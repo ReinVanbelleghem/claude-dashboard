@@ -131,7 +131,6 @@ export function ArtifactsView({
       <div className="artifacts">
         <div className="artifacts-head">
           <div>
-            <h1>Artifacts</h1>
           </div>
         </div>
         <div className="git-msg bad">
@@ -148,7 +147,6 @@ export function ArtifactsView({
     <div className="artifacts">
       <div className="artifacts-head">
         <div>
-          <h1>Artifacts</h1>
           <p className="hint">
             Indexed from <code>{root || "the artifact folder"}</code>
           </p>

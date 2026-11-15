@@ -15,12 +15,15 @@ export function Popover({
   onClose,
   className = "",
   role = "menu",
+  align = "end",
   children,
 }: {
   anchor: HTMLElement;
   onClose: () => void;
   className?: string;
   role?: string;
+  /** Which edge of the anchor the panel lines up with: its right edge (a menu button at a row's end) or its left. */
+  align?: "start" | "end";
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -44,7 +47,7 @@ export function Popover({
       const m = el.getBoundingClientRect();
       const w = m.width || 190;
       const h = m.height || 120;
-      const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+      const left = Math.max(8, Math.min(align === "start" ? r.left : r.right - w, window.innerWidth - w - 8));
       const top = r.bottom + 6 + h > window.innerHeight - 8 ? Math.max(8, r.top - 6 - h) : r.bottom + 6;
       setPos((prev) => (prev && prev.top === top && prev.left === left ? prev : { top, left }));
     };
@@ -58,7 +61,7 @@ export function Popover({
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [anchor]);
+  }, [anchor, align]);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {

@@ -1,22 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import { useSortable } from "../useSortable.ts";
 import { createPortal } from "react-dom";
-import { stalledReason, type AgentSummary, type Settings } from "../api.ts";
+import type { AgentSummary, Settings } from "../api.ts";
 import {
   applyEdgeMagnetism,
   applyMoveMagnetism,
   clampRect,
-  readDockOrder,
   rectForZone,
   resizeRect,
   snapZoneAt,
-  writeDockOrder,
   type ResizeDir,
   type SnapZone,
   type TileRect,
   type TileState,
 } from "../tiles.ts";
-import { ShowDesktopIcon } from "./Icons.tsx";
 import { SessionPanelContent } from "./SessionPanelContent.tsx";
 
 const RESIZE_DIRS: ResizeDir[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
@@ -106,8 +102,6 @@ type Drag =
  */
 export function TileLayer({
   tiles,
-  agents,
-  dismissedLive,
   agentFor,
   sessionIdFor,
   settings,
@@ -117,19 +111,8 @@ export function TileLayer({
   onRectChange,
   onOpenFull,
   onMinimize,
-  onOpen,
-  onToggleMinimizeAll,
-  dockLeading,
-  dockNav,
-  dockTrailing,
 }: {
   tiles: TileState[];
-  /** Every live session gets a permanent dock entry, tiled or not — see the dock below. */
-  agents: AgentSummary[];
-  /** Live sessions explicitly closed (red light) rather than minimized — held
-   * out of the dock until reopened, the same way quitting an app drops its
-   * Dock icon instead of leaving it parked there while it's still running. */
-  dismissedLive: Set<string>;
   agentFor: (id: string) => AgentSummary | null;
   sessionIdFor: (id: string) => string | null;
   settings: Settings | null;
@@ -139,19 +122,8 @@ export function TileLayer({
   onRectChange: (id: string, rect: TileRect) => void;
   /** Green light: hand the session to the full page. */
   onOpenFull: (id: string) => void;
-  /** Yellow light: drop to the dock, keeping its place and size for later. */
+  /** Yellow light: put it away, keeping its place and size, until the session is opened as a tile again. */
   onMinimize: (id: string) => void;
-  /** A dock chip: open it as a tile if it isn't one yet, or bring it back where it was, in front. */
-  onOpen: (id: string) => void;
-  /** The tray-arrow button: same "show desktop" toggle as ⌘⇧M. */
-  onToggleMinimizeAll: () => void;
-  /** Brand mark and connection status — the dock is the one bar on screen, so it
-   * carries what the header used to. */
-  dockLeading?: React.ReactNode;
-  /** Page switcher, rendered as icon buttons alongside the session chips. */
-  dockNav?: React.ReactNode;
-  /** Theme toggle, pinned to the dock's far end. */
-  dockTrailing?: React.ReactNode;
 }) {
   const drag = useRef<Drag | null>(null);
   const [snapZone, setSnapZone] = useState<SnapZone | null>(null);
@@ -164,8 +136,6 @@ export function TileLayer({
   // one's.
   const tilesRef = useRef(tiles);
   tilesRef.current = tiles;
-  const [dockOrder, setDockOrder] = useState<string[]>(readDockOrder);
-  useEffect(() => writeDockOrder(dockOrder), [dockOrder]);
 
   useEffect(() => {
     function onMove(e: PointerEvent) {
@@ -243,35 +213,6 @@ export function TileLayer({
   }
 
   const open = tiles.filter((t) => !t.minimized);
-  // Every live session, tiled or not — mirroring a real OS dock, where an
-  // app's icon sits there the whole time it's running, whether or not any
-  // of its windows are currently open. A minimized tile for a session that
-  // *isn't* live (a historical one someone tucked away) also earns a spot,
-  // since that's the only place left to reach it from. One explicitly closed
-  // (red light) rather than minimized is the exception — it stays off the
-  // dock, still live or not, until reopened.
-  const liveIds = new Set(
-    agents
-      .filter((a) => a.status !== "ended" && a.status !== "error")
-      .map((a) => a.sessionId ?? a.key)
-      .filter((id) => !dismissedLive.has(id)),
-  );
-  const dockMembers = new Set([...liveIds, ...tiles.filter((t) => t.minimized).map((t) => t.id)]);
-  // Membership can shuffle order for free reasons (agents re-sorted by
-  // activity, a tile minimized out of turn) — the dock itself shouldn't.
-  // Keep whatever order was last settled on, drop anything no longer a
-  // member, and land brand-new arrivals on the right, exactly once.
-  const dockIds = [
-    ...dockOrder.filter((id) => dockMembers.has(id)),
-    ...Array.from(dockMembers).filter((id) => !dockOrder.includes(id)),
-  ];
-  useEffect(() => {
-    setDockOrder((prev) => {
-      if (prev.length === dockIds.length && prev.every((id, i) => id === dockIds[i])) return prev;
-      return dockIds;
-    });
-  }, [dockIds.join("")]);
-  const tileById = new Map(tiles.map((t) => [t.id, t]));
   // Rank only decides the z-index *value* — `open` itself is mapped in its
   // own, otherwise-untouched order below, so focusing a tile never moves its
   // DOM node to a new position among its siblings. It used to: rendering a
@@ -313,183 +254,6 @@ export function TileLayer({
           onResizeStart={(dir) => startResize(t.id, t.rect, dir)}
         />
       ))}
-      <TileDock
-        ids={dockIds}
-        agentFor={agentFor}
-        isLive={(id) => liveIds.has(id)}
-        isOpen={(id) => {
-          const t = tileById.get(id);
-          return !!t && !t.minimized;
-        }}
-        onOpen={onOpen}
-        onMinimize={onMinimize}
-        onClose={onClose}
-        onToggleMinimizeAll={onToggleMinimizeAll}
-        onReorder={(from, to) => {
-          setDockOrder((prev) => {
-            const next = [...prev];
-            const [moved] = next.splice(from, 1);
-            if (moved === undefined) return prev;
-            next.splice(to, 0, moved);
-            return next;
-          });
-        }}
-        leading={dockLeading}
-        nav={dockNav}
-        trailing={dockTrailing}
-      />
-    </div>
-  );
-}
-
-/**
- * The same read every live card already gives you — awaiting your input,
- * thinking, idle, stalled, or done — so a minimized session doesn't hide
- * that behind a plain label the moment it drops to the dock. A session with
- * no agent (an external or historical one) has nothing live to report.
- */
-function dockStatus(agent: AgentSummary | null): { cls: string; label: string } | null {
-  if (!agent) return null;
-  if (agent.status === "awaiting-permission") return { cls: "attention", label: "needs you" };
-  if (agent.status === "thinking" || agent.status === "starting") return { cls: "busy", label: "working" };
-  if (agent.status === "idle") {
-    const stalled = stalledReason(agent);
-    return stalled ? { cls: "stalled", label: stalled } : { cls: "idle", label: "idle" };
-  }
-  return { cls: "dead", label: agent.status === "error" ? "error" : "ended" };
-}
-
-/**
- * A shelf for every live session plus anything minimized, mounted once at the
- * top level rather than per tab — TileLayer already renders unconditionally
- * regardless of which tab is active, so a session docked while looking at
- * Live is still one click away from History or Settings without any extra
- * plumbing to make that true.
- *
- * A live entry has no × — there's nothing to remove while the session is
- * still running, the same way you can't drag a running app off a real dock
- * without quitting it first, and quitting isn't a decision this button
- * should make for you. Ended up here anyway (not live, just parked) is the
- * one case actually worth an explicit remove.
- *
- * Clicking one already open minimizes it back rather than just re-focusing
- * it — the dock icon doubles as an on/off switch for that window the same
- * way clicking a running app's Dock icon can send it back down.
- */
-function TileDock({
-  ids,
-  agentFor,
-  isLive,
-  isOpen,
-  onOpen,
-  onMinimize,
-  onClose,
-  onToggleMinimizeAll,
-  onReorder,
-  leading,
-  nav,
-  trailing,
-}: {
-  ids: string[];
-  agentFor: (id: string) => AgentSummary | null;
-  isLive: (id: string) => boolean;
-  isOpen: (id: string) => boolean;
-  onOpen: (id: string) => void;
-  onMinimize: (id: string) => void;
-  onClose: (id: string) => void;
-  onToggleMinimizeAll: () => void;
-  /** A chip was dragged from one position in the list to another. */
-  onReorder: (from: number, to: number) => void;
-  leading?: React.ReactNode;
-  nav?: React.ReactNode;
-  trailing?: React.ReactNode;
-}) {
-  const chipsRef = useRef<HTMLDivElement | null>(null);
-  const drag = useSortable({ count: ids.length, listRef: chipsRef, itemSelector: ".tile-dock-chip", axis: "x", onMove: onReorder });
-  const [edges, setEdges] = useState({ start: false, end: false });
-
-  useEffect(() => {
-    const el = chipsRef.current;
-    if (!el) return;
-    const sync = () => {
-      const over = el.scrollWidth - el.clientWidth;
-      setEdges({ start: el.scrollLeft > 1, end: over > 1 && el.scrollLeft < over - 1 });
-    };
-    sync();
-    el.addEventListener("scroll", sync, { passive: true });
-    const ro = new ResizeObserver(sync);
-    ro.observe(el);
-    for (const child of Array.from(el.children)) ro.observe(child);
-    return () => {
-      el.removeEventListener("scroll", sync);
-      ro.disconnect();
-    };
-  }, [ids.join("")]);
-
-  // Nothing running and nothing parked: a dock with one button is a smudge at the
-  // bottom of the screen, not a dock. Pages live in the sidebar now.
-  if (ids.length === 0 && !leading && !nav && !trailing) return null;
-
-  return (
-    <div className="tile-dock">
-      {leading}
-      {leading && <div className="tile-dock-sep" aria-hidden />}
-      {nav}
-      {nav && <div className="tile-dock-sep" aria-hidden />}
-      <button
-        className="tile-dock-all"
-        title="Minimize or restore every open tile (⌘⇧M)"
-        onClick={onToggleMinimizeAll}
-      >
-        <ShowDesktopIcon />
-      </button>
-      <div
-        className={`dock-chips ${edges.start ? "fade-start" : ""} ${edges.end ? "fade-end" : ""}`}
-        ref={chipsRef}
-        onWheel={(e) => {
-          const el = chipsRef.current;
-          if (!el || el.scrollWidth <= el.clientWidth) return;
-          if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
-          el.scrollLeft += e.deltaY;
-        }}
-      >
-        {ids.map((id, index) => {
-          const agent = agentFor(id);
-          const label = agent?.title ?? id.slice(0, 8);
-          const status = dockStatus(agent);
-          const live = isLive(id);
-          const openNow = isOpen(id);
-          return (
-            <div
-              key={id}
-              className={`tile-dock-chip ${openNow ? "open" : ""} ${status ? status.cls : ""} ${
-                drag.active === index ? "dragging" : ""
-              }`}
-              style={drag.itemStyle(index)}
-              onClick={() => (openNow ? onMinimize(id) : onOpen(id))}
-              title={`${openNow ? "Minimize" : live ? "Open" : "Restore"} ${label}${status ? ` — ${status.label}` : ""}`}
-              {...drag.handleProps(index)}
-            >
-              <i className="dot" />
-              <span className="tile-dock-chip-label">{label}</span>
-              {!live && (
-                <button
-                  className="tile-dock-chip-close"
-                  title="Remove from the dock"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onClose(id);
-                  }}
-                >
-                  ×
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {trailing && <div className="tile-dock-sep" aria-hidden />}
-      {trailing}
     </div>
   );
 }

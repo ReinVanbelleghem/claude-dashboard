@@ -16,7 +16,7 @@ export function DesktopView() {
         <p>
           This is Desktop — an empty space for arranging tiles.
           <br />
-          Open a session as a tile, or pick one up from the dock below.
+          Drag a session here from the sidebar to open it as a tile.
         </p>
       </div>
     </div>

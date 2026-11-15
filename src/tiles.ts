@@ -28,9 +28,8 @@ export const TILE_MIN_HEIGHT = 260;
 const CASCADE_STEP = 32;
 const CASCADE_SLOTS = 8;
 
-/** Room reserved at the bottom of the viewport for the floating dock pill —
- * a snapped tile stops just above it rather than sliding underneath. */
-const DOCK_CLEARANCE = 72;
+/** Room kept free at the bottom of the viewport, so a snapped tile does not sit flush on the window's edge. */
+const BOTTOM_CLEARANCE = 12;
 
 /** The mime type a session card's native drag carries its id in. */
 export const SESSION_DRAG_MIME = "application/x-claude-session";
@@ -82,13 +81,12 @@ export const layerTop = (): number => cssPx("--topbar-h");
 export const layerPoint = (clientX: number, clientY: number) => ({ x: clientX - layerInset(), y: clientY - layerTop() });
 
 /** The vertical span actually free for a tile — the viewport height, minus
- * the dock's clearance at the bottom. Shared by `rectForZone` and the
- * screen-edge magnetism below so a manually dragged tile's bottom stops at
- * the same line a zone-snapped one's does, rather than drifting toward the
- * dock independently. */
+ * the clearance at the bottom. Shared by `rectForZone` and the screen-edge
+ * magnetism below so a manually dragged tile's bottom stops at the same line
+ * a zone-snapped one's does. */
 function usableHeight(): number {
   const { h: vh } = viewport();
-  return Math.max(TILE_MIN_HEIGHT, vh - DOCK_CLEARANCE);
+  return Math.max(TILE_MIN_HEIGHT, vh - BOTTOM_CLEARANCE);
 }
 
 /**
@@ -142,35 +140,6 @@ export function writeTiles(tiles: TileState[]) {
     // Storage full or unavailable — tiles just won't survive a reload.
   }
 }
-
-const DOCK_ORDER_KEY = "dashboard-dock-order";
-
-/** The dock's left-to-right order: fixed at opening time (new entries land on
- * the right) rather than drifting with whichever session is most recently
- * active, and overridable by dragging a chip. Persisted so a reload doesn't
- * shuffle it back to whatever order the live list happens to report in. */
-export function readDockOrder(): string[] {
-  try {
-    const raw = localStorage.getItem(DOCK_ORDER_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((id): id is string => typeof id === "string");
-  } catch {
-    return [];
-  }
-}
-
-export function writeDockOrder(order: string[]) {
-  try {
-    localStorage.setItem(DOCK_ORDER_KEY, JSON.stringify(order));
-  } catch {
-    // Storage full or unavailable — the dock just re-derives a default order.
-  }
-}
-
-/** The mime type a dock chip's own drag carries its id in, for reordering. */
-export const DOCK_DRAG_MIME = "application/x-claude-dock-order";
 
 export type ResizeDir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
@@ -392,8 +361,7 @@ export function snapZoneAt(clientX: number, clientY: number): SnapZone | null {
   return upper ? "top-right" : lower ? "bottom-right" : "right";
 }
 
-/** Breathing room between a snapped tile and the screen edges (or the dock,
- * on the bottom), and equally between two tiles sharing a snapped seam —
+/** Breathing room between a snapped tile and the screen edges, and equally between two tiles sharing a snapped seam —
  * snapped tiles used to butt right up against both. Also what a resize's
  * edge magnetism (`applyEdgeMagnetism`, above) targets when two tiles meet
  * side by side, so a manually resized layout reads the same as an
@@ -480,4 +448,48 @@ export function hitTestTile(tiles: TileState[], point: { x: number; y: number })
     }
   }
   return best;
+}
+
+export type DropGeometry = {
+  defaultRect: (index: number) => TileRect;
+  clampRect: (rect: TileRect) => TileRect;
+  rectForZone: (zone: "left" | "right") => TileRect;
+};
+
+/**
+ * What dropping a session card on the desktop does to the tile list. `ids` are
+ * every key the session answers to (session id and agent key), so a tile keyed
+ * either way is found and no session ever gets two. Minimised tiles are
+ * invisible, so they are never a drop target, but dropping their own session
+ * restores them.
+ */
+export function dropSessionTile(
+  prev: TileState[],
+  ids: string[],
+  point: { x: number; y: number },
+  allocZ: () => number,
+  geometry: DropGeometry,
+): TileState[] {
+  const existing = prev.find((t) => ids.includes(t.id));
+  const shown = { minimized: false, hiddenByShortcut: false, hiddenByTab: false };
+  const target = hitTestTile(
+    prev.filter((t) => !t.minimized),
+    point,
+  );
+  if (target && target.id !== existing?.id) {
+    const dropOnRight = point.x > target.rect.x + target.rect.w / 2;
+    const targetRect = geometry.rectForZone(dropOnRight ? "left" : "right");
+    const droppedRect = geometry.rectForZone(dropOnRight ? "right" : "left");
+    const droppedId = existing?.id ?? ids[0];
+    const rest = prev.filter((t) => t.id !== droppedId && t.id !== target.id);
+    const dropped: TileState = { id: droppedId, rect: droppedRect, z: allocZ(), ...shown };
+    return [...rest, { ...target, rect: targetRect }, dropped];
+  }
+  if (existing && target?.id === existing.id) {
+    return prev.map((t) => (t.id === existing.id ? { ...t, ...shown, z: allocZ() } : t));
+  }
+  const size = existing?.rect ?? geometry.defaultRect(prev.length);
+  const rect = geometry.clampRect({ x: point.x - size.w / 2, y: Math.max(0, point.y - 18), w: size.w, h: size.h });
+  if (existing) return prev.map((t) => (t.id === existing.id ? { ...t, ...shown, rect, z: allocZ() } : t));
+  return [...prev, { id: ids[0], rect, z: allocZ() }];
 }

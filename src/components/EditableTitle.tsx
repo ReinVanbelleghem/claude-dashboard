@@ -35,17 +35,12 @@ export function EditableTitle({
   const [draft, setDraft] = useState(value ?? "");
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const input = useRef<HTMLInputElement | null>(null);
 
   // A rename that lands from elsewhere (another tab, the SSE echo) is authoritative
   // and clears the local copy we were holding over the round trip.
   useEffect(() => {
     if (value !== null && value === saved) setSaved(null);
   }, [value, saved]);
-
-  useEffect(() => {
-    if (editing) input.current?.select();
-  }, [editing]);
 
   const shown = saved ?? value;
 
@@ -55,8 +50,7 @@ export function EditableTitle({
     setEditing(true);
   }
 
-  async function commit() {
-    const next = draft.trim();
+  async function commit(next: string) {
     setEditing(false);
     if (!next || next === shown) return;
     setSaved(next);
@@ -73,22 +67,12 @@ export function EditableTitle({
   if (editing) {
     return (
       <Tag className={className}>
-        <input
-          ref={input}
-          className="title-edit"
-          value={draft}
-          autoFocus
-          onChange={(e) => setDraft(e.target.value)}
-          onClick={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => e.stopPropagation()}
-          onBlur={() => void commit()}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Enter") void commit();
-            if (e.key === "Escape") {
-              setEditing(false);
-              setDraft(shown ?? "");
-            }
+        <TitleEditInput
+          initial={draft}
+          onCommit={(next) => void commit(next)}
+          onCancel={() => {
+            setEditing(false);
+            setDraft(shown ?? "");
           }}
         />
       </Tag>
@@ -110,5 +94,57 @@ export function EditableTitle({
       {shown || placeholder}
       {error && <span className="title-error"> · {error}</span>}
     </Tag>
+  );
+}
+
+/**
+ * The field a title turns into while it is being renamed: borderless, in the
+ * typography of whatever it replaced, committing on Enter or blur and backing
+ * out on Escape. Shared so every inline rename in the app is the same field.
+ */
+export function TitleEditInput({
+  initial,
+  placeholder,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  placeholder?: string;
+  /** The trimmed text, on Enter or blur. */
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState(initial);
+  const input = useRef<HTMLInputElement | null>(null);
+  const settled = useRef(false);
+
+  useEffect(() => {
+    input.current?.select();
+  }, []);
+
+  const settle = (commit: boolean) => {
+    if (settled.current) return;
+    settled.current = true;
+    if (commit) onCommit(draft.trim());
+    else onCancel();
+  };
+
+  return (
+    <input
+      ref={input}
+      className="title-edit"
+      value={draft}
+      placeholder={placeholder}
+      autoFocus
+      onChange={(e) => setDraft(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onBlur={() => settle(true)}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") settle(true);
+        if (e.key === "Escape") settle(false);
+      }}
+    />
   );
 }

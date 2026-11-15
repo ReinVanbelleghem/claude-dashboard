@@ -73,6 +73,7 @@ const KIND: Record<NotifyEventKind, { icon: string; headline: string; sound: str
   sessionError: { icon: "⚠️", headline: "Error", sound: "Basso", urgent: false },
   prWatch: { icon: "🔔", headline: "PR activity", sound: "Glass", urgent: false },
   prReviewRequested: { icon: "👀", headline: "Review requested", sound: "Ping", urgent: false },
+  taskDue: { icon: "☑️", headline: "Task due", sound: "Glass", urgent: false },
 };
 
 /**

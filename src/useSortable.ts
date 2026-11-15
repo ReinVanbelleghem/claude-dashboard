@@ -1,6 +1,7 @@
-import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type RefObject } from "react";
 
 const ACTIVATION_PX = 4;
+const SETTLE_TIMEOUT_MS = 3000;
 
 type DragState = { active: number; target: number; offset: number };
 
@@ -21,8 +22,18 @@ export type Sortable = {
  *
  * A 4px activation distance keeps a click on the handle a click; the lifted item
  * follows the pointer on one axis only, clamped to the list; the items it passes
- * slide out of its way; and the arrow keys move a focused handle one step. The
+ * slide out of its way; and the arrow keys move a focused handle one step. An
+ * item counts as passed once the lifted one's leading edge crosses its middle,
+ * which the clamp can always reach: measuring from the lifted item's own centre
+ * meant the last swap in a list, and the only swap in a list of two, needed the
+ * pointer to go exactly as far as the clamp allows and no less. The
  * list's items are found with `itemSelector` under `listRef`, in index order.
+ *
+ * On release the items glide into their final slots and stay there, frozen,
+ * until the list re-renders in the new order (a save and an SSE event later) or
+ * a timeout gives up on it. Clearing the transforms the moment the pointer lifts
+ * would send every item back to the old order, then jump again when the new one
+ * arrives. The frame that hands over to the new order has transitions off.
  */
 export function useSortable({
   count,
@@ -40,6 +51,11 @@ export function useSortable({
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const sizes = useRef<number[]>([]);
+  const starts = useRef<number[]>([]);
+  const [settle, setSettle] = useState<DragState | null>(null);
+  const [handover, setHandover] = useState(false);
+  const settleOrder = useRef<HTMLElement[]>([]);
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const update = (next: DragState | null) => {
     dragRef.current = next;
     setDrag(next);
@@ -47,15 +63,27 @@ export function useSortable({
   const items = () => Array.from(listRef.current?.querySelectorAll<HTMLElement>(itemSelector) ?? []);
   const vertical = axis === "y";
 
+  useLayoutEffect(() => {
+    if (!settle) return;
+    const now = items();
+    const before = settleOrder.current;
+    if (now.length === before.length && now.every((el, i) => el === before[i])) return;
+    clearTimeout(settleTimer.current);
+    setSettle(null);
+    setHandover(true);
+    requestAnimationFrame(() => requestAnimationFrame(() => setHandover(false)));
+  });
+
   function onPointerDown(index: number, e: PointerEvent) {
     if (e.button !== 0) return;
     e.preventDefault();
     const rects = items().map((el) => el.getBoundingClientRect());
     if (!rects[index]) return;
     const start = vertical ? e.clientY : e.clientX;
-    const starts = rects.map((r) => (vertical ? r.top : r.left));
+    const itemStarts = rects.map((r) => (vertical ? r.top : r.left));
+    starts.current = itemStarts;
     sizes.current = rects.map((r) => (vertical ? r.height : r.width));
-    const min = starts[0] - starts[index];
+    const min = itemStarts[0] - itemStarts[index];
     const last = rects[rects.length - 1];
     const max = (vertical ? last.bottom - rects[index].bottom : last.right - rects[index].right);
     const handle = e.currentTarget as HTMLElement;
@@ -67,6 +95,8 @@ export function useSortable({
       if (!started) {
         if (Math.abs(delta) < ACTIVATION_PX) return;
         started = true;
+        clearTimeout(settleTimer.current);
+        setSettle(null);
         try {
           handle.setPointerCapture(pointerId);
         } catch {
@@ -74,12 +104,13 @@ export function useSortable({
         }
       }
       const offset = Math.max(min, Math.min(max, delta));
-      const centre = starts[index] + sizes.current[index] / 2 + offset;
+      const leading = itemStarts[index] + offset;
+      const trailing = leading + sizes.current[index];
       let target = index;
-      for (let i = 0; i < starts.length; i++) {
-        const mid = starts[i] + sizes.current[i] / 2;
-        if (i < index && centre < mid) target = Math.min(target, i);
-        else if (i > index && centre > mid) target = Math.max(target, i);
+      for (let i = 0; i < itemStarts.length; i++) {
+        const mid = itemStarts[i] + sizes.current[i] / 2;
+        if (i < index && leading < mid) target = Math.min(target, i);
+        else if (i > index && trailing > mid) target = Math.max(target, i);
       }
       update({ active: index, target, offset });
     };
@@ -88,6 +119,13 @@ export function useSortable({
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
       const final = dragRef.current;
+      const moves = !!final && final.target !== final.active;
+      if (moves) {
+        settleOrder.current = items();
+        clearTimeout(settleTimer.current);
+        settleTimer.current = setTimeout(() => setSettle(null), SETTLE_TIMEOUT_MS);
+        setSettle(final);
+      }
       update(null);
       if (!final) return;
       // The pointer-up that ends a drag also fires a click on the handle, which on
@@ -116,7 +154,26 @@ export function useSortable({
     });
   }
 
+  function settledStyle(index: number, { active, target }: DragState): CSSProperties | undefined {
+    const n = sizes.current.length;
+    const gap = n > 1 ? starts.current[1]! - starts.current[0]! - sizes.current[0]! : 0;
+    const order = Array.from({ length: n }, (_, i) => i);
+    order.splice(active, 1);
+    order.splice(target, 0, active);
+    let cursor = starts.current[0]!;
+    let delta = 0;
+    for (const original of order) {
+      if (original === index) delta = cursor - starts.current[index]!;
+      cursor += sizes.current[original]! + gap;
+    }
+    const transform = vertical ? `translateY(${delta}px)` : `translateX(${delta}px)`;
+    if (index === active) return { transform, zIndex: 2, position: "relative" };
+    return { transform };
+  }
+
   function itemStyle(index: number): CSSProperties | undefined {
+    if (handover) return { transition: "none" };
+    if (!drag && settle) return settledStyle(index, settle);
     if (!drag) return undefined;
     const { active, target, offset } = drag;
     const t = (px: number) => (vertical ? `translateY(${px}px)` : `translateX(${px}px)`);

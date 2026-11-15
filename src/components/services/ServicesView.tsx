@@ -71,9 +71,11 @@ export function ServicesView({
   return (
     <div className="services">
       <div className="services-head">
-        <div>
-          <h1>Local stack</h1>
-        </div>
+        <span className="services-count">
+          {running}/{state.services.length} running
+          {disabled > 0 && !showHidden ? ` · ${disabled} hidden` : ""}
+        </span>
+        {!state.tmuxUp && <span className="services-note">tmux is not running. Starting a service will start it.</span>}
         <div className="services-tools">
           {disabled > 0 && (
             <button
@@ -92,17 +94,7 @@ export function ServicesView({
         </div>
       </div>
 
-      <span className="services-count">
-        {running}/{state.services.length} running
-        {disabled > 0 && !showHidden ? ` · ${disabled} hidden` : ""}
-      </span>
-
       {error && <div className="chat-error">{error}</div>}
-      {!state.tmuxUp && (
-        <div className="empty">
-          tmux is not running. Starting a service will start it.
-        </div>
-      )}
 
       <div className="services-card">
         <div className="tw">

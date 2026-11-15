@@ -14,9 +14,14 @@ import {
   servicesApi,
   type SessionRow,
   type Settings,
+  type Task,
+  taskApi,
+  type TasksPayload,
   settingsApi,
   type UsagePayload,
   templateApi,
+  workspaceApi,
+  type WorkspacesPayload,
 } from "./api.ts";
 import {
   applyAppearance,
@@ -38,6 +43,7 @@ import {
   PulseIcon,
   SearchIcon,
   SunMoonIcon,
+  TasksIcon,
   TemplateIcon,
   TerminalIcon,
   WorktreeIcon,
@@ -47,8 +53,15 @@ import { ReviewsView } from "./components/pr/ReviewsView.tsx";
 import { usePrWatches } from "./components/pr/prState.ts";
 import { ServicesView } from "./components/services/ServicesView.tsx";
 import { TemplatesView } from "./components/TemplatesView.tsx";
+import { TasksView } from "./components/tasks/TasksView.tsx";
+import { localDay } from "../shared/taskDates.ts";
 import type { ServicesState } from "../shared/services.ts";
 import { Sidebar } from "./components/Sidebar.tsx";
+import { NewWorkspaceDialog } from "./components/sidebar/NewWorkspaceDialog.tsx";
+import { sidebarPrefs, useSidebarPrefs } from "./components/sidebar/prefs.ts";
+import { RailSessions } from "./components/sidebar/RailSessions.tsx";
+import { buildSessions } from "./components/sidebar/sessions.ts";
+import { WorkspaceTree } from "./components/sidebar/WorkspaceTree.tsx";
 import { AnswerNext } from "./components/AnswerNext.tsx";
 import { Tile } from "./components/Charts.tsx";
 import { DesktopView } from "./components/DesktopView.tsx";
@@ -70,7 +83,7 @@ import { WorktreesView } from "./components/WorktreesView.tsx";
 import {
   clampRect,
   defaultRect,
-  hitTestTile,
+  dropSessionTile,
   layerPoint,
   readTiles,
   rectForZone,
@@ -81,6 +94,8 @@ import {
 } from "./tiles.ts";
 import { PAGES, isPageVisible, visiblePages, type Tab } from "./pages.ts";
 
+const dropGeometry = { defaultRect, clampRect, rectForZone };
+
 const TAB_LABEL: Record<Tab, string> = Object.fromEntries(PAGES.map((p) => [p.key, p.label])) as Record<Tab, string>;
 
 /** Icons for the non-desktop dock tabs, keyed the same way so a glyph is trivial
@@ -88,6 +103,7 @@ const TAB_LABEL: Record<Tab, string> = Object.fromEntries(PAGES.map((p) => [p.ke
  * excluded — it stays icon-only via NineDotsIcon in the dock render. */
 const TAB_ICON: Record<Exclude<Tab, "desktop">, () => JSX.Element> = {
   live: PulseIcon,
+  tasks: TasksIcon,
   history: ClockIcon,
   artifacts: ArtifactIcon,
   worktrees: WorktreeIcon,
@@ -125,9 +141,6 @@ export default function App() {
   }, [tab, services]);
   const [tiles, setTiles] = useState<TileState[]>(readTiles);
   const nextZ = useRef(1 + tiles.reduce((m, t) => Math.max(m, t.z), 0));
-  // Live sessions explicitly closed out of the dock (red light) rather than just
-  // minimized — cleared the moment one is reopened, from openTile.
-  const [dismissedLive, setDismissedLive] = useState<Set<string>>(new Set());
 
   /**
    * ⌘⇧M: "show desktop" for tiles. Minimizes every open one, tagging each
@@ -190,6 +203,12 @@ export default function App() {
    * Null means the dialog falls back to its own shortlist.
    */
   const [newIn, setNewIn] = useState<string | null>(null);
+  /** The workspace a session started from the dialog should be filed in, when one asked for it. */
+  const [newInWorkspace, setNewInWorkspace] = useState<number | null>(null);
+  const [workspaces, setWorkspaces] = useState<WorkspacesPayload | null>(null);
+  /** The New workspace dialog, with the folder it opens on. */
+  const [newWorkspace, setNewWorkspace] = useState<{ folder: string | null; task?: Task } | null>(null);
+  const [tasks, setTasks] = useState<TasksPayload | null>(null);
   const [showFolders, setShowFolders] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showFind, setShowFind] = useState(false);
@@ -233,6 +252,11 @@ export default function App() {
   // button both flow through here, so there is one source of truth.
   useEffect(() => {
     const onHash = () => {
+      if (window.location.hash === "#/tasks") {
+        setTab("tasks");
+        window.location.hash = "";
+        return;
+      }
       const id = routeSessionId();
       setPageId(id);
       if (id) setOpenId(null);
@@ -311,6 +335,11 @@ export default function App() {
   useEffect(refreshRecent, [refreshRecent]);
 
   useEffect(() => {
+    workspaceApi.list().then(setWorkspaces).catch(() => {});
+    taskApi.list().then(setTasks).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     settingsApi
       .get()
       .then((r) => {
@@ -353,6 +382,8 @@ export default function App() {
     });
     es.addEventListener("usage", (e) => setUsage(JSON.parse((e as MessageEvent).data)));
     es.addEventListener("settings", (e) => setSettings(JSON.parse((e as MessageEvent).data)));
+    es.addEventListener("workspaces", (e) => setWorkspaces(JSON.parse((e as MessageEvent).data)));
+    es.addEventListener("tasks", (e) => setTasks(JSON.parse((e as MessageEvent).data)));
     // The daemon owns the decision to notify; the tab only raises the banner.
     es.addEventListener("notify", (e) => {
       const p = JSON.parse((e as MessageEvent).data) as NotifyPayload;
@@ -478,12 +509,6 @@ export default function App() {
   }, []);
 
   const openTile = useCallback((id: string) => {
-    setDismissedLive((prev) => {
-      if (!prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
     setTiles((prev) => {
       if (prev.some((t) => t.id === id))
         return prev.map((t) =>
@@ -495,20 +520,8 @@ export default function App() {
     });
   }, []);
 
-  // Closing drops the tile entirely, minimized or not — the dock is a shelf
-  // for windows you're keeping around, not a second place a closed one lingers.
-  // For a still-live session, that shelf spot would otherwise reappear on its
-  // own (a live agent always earns a dock icon) — so closing also dismisses
-  // it from the dock until it's reopened from the Live tab, the same way
-  // quitting an app removes its Dock icon instead of leaving it running.
   const closeTile = useCallback((id: string) => {
     setTiles((prev) => prev.filter((t) => t.id !== id));
-    setDismissedLive((prev) => {
-      if (prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
   }, []);
 
   // The dock is just `tiles` filtered by this flag, rendered by the same
@@ -542,6 +555,8 @@ export default function App() {
   // the restore when the page closed back to Desktop. Skipped on the very
   // first run so a reload that happens to land off Desktop doesn't hide
   // tiles nobody asked to hide — only an actual change should trigger it.
+  const agentsRef = useRef(agents);
+  agentsRef.current = agents;
   const desktopMounted = useRef(false);
   useEffect(() => {
     const onDesktop = tab === "desktop" && !onFullPage;
@@ -553,7 +568,7 @@ export default function App() {
       setTiles((prev) => {
         if (!prev.some((t) => t.hiddenByTab)) return prev;
         return prev.map((t) =>
-          t.hiddenByTab ? { ...t, minimized: false, hiddenByTab: false, z: nextZ.current++ } : t,
+          t.hiddenByTab ? { ...t, minimized: false, hiddenByTab: false } : t,
         );
       });
       return;
@@ -594,28 +609,12 @@ export default function App() {
       const id = e.dataTransfer?.getData(SESSION_DRAG_MIME);
       if (!id) return;
       e.preventDefault();
+      setTab("desktop");
+      if (window.location.hash) window.location.hash = "";
       const point = layerPoint(e.clientX, e.clientY);
-      setTiles((prev) => {
-        const target = hitTestTile(prev, point);
-        if (target && target.id !== id) {
-          const dropOnRight = point.x > target.rect.x + target.rect.w / 2;
-          const targetRect = rectForZone(dropOnRight ? "left" : "right");
-          const droppedRect = rectForZone(dropOnRight ? "right" : "left");
-          const z = nextZ.current++;
-          const rest = prev.filter((t) => t.id !== id && t.id !== target.id);
-          const dropped = prev.find((t) => t.id === id);
-          return [
-            ...rest,
-            { ...target, rect: targetRect },
-            { id, rect: droppedRect, z: dropped?.z ?? z },
-          ];
-        }
-        const existing = prev.find((t) => t.id === id);
-        const size = existing?.rect ?? defaultRect(prev.length);
-        const rect = clampRect({ x: point.x - size.w / 2, y: Math.max(0, point.y - 18), w: size.w, h: size.h });
-        if (existing) return prev.map((t) => (t.id === id ? { ...t, rect, z: nextZ.current++ } : t));
-        return [...prev, { id, rect, z: nextZ.current++ }];
-      });
+      const agent = agentsRef.current.find((x) => x.sessionId === id || x.key === id);
+      const ids = [...new Set([id, agent?.sessionId, agent?.key].filter((x): x is string => !!x))];
+      setTiles((prev) => dropSessionTile(prev, ids, point, () => nextZ.current++, dropGeometry));
     }
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("drop", onDrop);
@@ -714,9 +713,63 @@ export default function App() {
     if (onFullPage) window.location.hash = "";
   };
 
+  const sidebarSeen = useSidebarPrefs().seen;
+  const onScreen = useMemo(() => {
+    const ids = new Set<string>();
+    const add = (id: string | null) => {
+      if (!id) return;
+      ids.add(id);
+      const sid = sessionIdFor(id);
+      if (sid) ids.add(sid);
+    };
+    add(pageId ?? openId);
+    for (const t of tiles) if (!t.minimized) add(t.id);
+    return ids;
+  }, [pageId, openId, tiles, sessionIdFor]);
+  useEffect(() => {
+    if (document.visibilityState !== "visible") return;
+    const seen = sidebarPrefs.get().seen;
+    const stale = agents
+      .map((a) => ({ id: a.sessionId ?? a.key, at: a.updatedAt }))
+      .filter((a) => onScreen.has(a.id) && a.at > (seen[a.id] ?? 0));
+    if (stale.length > 0) sidebarPrefs.markSeen(stale.map((a) => a.id));
+  }, [agents, onScreen]);
+  const sidebarSessions = useMemo(
+    () => buildSessions({ agents, live, titles, seen: sidebarSeen, visible: onScreen }),
+    [agents, live, titles, sidebarSeen, onScreen],
+  );
+  const tasksDue = useMemo(() => {
+    const today = localDay(new Date());
+    return (tasks?.tasks ?? []).filter((t) => t.completedAt === null && t.dueDate !== null && t.dueDate <= today).length;
+  }, [tasks]);
+  const workspaceTasks = useMemo(() => {
+    const out = new Map<number, string[]>();
+    for (const t of tasks?.tasks ?? []) {
+      if (t.workspaceId === null || t.completedAt !== null) continue;
+      out.set(t.workspaceId, [...(out.get(t.workspaceId) ?? []), t.content]);
+    }
+    return out;
+  }, [tasks]);
+  const minimizedTiles = useMemo(() => {
+    const ids = new Set<string>();
+    for (const t of tiles) {
+      if (!t.minimized) continue;
+      ids.add(t.id);
+      const sid = sessionIdFor(t.id);
+      if (sid) ids.add(sid);
+    }
+    return ids;
+  }, [tiles, sessionIdFor]);
+  const startSessionIn = useCallback((folder: string, workspaceId?: number) => {
+    setNewIn(folder);
+    setNewInWorkspace(workspaceId ?? null);
+    setShowNew(true);
+  }, []);
+
   const sidebar = (
     <Sidebar
       pages={visiblePages(settings?.ui.hiddenPages, settings?.ui.pageOrder)}
+      footerPages={settings?.ui.footerPages}
       tab={onFullPage ? null : tab}
       onSelect={goTo}
       iconFor={pageIcon}
@@ -726,13 +779,26 @@ export default function App() {
       thinking={thinking}
       liveCount={liveHere + liveExternal}
       reviewsUnseen={prWatches.unseenCount}
+      tasksDue={tasksDue}
       connected={connected}
       name={appName}
       onHome={() => {
         setTab("live");
         if (onFullPage) closePage();
       }}
-    />
+    >
+      <WorkspaceTree
+        sessions={sidebarSessions}
+        payload={workspaces}
+        activeId={pageId ?? openId}
+        minimized={minimizedTiles}
+        workspaceTasks={workspaceTasks}
+        onOpen={openSession}
+        onNewWorkspace={(folder) => setNewWorkspace({ folder: folder ?? null })}
+        onNewSession={startSessionIn}
+      />
+      <RailSessions sessions={sidebarSessions} payload={workspaces} activeId={pageId ?? openId} onOpen={openSession} />
+    </Sidebar>
   );
 
   const crumb = pageId
@@ -831,15 +897,7 @@ export default function App() {
         />
       )}
 
-      {/* Services and Artifacts draw their own header, with tools beside the title;
-          Desktop is a blank canvas on purpose. Every other page gets the same one. */}
-      {!onFullPage && !["desktop", "services", "artifacts", "templates"].includes(tab) && (
-        <div className="page-head-row">
-          <h1 className="page-title">{TAB_LABEL[tab]}</h1>
-        </div>
-      )}
-
-      {!onFullPage && usage && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "services" && tab !== "templates" && (
+      {!onFullPage && usage && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "services" && tab !== "templates" && tab !== "tasks" && tab !== "history" && (
         <div className="kpis">
           {/* Tokens here are fresh tokens: cache reads are excluded and shown
               separately, since they are ~97% of raw volume at a tenth the rate. */}
@@ -926,6 +984,22 @@ export default function App() {
           onSettings={setSettings}
         />
       )}
+      {!onFullPage && tab === "tasks" && (
+        <TasksView
+          payload={tasks}
+          workspaces={workspaces?.workspaces ?? []}
+          onStartWorkspace={(task) => {
+            const repo = tasks?.projects.find((p) => p.id === task.projectId)?.repoKey ?? null;
+            const folder = repo?.startsWith("repo:") ? repo.slice(5).replace(/\/\.git$/, "") : null;
+            setNewWorkspace({ folder, task });
+          }}
+          onOpenWorkspace={(w) => {
+            const first = sidebarSessions.find((s) => s.ids.some((id) => workspaces?.sessions[id] === w.id));
+            if (first) openSession(first.id);
+            else startSessionIn(w.folder, w.id);
+          }}
+        />
+      )}
       {!onFullPage && tab === "history" && (
         <HistoryView
           onOpen={openSession}
@@ -987,8 +1061,6 @@ export default function App() {
           drawer is never lost behind a tile someone left open. */}
       <TileLayer
         tiles={tiles}
-        agents={agents}
-        dismissedLive={dismissedLive}
         agentFor={agentFor}
         sessionIdFor={sessionIdFor}
         settings={settings}
@@ -998,8 +1070,6 @@ export default function App() {
         onRectChange={updateTileRect}
         onOpenFull={openTileFull}
         onMinimize={minimizeTile}
-        onOpen={openTile}
-        onToggleMinimizeAll={toggleMinimizeAll}
       />
 
       {openId && (
@@ -1059,18 +1129,36 @@ export default function App() {
 
       {showFolders && <FoldersModal onClose={() => setShowFolders(false)} />}
 
+      {newWorkspace && (
+        <NewWorkspaceDialog
+          initialFolder={newWorkspace.folder}
+          initialGoal={newWorkspace.task?.content ?? ""}
+          projects={projects}
+          onClose={() => setNewWorkspace(null)}
+          onCreated={(w, startChat) => {
+            const task = newWorkspace.task;
+            if (task) void taskApi.link(task.id, w.id).catch(() => {});
+            setNewWorkspace(null);
+            if (startChat) startSessionIn(w.folder, w.id);
+          }}
+        />
+      )}
+
       {showNew && (
         <NewSessionModal
           projects={projects}
           initialCwd={newIn}
+          workspaceId={newInWorkspace}
           settings={settings}
           onClose={() => {
             setShowNew(false);
             setNewIn(null);
+            setNewInWorkspace(null);
           }}
           onStarted={(key) => {
             setShowNew(false);
             setNewIn(null);
+            setNewInWorkspace(null);
             setTab("live");
             window.location.hash = "";
             setOpenId(key);

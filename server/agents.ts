@@ -871,6 +871,13 @@ async function refreshMeter(agent: Agent) {
   emit("agent-meter", { key: agent.key, meter: m });
 }
 
+function resultError(msg: any): string {
+  const detail = Array.isArray(msg.errors) ? msg.errors.find((e: unknown) => typeof e === "string" && e.trim()) : null;
+  if (detail) return detail;
+  if (typeof msg.result === "string" && msg.result.trim()) return msg.result.trim().slice(0, 500);
+  return msg.subtype && msg.subtype !== "success" ? msg.subtype : "The turn ended with an error";
+}
+
 /** Drain the SDK's message stream into the timeline the browser renders. */
 async function consume(agent: Agent) {
   try {
@@ -969,7 +976,7 @@ async function consume(agent: Agent) {
             ts: Date.now(),
             costUsd: anyMsg.total_cost_usd ?? null,
             durationMs: anyMsg.duration_ms ?? null,
-            error: anyMsg.is_error ? (anyMsg.subtype ?? "error") : null,
+            error: anyMsg.is_error ? resultError(anyMsg) : null,
             ...(anyMsg.structured_output !== undefined ? { structured: anyMsg.structured_output } : {}),
           });
           agent.streaming = "";

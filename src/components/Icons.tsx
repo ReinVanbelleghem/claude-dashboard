@@ -496,6 +496,74 @@ export function MoreVerticalIcon() {
   );
 }
 
+export function CalendarIcon() {
+  return (
+    <I>
+      <rect x="3" y="4.5" width="18" height="16" rx="2" />
+      <path d="M3 9.5h18" />
+      <path d="M8 2.5v4" />
+      <path d="M16 2.5v4" />
+    </I>
+  );
+}
+
+export function InboxIcon() {
+  return (
+    <I>
+      <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+      <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z" />
+    </I>
+  );
+}
+
+export function RepeatIcon() {
+  return (
+    <I>
+      <path d="m17 2 4 4-4 4" />
+      <path d="M3 11v-1a4 4 0 0 1 4-4h14" />
+      <path d="m7 22-4-4 4-4" />
+      <path d="M21 13v1a4 4 0 0 1-4 4H3" />
+    </I>
+  );
+}
+
+export function TasksIcon() {
+  return (
+    <I>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m8.5 12 2.5 2.5 4.5-5" />
+    </I>
+  );
+}
+
+export function ArchiveIcon() {
+  return (
+    <I>
+      <rect x="3" y="4" width="18" height="5" rx="1" />
+      <path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9" />
+      <path d="M10 13h4" />
+    </I>
+  );
+}
+
+/** Claude's mark, the eight-ray asterisk, for session rows. */
+export function ClaudeMark() {
+  return (
+    <svg className="claude-mark" viewBox="0 0 16 16" aria-hidden="true">
+      <g stroke="#D97757" strokeWidth="1.7" strokeLinecap="round">
+        <line x1="8" y1="8" x2="14.20" y2="8.00" />
+        <line x1="8" y1="8" x2="12.38" y2="12.38" />
+        <line x1="8" y1="8" x2="8.00" y2="14.20" />
+        <line x1="8" y1="8" x2="3.62" y2="12.38" />
+        <line x1="8" y1="8" x2="1.80" y2="8.00" />
+        <line x1="8" y1="8" x2="3.62" y2="3.62" />
+        <line x1="8" y1="8" x2="8.00" y2="1.80" />
+        <line x1="8" y1="8" x2="12.38" y2="3.62" />
+      </g>
+    </svg>
+  );
+}
+
 export function LogsIcon() {
   return (
     <I>

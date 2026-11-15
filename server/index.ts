@@ -99,6 +99,7 @@ import {
 import { validRule as validProvisionRule, type ProvisionRule } from "./provision.ts";
 import { invalidateRepoKeys, resolveRepoKeys } from "./repoKeys.ts";
 import {
+  fireEvent,
   reconcile,
   sendTestNotification,
   setFocus,
@@ -119,7 +120,7 @@ import { handlePrRoute } from "./prRoutes.ts";
 import { initPrWatch } from "./prWatch.ts";
 import { initExplain, onAgentItem as explainOnItem, onRoster as explainOnRoster } from "./prExplain.ts";
 import { initReview } from "./prReview.ts";
-import { reviewRepoLabel } from "./prRepos.ts";
+import { reviewRepoLabel, reviewRoot } from "./prRepos.ts";
 import { initRuns, onAgentItem as runsOnItem, onRoster as runsOnRoster, runMessagePreamble } from "./prRuns.ts";
 import {
   buildState as servicesState,
@@ -139,6 +140,48 @@ import { composeDir, containerAction, containerArgv } from "./containers.ts";
 import { listRuns, nextFires, runTemplate, startScheduler } from "./templates.ts";
 import { MAX_DROP_BYTES, pruneDropped, storeDropped } from "./dropped.ts";
 import { needsInput, readRegistry } from "./registry.ts";
+import type { TaskAdd, TaskPatch } from "../shared/tasks.ts";
+import {
+  addTask,
+  addTaskProject,
+  completeTask,
+  completeWorkspaceTasks,
+  deleteTask,
+  deleteTaskProject,
+  dueReminders,
+  getTask,
+  initTasks,
+  reopenTask,
+  reorderTaskProjects,
+  setTaskWorkspace,
+  tasksChanged,
+  tasksPayload,
+  tieTaskProject,
+  updateTask,
+  updateTaskProject,
+} from "./tasks.ts";
+import {
+  attachSession,
+  createWorkspace,
+  deleteProject,
+  deleteWorkspace,
+  getWorkspace,
+  reorderProjects,
+  reorderSessions,
+  reorderWorkspaces,
+  workspacesOfProject,
+  workspacesSharingFolder,
+  GOALS_DIR,
+  initWorkspaces,
+  refreshAutoGoals,
+  sessionsOfWorkspace,
+  setWorkspaceStatus,
+  syncWorkspaces,
+  updateWorkspace,
+  workspaceHolds,
+  workspacesPayload,
+  type SessionRef,
+} from "./workspaces.ts";
 import {
   getSettings,
   loadSettings,
@@ -155,6 +198,7 @@ const NOTIFY_KINDS: NotifyEventKind[] = [
   "sessionError",
   "prWatch",
   "prReviewRequested",
+  "taskDue",
 ];
 import { sessionReceipt, usageSummary } from "./usage.ts";
 
@@ -250,6 +294,34 @@ initReview(db);
 initRuns(db, broadcast);
 initExplain(db, broadcast);
 initPrWatch(db, broadcast);
+initWorkspaces(db, (payload) => broadcast("workspaces", payload), { reviewRoot });
+initTasks(db, (payload) => broadcast("tasks", payload));
+setInterval(() => {
+  try {
+    for (const r of dueReminders(new Date(), getSettings().ui.taskDigestTime?.trim() || null)) {
+      void fireEvent(
+        { kind: "taskDue", key: r.key, sessionId: null, muteIds: [], label: r.title, context: r.context, detail: r.detail },
+        "#/tasks",
+      );
+    }
+  } catch (err) {
+    console.error("[claude-dashboard] task reminders failed:", err);
+  }
+}, 20_000);
+
+function syncWorkspacesNow() {
+  const refs: SessionRef[] = listAgents().map((a) => ({
+    ids: [a.sessionId, a.key].filter((x): x is string => !!x),
+    cwd: a.cwd,
+    title: a.title,
+    live: a.status !== "ended" && a.status !== "error",
+    chat: a.research === true,
+  }));
+  for (const s of livePayload().sessions) {
+    if (s.alive) refs.push({ ids: [s.sessionId], cwd: s.cwd, live: true, chat: false });
+  }
+  void syncWorkspaces(refs).catch((err) => console.error("[claude-dashboard] workspace sync failed:", err));
+}
 // Every roster change already flows through here, which makes it the natural
 // place to re-evaluate what deserves a notification — agents.ts stays unaware.
 setAgentEmitter((event, data) => {
@@ -259,6 +331,7 @@ setAgentEmitter((event, data) => {
     const roster = data as ReturnType<typeof rosterPayload>;
     runsOnRoster(roster.agents);
     explainOnRoster(roster.agents);
+    syncWorkspacesNow();
   }
   if (event === "agent-item") {
     const d = data as { key: string; item: Parameters<typeof runsOnItem>[1]; replace?: boolean };
@@ -307,7 +380,7 @@ function livePayload() {
   // Sessions we drive are reported separately, with their live state; dropping
   // them here keeps them out of the external list and out of these counts.
   const owned = ownedSessionIds();
-  const sessions = readRegistry().filter((s) => !owned.has(s.sessionId));
+  const sessions = readRegistry().filter((s) => !owned.has(s.sessionId) && !s.cwd.startsWith(GOALS_DIR));
   return {
     sessions,
     counts: {
@@ -325,6 +398,7 @@ function scheduleLiveBroadcast() {
     liveTimer = null;
     broadcast("live", livePayload());
     notifyTick();
+    syncWorkspacesNow();
   }, 150);
 }
 
@@ -572,6 +646,10 @@ setInterval(async () => {
     // Cheap on a steady state: one readdir, and a title is only re-read from a
     // file whose bytes actually moved.
     if ((await reconcileArtifacts(db)) > 0) broadcast("artifacts", { at: Date.now() });
+    syncWorkspacesNow();
+    void refreshAutoGoals(getSettings().ui.workspaceAutoGoal !== false).catch((err) =>
+      console.error("[claude-dashboard] workspace goals failed:", err),
+    );
   } catch (err) {
     console.error("[claude-dashboard] index pass failed:", err);
   }
@@ -950,6 +1028,7 @@ const server = Bun.serve<PtyData, never>({
             prompt?: string;
             title?: string;
             templateId?: string;
+            workspace?: number;
           }
         | null;
       // A research session is the one case with nothing to point at: it gets the
@@ -968,7 +1047,186 @@ const server = Bun.serve<PtyData, never>({
         title: body?.title || undefined,
         templateId: body?.templateId || undefined,
       });
+      if (typeof body?.workspace === "number" && !research && workspaceHolds(body.workspace, cwd)) {
+        attachSession([key, body.resume].filter((x): x is string => !!x), body.workspace);
+      }
       return json({ key, agent: getAgent(key) });
+    }
+
+    if (p === "/api/workspaces" && req.method === "GET") return json(workspacesPayload());
+    if (p === "/api/workspaces" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { goal?: string; folder?: string } | null;
+      const folder = expand(body?.folder?.trim() ?? "");
+      if (!folder) return json({ error: "folder is required" }, 400);
+      if (!existsSync(folder)) return json({ error: `no such directory: ${folder}` }, 400);
+      return json({ workspace: await createWorkspace({ goal: body?.goal ?? "", folder }) });
+    }
+    if (p === "/api/tasks" && req.method === "GET") return json(tasksPayload());
+    if (p === "/api/tasks" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as TaskAdd | null;
+      const cwd = body?.cwd?.trim() ? expand(body.cwd.trim()) : undefined;
+      const task = await addTask({ ...(body ?? {}), cwd });
+      return "error" in task ? json(task, 400) : json({ task, project: tasksPayload().projects.find((x) => x.id === task.projectId)?.name ?? null });
+    }
+    if (p === "/api/task-projects" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { name?: string } | null;
+      const project = addTaskProject(body?.name ?? "");
+      return "error" in project ? json(project, 400) : json({ project });
+    }
+    if (p === "/api/task-projects/reorder" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { ids?: number[] } | null;
+      reorderTaskProjects(Array.isArray(body?.ids) ? body.ids.filter((x) => Number.isInteger(x)) : []);
+      return json({ ok: true });
+    }
+    if (p.startsWith("/api/task-projects/") && req.method === "POST") {
+      const [rawId, action] = p.slice("/api/task-projects/".length).split("/");
+      const id = Number(rawId);
+      const body = (await req.json().catch(() => null)) as
+        | { name?: string; color?: string | null; folder?: string | null }
+        | null;
+      if (action === "repository") {
+        const folder = typeof body?.folder === "string" && body.folder.trim() ? expand(body.folder.trim()) : null;
+        const tied = await tieTaskProject(id, folder);
+        return !tied ? json({ error: "no such project" }, 404) : "error" in tied ? json(tied, 400) : json({ project: tied });
+      }
+      if (action === "delete") {
+        const r = deleteTaskProject(id);
+        return r === true ? json({ ok: true }) : r === false ? json({ error: "no such project" }, 404) : json(r, 400);
+      }
+      const project = updateTaskProject(id, {
+        ...(typeof body?.name === "string" ? { name: body.name } : {}),
+        ...(body?.color !== undefined ? { color: body.color } : {}),
+      });
+      return !project ? json({ error: "no such project" }, 404) : "error" in project ? json(project, 400) : json({ project });
+    }
+    if (p.startsWith("/api/tasks/") && req.method === "POST") {
+      const [rawId, action] = p.slice("/api/tasks/".length).split("/");
+      const id = Number(rawId);
+      if (!Number.isInteger(id)) return json({ error: "no such task" }, 404);
+      const body = (await req.json().catch(() => null)) as (TaskPatch & { workspaceId?: number | null }) | null;
+      if (action === "complete" || action === "reopen") {
+        const task = action === "complete" ? completeTask(id) : reopenTask(id);
+        return task ? json({ task }) : json({ error: "no such task" }, 404);
+      }
+      if (action === "delete") {
+        if (!deleteTask(id)) return json({ error: "no such task" }, 404);
+        broadcast("workspaces", workspacesPayload());
+        return json({ ok: true });
+      }
+      if (action === "workspace") {
+        const task = setTaskWorkspace(id, body?.workspaceId ?? null);
+        return !task ? json({ error: "no such task" }, 404) : "error" in task ? json(task, 404) : json({ task });
+      }
+      if (action) return json({ error: `this daemon does not know the task action "${action}" — restart it to pick up newer code` }, 404);
+      const task = updateTask(id, body ?? {});
+      return !task ? json({ error: "no such task" }, 404) : "error" in task ? json(task, 400) : json({ task });
+    }
+
+    if (p === "/api/workspaces/reorder" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as
+        | { ids?: number[]; projects?: string[]; sessions?: string[][] }
+        | null;
+      if (Array.isArray(body?.sessions)) {
+        reorderSessions(body.sessions.filter(Array.isArray).map((g) => g.filter((x) => typeof x === "string")));
+      }
+      if (Array.isArray(body?.ids)) reorderWorkspaces(body.ids.filter((x) => Number.isInteger(x)));
+      if (Array.isArray(body?.projects)) reorderProjects(body.projects.filter((x) => typeof x === "string"));
+      return json({ ok: true });
+    }
+    if (p === "/api/workspaces/project-delete" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { key?: string } | null;
+      const key = body?.key ?? "";
+      const held = new Set(workspacesOfProject(key).flatMap((w) => sessionsOfWorkspace(w.id)));
+      for (const a of listAgents()) {
+        if (held.has(a.key) || (a.sessionId && held.has(a.sessionId))) await endSession(a.key);
+      }
+      return deleteProject(key) ? json({ ok: true }) : json({ error: "no such project" }, 404);
+    }
+    if (p.startsWith("/api/workspaces/") && req.method === "POST") {
+      const [rawId, action] = p.slice("/api/workspaces/".length).split("/");
+      const id = Number(rawId);
+      if (!Number.isInteger(id)) return json({ error: "not found" }, 404);
+      const body = (await req.json().catch(() => null)) as
+        | { goal?: string; ids?: string[]; worktree?: boolean }
+        | null;
+      const endSessionsOf = async () => {
+        const held = new Set(sessionsOfWorkspace(id));
+        for (const a of listAgents()) {
+          if (held.has(a.key) || (a.sessionId && held.has(a.sessionId))) await endSession(a.key);
+        }
+      };
+      if (action === "delete") {
+        const w = getWorkspace(id);
+        if (!w) return json({ error: "not found" }, 404);
+        if (body?.worktree !== true) {
+          await endSessionsOf();
+          deleteWorkspace(id);
+          return json({ ok: true, worktreeRemoved: false });
+        }
+        /**
+         * Everything that can refuse is checked before a session is ended, so a
+         * delete that cannot finish leaves the workspace exactly as it was.
+         */
+        const st = await repoStatus(w.folder, true);
+        if (!st.isRepo || !st.isLinkedWorktree || !st.mainRoot) {
+          return json({ error: "this workspace lives in the main checkout, not a worktree, so there is nothing to remove" }, 409);
+        }
+        const shared = workspacesSharingFolder(id);
+        if (shared.length > 0) {
+          return json({ error: `${shared.length} other workspace${shared.length === 1 ? " uses" : "s use"} this worktree` }, 409);
+        }
+        const dirty = st.counts.staged + st.counts.unstaged + st.counts.untracked;
+        if (dirty > 0) {
+          return json(
+            { error: `the worktree has ${dirty} uncommitted change${dirty === 1 ? "" : "s"} — commit or discard them first` },
+            409,
+          );
+        }
+        const terminals = livePayload().sessions.filter(
+          (s) => s.alive && (s.cwd === w.folder || s.cwd.startsWith(`${w.folder}/`)),
+        );
+        if (terminals.length > 0) {
+          return json(
+            { error: `${terminals.length} terminal session${terminals.length === 1 ? " is" : "s are"} still running in that worktree` },
+            409,
+          );
+        }
+        await endSessionsOf();
+        const others = agentsUnder(w.folder);
+        if (others.length > 0) {
+          return json({ error: `${others.length} session${others.length === 1 ? " is" : "s are"} still running in that worktree` }, 409);
+        }
+        const r = await gitWorktreeRemove(st.mainRoot, w.folder);
+        if (!r.ok) return json({ error: [r.error, r.hint].filter(Boolean).join(" — ") || "could not remove the worktree" }, 409);
+        broadcast("git", {
+          root: r.status?.root ?? null,
+          branch: r.status?.branch ?? null,
+          repoKey: r.status?.commonDir ?? null,
+        });
+        broadcast("worktrees", { repoKey: r.status?.commonDir ?? null, worktrees: r.worktrees });
+        deleteWorkspace(id);
+        return json({ ok: true, worktreeRemoved: true });
+      }
+      if (!action) {
+        const w = updateWorkspace(id, { goal: typeof body?.goal === "string" ? body.goal : undefined });
+        return w ? json({ workspace: w }) : json({ error: "not found" }, 404);
+      }
+      if (action === "attach") {
+        const ids = Array.isArray(body?.ids) ? body.ids.filter((x) => typeof x === "string" && x) : [];
+        return attachSession(ids, id) ? json({ ok: true }) : json({ error: "not found" }, 404);
+      }
+      if (action === "resume") {
+        const w = setWorkspaceStatus(id, "active");
+        return w ? json({ workspace: w }) : json({ error: "not found" }, 404);
+      }
+      if (action === "archive") {
+        await endSessionsOf();
+        if ((body as { completeTasks?: boolean } | null)?.completeTasks) completeWorkspaceTasks(id);
+        const w = setWorkspaceStatus(id, "archived");
+        tasksChanged();
+        return w ? json({ workspace: w }) : json({ error: "not found" }, 404);
+      }
+      return json({ error: `this daemon does not know the workspace action "${action}" — restart it to pick up newer code` }, 404);
     }
 
     if (p === "/api/commands" && req.method === "GET") return json({ commands: getKnownCommands() });

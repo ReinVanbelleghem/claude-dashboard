@@ -283,6 +283,8 @@ export type AgentSummary = {
   queued: number;
   /** The template this session was started from, if any. */
   templateId?: string | null;
+  /** A research session: the scratch directory, no project. */
+  research?: boolean;
 };
 
 /**
@@ -358,7 +360,8 @@ export type NotifyEventKind =
   | "turnComplete"
   | "sessionError"
   | "prWatch"
-  | "prReviewRequested";
+  | "prReviewRequested"
+  | "taskDue";
 
 /** What one session has been silenced about, and what to call it in Settings. */
 export type SessionMute = { kinds: NotifyEventKind[]; label: string };
@@ -392,6 +395,9 @@ export type Settings = {
     hiddenPages?: string[];
     pageOrder?: string[];
     sidebarCollapsed?: boolean;
+    footerPages?: string[];
+    workspaceAutoGoal?: boolean;
+    taskDigestTime?: string;
     appName?: string;
     /** Where a plain click on a session card lands. */
     clickOpensIn: "drawer" | "page" | "tile";
@@ -1166,6 +1172,8 @@ export const agentApi = {
     prompt?: string;
     title?: string;
     templateId?: string;
+    /** File the session in this workspace instead of letting the daemon place it by folder. */
+    workspace?: number;
   }) => post<{ key: string }>("/api/agents", opts),
   /** Slash commands the last session reported, for prompts written before a session exists. */
   commands: () => get<{ commands: SlashCommand[] }>("/api/commands"),
@@ -1185,6 +1193,50 @@ export const agentApi = {
   mode: (key: string, permissionMode: PermissionMode) => post(`/api/agents/${key}/mode`, { permissionMode }),
   rename: (key: string, title: string) => post(`/api/agents/${key}/rename`, { title }),
   stop: (key: string) => fetch(`/api/agents/${key}`, { method: "DELETE" }),
+};
+
+import type { Workspace, WorkspacesPayload } from "../shared/workspaces.ts";
+export type { Workspace, WorkspacesPayload };
+
+export const workspaceApi = {
+  list: () => get<WorkspacesPayload>("/api/workspaces"),
+  create: (opts: { goal: string; folder: string }) => post<{ workspace: Workspace }>("/api/workspaces", opts),
+  rename: (id: number, goal: string) => post(`/api/workspaces/${id}`, { goal }),
+  resume: (id: number) => post(`/api/workspaces/${id}/resume`),
+  archive: (id: number, opts: { completeTasks?: boolean } = {}) => post(`/api/workspaces/${id}/archive`, opts),
+  /** Forget the workspace for good, ending its sessions; `worktree` also removes the checkout it lives in. */
+  remove: (id: number, opts: { worktree: boolean }) =>
+    post<{ ok: true; worktreeRemoved: boolean }>(`/api/workspaces/${id}/delete`, opts),
+  /** Workspace ids in their new order within a project, project keys in theirs, sessions (every id each has) in theirs. */
+  reorder: (order: { ids?: number[]; projects?: string[]; sessions?: string[][] }) =>
+    post("/api/workspaces/reorder", order),
+  /** Take a project and all its workspaces off the sidebar, ending their sessions. Nothing on disk changes. */
+  removeProject: (key: string) => post("/api/workspaces/project-delete", { key }),
+  /** Move a session, under every name it has, into another workspace. */
+  attach: (id: number, ids: string[]) => post(`/api/workspaces/${id}/attach`, { ids }),
+};
+
+import type { Task, TaskAdd, TaskPatch, TaskProject, TasksPayload } from "../shared/tasks.ts";
+export type { Task, TaskProject, TasksPayload };
+
+export const taskApi = {
+  list: () => get<TasksPayload>("/api/tasks"),
+  add: (input: TaskAdd) => post<{ task: Task; project: string | null }>("/api/tasks", input),
+  update: (id: number, patch: TaskPatch) => post<{ task: Task }>(`/api/tasks/${id}`, patch),
+  complete: (id: number) => post(`/api/tasks/${id}/complete`),
+  reopen: (id: number) => post(`/api/tasks/${id}/reopen`),
+  remove: (id: number) => post(`/api/tasks/${id}/delete`),
+  /** Tie the task to the workspace working on it, or untie it with null. */
+  link: (id: number, workspaceId: number | null) => post(`/api/tasks/${id}/workspace`, { workspaceId }),
+  addProject: (name: string) => post<{ project: TaskProject }>("/api/task-projects", { name }),
+  updateProject: (id: number, patch: { name?: string; color?: string | null }) =>
+    post<{ project: TaskProject }>(`/api/task-projects/${id}`, patch),
+  /** Tie the project to the repository this folder is in, so tasks added from there file under it; null unties. */
+  tieProject: (id: number, folder: string | null) =>
+    post<{ project: TaskProject }>(`/api/task-projects/${id}/repository`, { folder }),
+  removeProject: (id: number) => post(`/api/task-projects/${id}/delete`),
+  /** Project ids in their new order. The Inbox always stays first. */
+  reorderProjects: (ids: number[]) => post("/api/task-projects/reorder", { ids }),
 };
 
 /**

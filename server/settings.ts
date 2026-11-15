@@ -25,7 +25,8 @@ export type NotifyEventKind =
   | "turnComplete"
   | "sessionError"
   | "prWatch"
-  | "prReviewRequested";
+  | "prReviewRequested"
+  | "taskDue";
 
 /**
  * One session's silence, keyed by its transcript id — or by the agent key while it
@@ -140,8 +141,14 @@ export type Settings = {
     hiddenPages: string[];
     /** Dock pages in display order, by key. Empty means the registry order. */
     pageOrder: string[];
+    /** Pages shown as icons in the sidebar's bottom bar rather than as rows in the main navigation. */
+    footerPages: string[];
     /** The sidebar as an icon rail rather than with labels. */
     sidebarCollapsed: boolean;
+    /** Name a goal-less workspace from its first prompt with one small-model call. */
+    workspaceAutoGoal: boolean;
+    /** Local HH:MM from which the once-a-day "tasks for today" banner may fire. Empty turns it off. */
+    taskDigestTime: string;
     /** What the sidebar, breadcrumb and window title call this app. */
     appName: string;
     clickOpensIn: "drawer" | "page" | "tile";
@@ -287,6 +294,7 @@ const DEFAULTS: Settings = {
       sessionError: true,
       prWatch: true,
       prReviewRequested: true,
+      taskDue: true,
     },
     channels: { native: true, browser: true, googleChat: false },
     googleChatWebhook: "",
@@ -306,7 +314,10 @@ const DEFAULTS: Settings = {
     artifactsRoot: "",
     hiddenPages: [],
     pageOrder: [],
+    footerPages: ["settings"],
     sidebarCollapsed: false,
+    workspaceAutoGoal: true,
+    taskDigestTime: "09:00",
     appName: "Claude Dashboard",
     clickOpensIn: "drawer",
     cmdClickOpensIn: "page",

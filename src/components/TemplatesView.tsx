@@ -108,9 +108,6 @@ export function TemplatesView({
   return (
     <div className="templates">
       <div className="services-head">
-        <div>
-          <h1>Templates</h1>
-        </div>
         <div className="services-tools">
           <button
             className="icon-btn"

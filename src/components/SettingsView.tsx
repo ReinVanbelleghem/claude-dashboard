@@ -14,7 +14,7 @@ import { FolderField } from "./FolderPicker.tsx";
 import { CheckIcon, GripIcon, TrashIcon } from "./Icons.tsx";
 import { McpPanel } from "./McpPanel.tsx";
 import { OpenTargetPicker } from "./OpenTargetPicker.tsx";
-import { orderedPages } from "../pages.ts";
+import { footerPagesOf, orderedPages, type PageDef } from "../pages.ts";
 import { useSortable } from "../useSortable.ts";
 import { ServicesSettings } from "./services/ServicesSettings.tsx";
 import { Select } from "./Select.tsx";
@@ -43,6 +43,7 @@ const MUTE_KIND_LABEL: Record<NotifyEventKind, string> = {
   sessionError: "Error",
   prWatch: "PR activity",
   prReviewRequested: "Review requested",
+  taskDue: "Task due",
 };
 
 const EVENTS: { kind: NotifyEventKind; label: string; help: string }[] = [
@@ -75,6 +76,11 @@ const EVENTS: { kind: NotifyEventKind; label: string; help: string }[] = [
     kind: "prReviewRequested",
     label: "Asked to review a pull request",
     help: "Someone requested your review, personally or through one of your teams. Once per request; what else happens is set under Reviews → Watching.",
+  },
+  {
+    kind: "taskDue",
+    label: "A task is due",
+    help: "A task with a time, when that time comes, and once a morning a count of what is due today.",
   },
 ];
 
@@ -250,7 +256,9 @@ export function SettingsView({
         {section === "pages" && (
           <div className="settings-section">
             <h3>Pages</h3>
-            <p className="hint">Drag to reorder. A page turned off leaves the sidebar and the palette; nothing is deleted.</p>
+            <p className="hint">
+              Drag to reorder within a list. A page turned off leaves the sidebar and the palette; nothing is deleted.
+            </p>
             <PagesList settings={settings} save={save} />
             <p className="hint">
               <b>Live</b> and <b>Settings</b> stay put: one is where a hidden page sends you,
@@ -528,6 +536,20 @@ export function SettingsView({
             <p className="hint">
               Every card also carries an ↗ that always opens the full page, whatever these are set to.
             </p>
+            <label className="set-row">
+              <input
+                type="checkbox"
+                checked={settings.ui.workspaceAutoGoal !== false}
+                onChange={(e) => save({ ui: { workspaceAutoGoal: e.target.checked } })}
+              />
+              <span className="set-text">
+                <span className="set-label">Name workspaces automatically</span>
+                <span className="set-help">
+                  A workspace nobody gave a goal gets one from its first prompt, with one small-model call. Off, it shows
+                  the folder name until you type one.
+                </span>
+              </span>
+            </label>
             <div className="open-target-grid">
               <label className="field">
                 <span>Click</span>
@@ -813,6 +835,53 @@ export function SettingsView({
 
 function PagesList({ settings, save }: { settings: Settings; save: (patch: SettingsPatch) => void }) {
   const pages = orderedPages(settings.ui.pageOrder);
+  const inFooter = footerPagesOf(settings.ui.footerPages);
+  const main = pages.filter((p) => !inFooter.has(p.key));
+  const footer = pages.filter((p) => inFooter.has(p.key));
+  const saveLists = (mainKeys: string[], footerKeys: string[]) =>
+    save({ ui: { pageOrder: [...mainKeys, ...footerKeys], footerPages: footerKeys } });
+  const keys = (list: PageDef[]) => list.map((p) => p.key as string);
+  return (
+    <>
+      <h4 className="set-subhead">Main navigation</h4>
+      <p className="hint">Rows with a label, at the top of the sidebar.</p>
+      <PageRows
+        pages={main}
+        settings={settings}
+        save={save}
+        moveLabel="Move to bottom bar"
+        onReorder={(next) => saveLists(next, keys(footer))}
+        onMoveAcross={(key) => saveLists(keys(main).filter((k) => k !== key), [...keys(footer), key])}
+      />
+      <h4 className="set-subhead">Bottom bar</h4>
+      <p className="hint">Icons only, at the foot of the sidebar. Settings always sits at the far end.</p>
+      <PageRows
+        pages={footer}
+        settings={settings}
+        save={save}
+        moveLabel="Move to main navigation"
+        onReorder={(next) => saveLists(keys(main), next)}
+        onMoveAcross={(key) => saveLists([...keys(main), key], keys(footer).filter((k) => k !== key))}
+      />
+    </>
+  );
+}
+
+function PageRows({
+  pages,
+  settings,
+  save,
+  moveLabel,
+  onReorder,
+  onMoveAcross,
+}: {
+  pages: PageDef[];
+  settings: Settings;
+  save: (patch: SettingsPatch) => void;
+  moveLabel: string;
+  onReorder: (keys: string[]) => void;
+  onMoveAcross: (key: string) => void;
+}) {
   const hidden = settings.ui.hiddenPages ?? [];
   const listRef = useRef<HTMLDivElement>(null);
   const drag = useSortable({
@@ -820,12 +889,13 @@ function PagesList({ settings, save }: { settings: Settings; save: (patch: Setti
     listRef,
     itemSelector: ".set-row",
     onMove: (from, to) => {
-      const next = pages.map((p) => p.key);
+      const next = pages.map((p) => p.key as string);
       const [moved] = next.splice(from, 1);
       next.splice(to, 0, moved);
-      save({ ui: { pageOrder: next } });
+      onReorder(next);
     },
   });
+  if (pages.length === 0) return <p className="hint set-empty">Nothing here yet.</p>;
   return (
     <div className="set-group" ref={listRef}>
       {pages.map((p, i) => (
@@ -859,6 +929,16 @@ function PagesList({ settings, save }: { settings: Settings; save: (patch: Setti
               {p.fixed ? " · always on" : ""}
             </span>
           </span>
+          <button
+            type="button"
+            className="icon-btn tiny set-row-move"
+            onClick={(e) => {
+              e.preventDefault();
+              onMoveAcross(p.key);
+            }}
+          >
+            {moveLabel}
+          </button>
         </label>
       ))}
     </div>
