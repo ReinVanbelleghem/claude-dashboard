@@ -13,6 +13,7 @@ import {
   type Recurrence,
 } from "../shared/taskDates.ts";
 import { COMPLETED_SHOWN_MS, TASK_COLORS, type Task, type TaskAdd, type TaskPatch, type TaskProject, type TasksPayload } from "../shared/tasks.ts";
+import { cleanLinks, extractUrls } from "../shared/taskLinks.ts";
 import { repoStatus } from "./git.ts";
 
 /**
@@ -47,6 +48,7 @@ type TaskRow = {
   created_at: number;
   reminded_for: string | null;
   workspace_id: number | null;
+  links: string | null;
 };
 
 type ProjectRow = { id: number; name: string; color: string | null; sort: number; is_inbox: number; repo_key: string | null };
@@ -107,6 +109,14 @@ export function initTasks(database: Database, emitter: (payload: TasksPayload) =
       db.exec("UPDATE tasks SET workspace_id = (SELECT w.id FROM workspaces w WHERE w.linked_task_id = tasks.id LIMIT 1)");
     } catch {
       // No workspaces table, or one that never had a linked task: nothing to carry over.
+    }
+  }
+  if (!taskCols.some((c) => c.name === "links")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN links TEXT");
+    const set = db.query("UPDATE tasks SET links = ? WHERE id = ?");
+    for (const r of db.query<{ id: number; content: string; description: string }, []>("SELECT id, content, description FROM tasks").all()) {
+      const found = cleanLinks([...extractUrls(r.description), ...extractUrls(r.content)]);
+      if (found.length > 0) set.run(JSON.stringify(found), r.id);
     }
   }
   if (!db.query("SELECT 1 FROM task_projects WHERE is_inbox = 1").get()) {
@@ -170,6 +180,7 @@ const toTask = (r: TaskRow, live: Set<number>): Task => ({
   dueString: r.due_string,
   recurrence: parseJson<Recurrence | null>(r.recurrence, null),
   labels: parseJson<string[]>(r.labels, []),
+  links: parseJson<string[]>(r.links, []),
   order: r.sort,
   completedAt: r.completed_at,
   createdAt: r.created_at,
@@ -246,7 +257,13 @@ const dueColumns = (due: Due | null) => ({
 
 export async function addTask(input: TaskAdd, now = new Date()): Promise<Task | { error: string }> {
   const quick = input.text?.trim() ? parseQuickAdd(input.text.trim(), now) : null;
-  const content = (input.content ?? quick?.content ?? "").trim();
+  const typed = (input.content ?? quick?.content ?? "").trim();
+  const links = cleanLinks([...(input.links ?? []), ...extractUrls(typed), ...extractUrls(input.description)]);
+  const bare = extractUrls(typed)
+    .reduce((text, url) => text.replace(url, " "), typed)
+    .replace(/\s+/g, " ")
+    .trim();
+  const content = bare || typed;
   if (!content) return { error: "a task needs some text" };
   const due = input.due?.trim() ? parseDue(input.due.trim(), now) : (quick?.due ?? null);
   if (input.due?.trim() && !due) return { error: `could not read "${input.due}" as a date` };
@@ -270,9 +287,9 @@ export async function addTask(input: TaskAdd, now = new Date()): Promise<Task | 
   const sort = (db.query<{ n: number | null }, [number]>("SELECT MAX(sort) AS n FROM tasks WHERE project_id = ?").get(project.id)?.n ?? 0) + 1;
   const d = dueColumns(due);
   const id = db
-    .query<{ id: number }, [number, string, string, number, string | null, string | null, string | null, string | null, string, number, string, number, number, number | null]>(
-      `INSERT INTO tasks (project_id, content, description, priority, due_date, due_time, due_string, recurrence, labels, sort, created_by_kind, created_at, updated_at, workspace_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    .query<{ id: number }, [number, string, string, number, string | null, string | null, string | null, string | null, string, number, string, number, number, number | null, string]>(
+      `INSERT INTO tasks (project_id, content, description, priority, due_date, due_time, due_string, recurrence, labels, sort, created_by_kind, created_at, updated_at, workspace_id, links)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     )
     .get(
       project.id,
@@ -289,6 +306,7 @@ export async function addTask(input: TaskAdd, now = new Date()): Promise<Task | 
       at,
       at,
       workspaceId,
+      JSON.stringify(links),
     )!.id;
   tasksChanged();
   return getTask(id)!;
@@ -315,6 +333,7 @@ export function updateTask(id: number, patch: TaskPatch, now = new Date()): Task
     if (text && !due) return { error: `could not read "${text}" as a date` };
     Object.assign(set, dueColumns(due), { reminded_for: null });
   }
+  if (patch.links !== undefined) set.links = JSON.stringify(cleanLinks(patch.links));
   if (patch.dueDate !== undefined) {
     if (patch.dueDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(patch.dueDate)) return { error: "a date looks like 2026-11-20" };
     Object.assign(set, { due_date: patch.dueDate, due_string: null, reminded_for: null });

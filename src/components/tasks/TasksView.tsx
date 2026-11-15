@@ -1,17 +1,20 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { taskApi, type Task, type TaskProject, type TasksPayload, type Workspace } from "../../api.ts";
 import { addDays, describeRecurrence, localDay, parseQuickAdd, weekdayOf } from "../../../shared/taskDates.ts";
+import { cleanLinks, linkInfo, MAX_TASK_LINKS } from "../../../shared/taskLinks.ts";
 import { TASK_COLORS, type TaskColor } from "../../../shared/tasks.ts";
 import { TitleEditInput } from "../EditableTitle.tsx";
 import { FolderPicker } from "../FolderPicker.tsx";
 import { useSortable, type Sortable } from "../../useSortable.ts";
 import { Popover } from "../Popover.tsx";
+import { ServiceMark } from "./ServiceMark.tsx";
 import { workspaceTitle } from "../../../shared/workspaces.ts";
 import {
   CalendarIcon,
   CheckIcon,
   ChevronIcon,
   ClockIcon,
+  ExternalIcon,
   GitIcon,
   InboxIcon,
   MoreVerticalIcon,
@@ -21,6 +24,7 @@ import {
   TasksIcon,
   TrashIcon,
   WorktreeIcon,
+  XIcon,
 } from "../Icons.tsx";
 
 type View = { kind: "today" } | { kind: "upcoming" } | { kind: "project"; id: number };
@@ -91,7 +95,10 @@ export function TasksView({
 
   const today = localDay(new Date());
   const projects = payload?.projects ?? [];
-  const tasks = payload?.tasks ?? [];
+  const tasks = useMemo(
+    () => (payload?.tasks ?? []).map((t) => (Array.isArray(t.links) ? t : { ...t, links: [] })),
+    [payload],
+  );
   const open = useMemo(() => tasks.filter((t) => t.completedAt === null), [tasks]);
   const projectName = (id: number) => projects.find((p) => p.id === id)?.name ?? "";
   const projectColor = (id: number) => colorOf(projects.find((p) => p.id === id));
@@ -595,11 +602,13 @@ function TaskRow({
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [dueFlyout, setDueFlyout] = useState<{ left: boolean } | null>(null);
   const [wsFlyout, setWsFlyout] = useState<{ left: boolean } | null>(null);
+  const [linksFlyout, setLinksFlyout] = useState<{ left: boolean } | null>(null);
   const choices = workspaces.filter((w) => w.status === "active" && (w.explicit || w.goal.trim() !== "" || w.id === t.workspaceId));
   const closeMenu = () => {
     setMenuAnchor(null);
     setDueFlyout(null);
     setWsFlyout(null);
+    setLinksFlyout(null);
   };
   const [renaming, setRenaming] = useState(false);
   const body = useRef<HTMLDivElement>(null);
@@ -642,7 +651,7 @@ function TaskRow({
             {t.content}
           </span>
         )}
-        {(when || t.recurrence || project || t.labels.length > 0 || !done) && (
+        {(when || t.recurrence || project || t.labels.length > 0 || t.links.length > 0 || !done) && (
           <span className="task-meta">
             {when && (
               <button
@@ -672,6 +681,23 @@ function TaskRow({
                 @{l}
               </span>
             ))}
+            {t.links.map((url) => {
+              const info = linkInfo(url);
+              return (
+                <a
+                  key={url}
+                  className={`task-chip task-link svc-${info.service}`}
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={`${info.kind}\n${url}`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ServiceMark service={info.service} />
+                  {info.label}
+                </a>
+              );
+            })}
             {!when && !done && (
               <button className="task-chip due add" title="Set when this is due" onClick={(e) => setDueAnchor(e.currentTarget)}>
                 <CalendarIcon />
@@ -746,6 +772,7 @@ function TaskRow({
               aria-expanded={!!dueFlyout}
               onClick={(e) => {
                 setWsFlyout(null);
+                setLinksFlyout(null);
                 if (dueFlyout) return setDueFlyout(null);
                 const r = e.currentTarget.getBoundingClientRect();
                 setDueFlyout({ left: r.right + 270 > window.innerWidth });
@@ -771,6 +798,7 @@ function TaskRow({
               aria-expanded={!!wsFlyout}
               onClick={(e) => {
                 setDueFlyout(null);
+                setLinksFlyout(null);
                 if (wsFlyout) return setWsFlyout(null);
                 const r = e.currentTarget.getBoundingClientRect();
                 setWsFlyout({ left: r.right + 290 > window.innerWidth });
@@ -835,6 +863,32 @@ function TaskRow({
                     </button>
                   </>
                 )}
+              </DueFlyout>
+            )}
+          </div>
+          <div className={`task-sub-row${linksFlyout ? " open" : ""}`}>
+            <button
+              role="menuitem"
+              aria-haspopup="dialog"
+              aria-expanded={!!linksFlyout}
+              onClick={(e) => {
+                setDueFlyout(null);
+                setWsFlyout(null);
+                if (linksFlyout) return setLinksFlyout(null);
+                const r = e.currentTarget.getBoundingClientRect();
+                setLinksFlyout({ left: r.right + 320 > window.innerWidth });
+              }}
+            >
+              <ExternalIcon />
+              <span>Links</span>
+              <small>{t.links.length || "none"}</small>
+              <span className="task-sub-caret" aria-hidden>
+                ›
+              </span>
+            </button>
+            {linksFlyout && (
+              <DueFlyout left={linksFlyout.left} className="task-links">
+                <LinkFields task={t} onError={onError} />
               </DueFlyout>
             )}
           </div>
@@ -917,6 +971,59 @@ function DuePicker({
     <Popover anchor={anchor} onClose={onClose} className="due-picker" role="dialog" align={align}>
       <DueFields task={task} today={today} onClose={onClose} />
     </Popover>
+  );
+}
+
+/** A task's links: each opens, each can be removed, and a pasted address adds one. */
+function LinkFields({ task: t, onError }: { task: Task; onError: (message: string | null) => void }) {
+  const [draft, setDraft] = useState("");
+  const [note, setNote] = useState<string | null>(null);
+  const save = (links: string[]) => void taskApi.update(t.id, { links }).catch((e: Error) => onError(e.message));
+  const add = () => {
+    const [url] = cleanLinks([draft.trim().replace(/^(?!https?:\/\/)/, "https://")]);
+    if (!url) return setNote("That does not look like a web address.");
+    if (t.links.includes(url)) return setNote("That link is already on the task.");
+    if (t.links.length >= MAX_TASK_LINKS) return setNote(`A task holds up to ${MAX_TASK_LINKS} links.`);
+    setNote(null);
+    setDraft("");
+    save([...t.links, url]);
+  };
+  return (
+    <>
+      {t.links.length === 0 && <p className="task-links-none">No links yet. Paste a pull request, a Slack thread or a page.</p>}
+      {t.links.map((url) => {
+        const info = linkInfo(url);
+        return (
+          <div key={url} className="task-links-row">
+            <a href={url} target="_blank" rel="noreferrer" title={url}>
+              <ServiceMark service={info.service} />
+              <span>{info.label}</span>
+              <small>{info.kind}</small>
+            </a>
+            <button title="Remove this link" aria-label={`Remove ${info.label}`} onClick={() => save(t.links.filter((l) => l !== url))}>
+              <XIcon />
+            </button>
+          </div>
+        );
+      })}
+      <label className="due-picker-field typed">
+        <span>Add a link</span>
+        <input
+          value={draft}
+          placeholder="https://github.com/…"
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setNote(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || !draft.trim()) return;
+            e.preventDefault();
+            add();
+          }}
+        />
+      </label>
+      {note && <p className="due-picker-error">{note}</p>}
+    </>
   );
 }
 

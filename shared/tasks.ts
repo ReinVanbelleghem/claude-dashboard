@@ -43,6 +43,8 @@ export type Task = {
   dueString: string | null;
   recurrence: Recurrence | null;
   labels: string[];
+  /** Where the work lives: a pull request, a thread, a page. Shown as the service's mark. */
+  links: string[];
   order: number;
   completedAt: number | null;
   createdAt: number;
@@ -74,6 +76,8 @@ export type TaskAdd = {
   cwd?: string;
   /** The workspace the task belongs to. */
   workspaceId?: number;
+  /** Addresses the task is about. Any found in the text or the description are added too. */
+  links?: string[];
   /** "agent" when a session added it on your behalf. */
   by?: "user" | "agent";
 };
@@ -89,6 +93,8 @@ export type TaskPatch = {
   dueDate?: string | null;
   /** A picked time (HH:MM) or null for an all-day task. */
   dueTime?: string | null;
+  /** The task's links, replacing the ones it had. */
+  links?: string[];
 };
 
 export const COMPLETED_SHOWN_MS = 7 * 86_400_000;
