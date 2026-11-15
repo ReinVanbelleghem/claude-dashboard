@@ -2,8 +2,8 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { EventDraft, Proposal } from "../shared/calendar.ts";
-import { createGoogleEvent } from "./google.ts";
-import { createMacEvent } from "./macCalendar.ts";
+import { createEvent } from "./calendarSources.ts";
+import { parseGoogleCalendarId } from "./google.ts";
 import { DATA_DIR } from "./paths.ts";
 
 const STORE_PATH = join(DATA_DIR, "calendar-proposals.json");
@@ -54,8 +54,7 @@ export async function approveProposal(id: string): Promise<{ viaGoogle: boolean 
   const proposal = all().find((p) => p.id === id);
   if (!proposal) return null;
   const { id: _id, createdAt: _createdAt, ...draft } = proposal;
-  if (draft.google) await createGoogleEvent(draft);
-  else await createMacEvent(draft);
+  await createEvent(draft);
   discardProposal(id);
-  return { viaGoogle: draft.google !== undefined };
+  return { viaGoogle: draft.google !== undefined || parseGoogleCalendarId(draft.calendarId) !== null };
 }

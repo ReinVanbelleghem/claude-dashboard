@@ -4,9 +4,10 @@ Claude Dashboard runs entirely on your own computer. It has no server of its own
 
 ## Google Calendar
 
-Connecting a Google account is optional. When you connect one, the dashboard asks Google for two permissions:
+Connecting a Google account is optional. When you connect one, the dashboard asks Google for three permissions:
 
-- **Create and change events on your calendars**, used only when you add an event with guests, a room or a Google Meet link, or change who is invited to an event.
+- **See the list of your calendars**, used to show that account's calendars and their events directly from Google.
+- **See, create and change events on your calendars**, used to show your events and to add, move, edit and delete them when you do so in the dashboard.
 - **See when people and rooms are free or busy**, used only to show availability for the guests and rooms you pick while creating an event.
 
 What happens with that access:

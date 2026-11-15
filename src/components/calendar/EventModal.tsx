@@ -128,7 +128,7 @@ export function EventModal({
   );
 }
 
-function SpanChoice({ span, onSpan }: { span: Span; onSpan: (s: Span) => void }) {
+function SpanChoice({ span, onSpan, wholeSeries = false }: { span: Span; onSpan: (s: Span) => void; wholeSeries?: boolean }) {
   return (
     <div className="field">
       <span>This event repeats</span>
@@ -138,7 +138,7 @@ function SpanChoice({ span, onSpan }: { span: Span; onSpan: (s: Span) => void })
         onChange={(v) => onSpan(v as Span)}
         options={[
           { value: "this", label: "Only this one" },
-          { value: "future", label: "This and all following" },
+          { value: "future", label: wholeSeries ? "The whole series" : "This and all following" },
         ]}
       />
     </div>
@@ -167,7 +167,7 @@ function EventDetails({
 
   const remove = () => {
     setBusy(true);
-    onDelete({ id: event.id, occurrence: event.occurrence, span }).catch((e: Error) => {
+    onDelete({ id: event.id, occurrence: event.occurrence, span, calendarId: event.calendarId, seriesId: event.seriesId }).catch((e: Error) => {
       setError(e.message);
       setBusy(false);
     });
@@ -258,18 +258,12 @@ function EventDetails({
           </section>
         )}
 
-        {confirming && event.recurring && <SpanChoice span={span} onSpan={setSpan} />}
+        {confirming && event.recurring && <SpanChoice span={span} onSpan={setSpan} wholeSeries={event.calendarId.startsWith("g:")} />}
         {error && <p className="cal-error">{error}</p>}
       </div>
 
       <div className="cal-detail-foot">
-        {event.syncing && (
-          <>
-            <p>Google has created this. It turns into the real, editable event once the Mac has synced it, usually within a minute.</p>
-            <button className="icon-btn" onClick={() => decide(onDiscard)}>Hide</button>
-          </>
-        )}
-        {!event.editable && !event.syncing && <p>{event.other ? `From ${event.calendar}'s calendar.` : "This calendar is read-only."}</p>}
+        {!event.editable && <p>{event.other ? `From ${event.calendar}'s calendar.` : "This calendar is read-only."}</p>}
         {event.draft && (
           <>
             <p>A draft. Drag it in the calendar to change its time.</p>
@@ -349,13 +343,14 @@ function EventForm({
   const [guests, setGuests] = useState(() => (existing ? invited(false) : comparing.filter((email) => !isRoom(email))));
   const [rooms, setRooms] = useState(() => (existing ? invited(true) : comparing.filter(isRoom)));
   const [meet, setMeet] = useState(false);
-  const [account, setAccount] = useState(googleAccounts[0] ?? "");
   const [availability, setAvailability] = useState<Record<string, Availability>>({});
   const persons = useMemo(() => people.filter((p) => !p.room), [people]);
   const roomChoices = useMemo(() => people.filter((p) => p.room), [people]);
-  const chosen = existing ?? calendars.find((c) => c.id === calendarId);
-  const onGoogle = chosen !== undefined && isGoogleCalendar(existing ? existing.calendar : chosen.title, chosen.account, googleAccounts);
-  const canInvite = googleAccounts.length > 0 && !asTask && onGoogle && (!existing || existing.externalId !== null);
+  const picked = calendars.find((c) => c.id === (existing?.calendarId ?? calendarId));
+  const inGoogle = picked?.google ?? null;
+  const viaMacCopy = !inGoogle && picked !== undefined && googleAccounts.length > 0 && isGoogleCalendar(picked.title, picked.account, googleAccounts);
+  const account = inGoogle ?? (viaMacCopy ? (googleAccounts[0] ?? "") : "");
+  const canInvite = !asTask && account !== "" && (!existing || inGoogle !== null || existing.externalId !== null);
   const usesGoogle = canInvite && (guests.length > 0 || rooms.length > 0 || meet);
   const guestsChanged = existing !== null && (guests.join() !== invited(false).join() || rooms.join() !== invited(true).join());
   const startMs = allDay ? dayStart(startDay) : new Date(`${startDay}T${startTime}`).getTime();
@@ -419,9 +414,9 @@ function EventForm({
     const draft: EventDraft = { title: title.trim() || "New event", start, end, allDay, location: location.trim(), notes: notes.trim(), calendarId: calendarId || undefined };
     setBusy(true);
     setError(null);
-    const saveGuests = existing && guestsChanged ? calendarApi.setGuests(account, existing.externalId!, guests, rooms) : Promise.resolve();
+    const saveGuests = existing && guestsChanged ? calendarApi.setGuests(account, existing, guests, rooms) : Promise.resolve();
     const request = existing
-      ? saveGuests.then(() => onUpdate({ ...draft, id: existing.id, occurrence: existing.occurrence, span }))
+      ? saveGuests.then(() => onUpdate({ ...draft, calendarId: inGoogle ? existing.calendarId : draft.calendarId, id: existing.id, occurrence: existing.occurrence, span }))
       : onCreate(usesGoogle ? { ...draft, google: { account, guests, rooms, meet } } : draft);
     request.catch(fail);
   };
@@ -513,14 +508,8 @@ function EventForm({
               <div className="field">
                 <PeoplePicker people={roomChoices} selected={rooms} onChange={setRooms} availability={availability} colors={colors} placeholder="Pick a room, free ones first" rankByAvailability />
               </div>
-              {googleAccounts.length > 1 && (
-                <div className="field">
-                  <span>Invite from</span>
-                  <Select ariaLabel="Google account" value={account} onChange={setAccount} options={googleAccounts.map((a) => ({ value: a, label: a }))} />
-                </div>
-              )}
-              {usesGoogle && !existing && <p className="hint">Google creates this event on {account}'s main calendar and emails the invitations.</p>}
-              {guestsChanged && <p className="hint">Google emails everyone whose invitation changes{existing?.recurring ? ", for the whole series" : ""}.</p>}
+              {usesGoogle && !existing && <p className="hint">Google emails the invitations as soon as you add the event{inGoogle ? "" : `, which goes on ${account}'s main calendar`}.</p>}
+              {guestsChanged && <p className="hint">Google emails everyone whose invitation changes.</p>}
             </section>
           )}
           {showWhere && (
@@ -543,7 +532,8 @@ function EventForm({
           {!showNotes && <button type="button" className="link-btn inline" onClick={() => setShowNotes(true)}>+ Notes</button>}
         </div>
       )}
-      {existing?.recurring && <SpanChoice span={span} onSpan={setSpan} />}
+      {existing?.recurring && !inGoogle && <SpanChoice span={span} onSpan={setSpan} />}
+      {existing?.recurring && inGoogle && <p className="hint">This changes only this occurrence of the repeating event.</p>}
       {error && <p className="cal-error">{error}</p>}
       <div className="modal-actions">
         <button type="button" className="icon-btn" onClick={onClose}>Cancel</button>

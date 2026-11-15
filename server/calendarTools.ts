@@ -3,8 +3,9 @@ import { z } from "zod";
 import type { CalendarEvent, EventDraft } from "../shared/calendar.ts";
 import { localDay, localTime } from "../shared/taskDates.ts";
 import { addProposal } from "./calendarProposals.ts";
-import { createGoogleEvent, googleAvailability, googleOtherEvents, googleStatus } from "./google.ts";
-import { createMacEvent, macCalendars, macEvents, macPeople } from "./macCalendar.ts";
+import { createEvent, listCalendars, listEvents } from "./calendarSources.ts";
+import { googleAvailability, googleOtherEvents, googleStatus } from "./google.ts";
+import { macPeople } from "./macCalendar.ts";
 
 const SERVER = "calendar";
 
@@ -76,10 +77,10 @@ export function calendarToolServer(onChange: () => void) {
       version: "1.0.0",
       tools: [
         tool("list_calendars", "The user's calendars that can be written to, and the connected Google accounts.", {}, async () =>
-          answer({ calendars: (await macCalendars()).filter((c) => c.editable).map((c) => ({ id: c.id, title: c.title, account: c.account, isDefault: c.isDefault })), googleAccounts: googleStatus().accounts }),
+          answer({ calendars: (await listCalendars()).filter((c) => c.editable).map((c) => ({ id: c.id, title: c.title, account: c.account, isDefault: c.isDefault, google: c.google !== undefined })), googleAccounts: googleStatus().accounts }),
         ),
         tool("my_events", "The user's own events between two moments.", { from: when, to: when }, async ({ from, to }) =>
-          answer((await macEvents(toMs(from), toMs(to))).events.map(brief)),
+          answer((await listEvents(toMs(from), toMs(to))).events.map(brief)),
         ),
         tool("list_people", "People and rooms the user has met with before: name, email and whether it is a room. Rooms often carry their capacity in the name.", {}, async () =>
           answer((await macPeople()).map((p) => ({ name: p.name, email: p.email, room: p.room }))),
@@ -106,8 +107,7 @@ export function calendarToolServer(onChange: () => void) {
         }),
         tool("create_event", "Create a real event straight away. With guests or rooms, Google emails the invitations immediately.", meeting, async (m) => {
           const draft = draftOf(m);
-          if (draft.google) await createGoogleEvent(draft);
-          else await createMacEvent(draft);
+          await createEvent(draft);
           onChange();
           return answer({ created: draft.title, start: local(draft.start), end: local(draft.end) });
         }),

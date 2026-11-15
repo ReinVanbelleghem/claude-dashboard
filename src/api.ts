@@ -1241,8 +1241,8 @@ export const calendarApi = {
   refresh: () => post<{ changed: boolean }>("/api/calendar/refresh"),
   calendars: () => get<{ calendars: CalendarInfo[] }>("/api/calendar/calendars"),
   events: (from: number, to: number) => get<CalendarPayload>(`/api/calendar/events?from=${from}&to=${to}`),
-  create: (draft: EventDraft) => post<{ event: CalendarEvent | null; google?: { link: string | null; meet: string | null } }>("/api/calendar/events", draft),
-  update: (patch: EventPatch) => post<{ event: CalendarEvent }>("/api/calendar/events/update", patch),
+  create: (draft: EventDraft) => post<{ ok: true }>("/api/calendar/events", draft),
+  update: (patch: EventPatch) => post<{ ok: true }>("/api/calendar/events/update", patch),
   remove: (ref: EventRef) => post<{ ok: true }>("/api/calendar/events/delete", ref),
   people: () => get<{ people: CalendarPerson[] }>("/api/calendar/people"),
   /** Start a planning session that has the calendar as tools. */
@@ -1259,8 +1259,8 @@ export const calendarApi = {
     post<{ availability: Record<string, Availability> }>("/api/google/availability", { account, emails, start, end }),
   otherCalendar: (email: string, from: number, to: number) =>
     get<{ events: CalendarEvent[]; limited: boolean }>(`/api/google/calendar?email=${encodeURIComponent(email)}&from=${from}&to=${to}`),
-  setGuests: (account: string, externalId: string, guests: string[], rooms: string[]) =>
-    post<{ ok: true }>("/api/google/guests", { account, externalId, guests, rooms }),
+  setGuests: (account: string, event: { calendarId: string; id: string; externalId: string | null }, guests: string[], rooms: string[]) =>
+    post<{ ok: true }>("/api/google/guests", { account, ...(event.calendarId.startsWith("g:") ? { calendarId: event.calendarId, id: event.id } : { externalId: event.externalId }), guests, rooms }),
 };
 
 export const taskApi = {

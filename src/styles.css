@@ -7203,6 +7203,7 @@ a.task-chip.task-link:focus-visible { outline: 2px solid var(--accent); outline-
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border: 1px dashed color-mix(in oklab, #d97757 60%, transparent);
   border-radius: 10px; background: color-mix(in oklab, #d97757 8%, transparent); font-size: 13px; color: var(--text-secondary);
 }
+.cal-reconnect { border-color: color-mix(in oklab, var(--accent) 55%, transparent); background: color-mix(in oklab, var(--accent) 8%, transparent); }
 .cal-drafts .claude-mark { flex: none; width: 15px; height: 15px; }
 .cal-drafts span { flex: 1; min-width: 200px; }
 .cal-drafts b { color: var(--text-primary); font-weight: 600; }

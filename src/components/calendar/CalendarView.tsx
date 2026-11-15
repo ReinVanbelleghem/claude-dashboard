@@ -76,32 +76,6 @@ function storedSidebar(): boolean {
     return true;
   }
 }
-const PENDING_POLL_MS = 10_000;
-const PENDING_SHOWN_MS = 3 * MINUTE_MS;
-
-/** A stand-in for an event Google has just created, shown until the Mac's Calendar app has synced the real one. */
-const awaitingSync = (draft: EventDraft): CalendarEvent => ({
-  key: `pending-${draft.start}-${draft.title}`,
-  id: "",
-  externalId: null,
-  occurrence: Date.now(),
-  calendarId: "",
-  calendar: "Google",
-  account: draft.google?.account ?? "",
-  color: null,
-  title: draft.title,
-  start: draft.start,
-  end: draft.end,
-  allDay: draft.allDay,
-  location: draft.location || null,
-  notes: null,
-  url: null,
-  recurring: false,
-  editable: false,
-  attendees: [],
-  syncing: true,
-});
-
 function storedAnchor(): string | null {
   try {
     const saved = sessionStorage.getItem(ANCHOR_KEY);
@@ -146,11 +120,10 @@ export function CalendarView({
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [calendars, setCalendars] = useState<CalendarInfo[]>([]);
   const [people, setPeople] = useState<CalendarPerson[]>([]);
-  const [google, setGoogle] = useState<GoogleStatus>({ hasClient: false, clientSource: null, accounts: [] });
+  const [google, setGoogle] = useState<GoogleStatus>({ hasClient: false, clientSource: null, accounts: [], needsReconnect: [] });
   const [googleSetup, setGoogleSetup] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [proposals, setProposals] = useState<CalendarProposal[]>([]);
-  const [pending, setPending] = useState<CalendarEvent[]>([]);
   const [passing, setPassing] = useState<OtherCalendar[]>([]);
   const [otherEvents, setOtherEvents] = useState<Record<string, CalendarEvent[]>>({});
   const [otherProblems, setOtherProblems] = useState<Record<string, string>>({});
@@ -184,12 +157,11 @@ export function CalendarView({
   const comparedKey = compared.map((o) => o.email).join(",");
   const otherColors = useMemo(() => Object.fromEntries([...pinned, ...passing].map((o) => [o.email.toLowerCase(), o.color])), [pinned, passing]);
   const shownEvents = useMemo(() => {
-    const arrived = (p: CalendarEvent) => events.some((e) => e.title === p.title && Math.abs(e.start - p.start) < MINUTE_MS);
     const nameOf = (email: string) => people.find((p) => p.email.toLowerCase() === email.toLowerCase());
     const drafts = proposals.map((p) => draftEvent(p, nameOf, orderedCalendars.find((c) => c.id === p.calendarId)?.title));
     const others = compared.flatMap((o) => (otherEvents[o.email] ?? []).map((e) => ({ ...e, calendar: o.name, color: o.color })));
-    return [...events.filter((e) => !hidden.includes(e.calendarId)), ...pending.filter((p) => !arrived(p)), ...others, ...drafts];
-  }, [events, hidden, pending, compared, otherEvents, proposals, people, orderedCalendars]);
+    return [...events.filter((e) => !hidden.includes(e.calendarId)), ...others, ...drafts];
+  }, [events, hidden, compared, otherEvents, proposals, people, orderedCalendars]);
   const days = useMemo(() => visibleDays(view, anchor, weekStart), [view, anchor, weekStart]);
   const from = dayStart(days[0]);
   const to = dayStart(addDays(days[days.length - 1], 1));
@@ -228,7 +200,7 @@ export function CalendarView({
       const payload = await calendarApi.events(from, to);
       if (request !== latest.current) return;
       setEvents(payload.events);
-      setError(null);
+      setError(payload.errors?.[0] ?? null);
     } catch (e) {
       if (request === latest.current) setError((e as Error).message);
     }
@@ -250,7 +222,6 @@ export function CalendarView({
       try {
         const { changed: arrived } = await calendarApi.refresh();
         if (arrived) await load();
-        if (visible) setPending([]);
       } catch (e) {
         if (visible) setError((e as Error).message);
       } finally {
@@ -281,15 +252,6 @@ export function CalendarView({
       .then((r) => setPeople(r.people))
       .catch(() => {});
   }, [status?.enabled]);
-
-  useEffect(() => {
-    if (pending.length === 0) return;
-    const timer = window.setInterval(() => {
-      setPending((list) => list.filter((p) => Date.now() - p.occurrence < PENDING_SHOWN_MS));
-      void refresh(false);
-    }, PENDING_POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [pending.length, refresh]);
 
   useEffect(() => {
     if (comparedKey === "" || google.accounts.length === 0) return;
@@ -361,9 +323,7 @@ export function CalendarView({
 
   const approve = async (ids: string[]) => {
     for (const id of ids) {
-      const proposal = proposals.find((p) => p.id === id);
-      const { viaGoogle } = await calendarApi.approveProposal(id);
-      if (viaGoogle && proposal) setPending((list) => [...list, awaitingSync(proposal)]);
+      await calendarApi.approveProposal(id);
     }
     setTarget(null);
     await load();
@@ -381,14 +341,13 @@ export function CalendarView({
       return void settle(calendarApi.moveProposal(event.id, start, end));
     }
     setEvents((list) => list.map((e) => (e.key === event.key ? { ...e, start, end } : e)));
-    void settle(calendarApi.update({ id: event.id, occurrence: event.occurrence, start, end }));
+    void settle(calendarApi.update({ id: event.id, occurrence: event.occurrence, calendarId: event.calendarId, start, end, allDay: event.allDay }));
   };
 
   const moveTask = (task: Task, dueDate: string, dueTime: string | null) => void settle(taskApi.update(task.id, { dueDate, dueTime }));
 
   const create = async (draft: EventDraft) => {
     await calendarApi.create(draft);
-    if (draft.google) setPending((list) => [...list, awaitingSync(draft)]);
     setTarget(null);
     void load();
   };
@@ -411,7 +370,9 @@ export function CalendarView({
     void load();
   };
 
-  const canInvite = (calendar: CalendarInfo) => google.accounts.length > 0 && isGoogleCalendar(calendar.title, calendar.account, google.accounts);
+  const inviteAccount = (calendar: CalendarInfo): string | null =>
+    calendar.google ?? (google.accounts.length > 0 && isGoogleCalendar(calendar.title, calendar.account, google.accounts) ? google.accounts[0] : null);
+  const canInvite = (calendar: CalendarInfo) => inviteAccount(calendar) !== null;
 
   const startPlan = async (
     request: string,
@@ -425,7 +386,7 @@ export function CalendarView({
       rangeFrom: from,
       rangeTo: to,
       calendar,
-      inviteFrom: calendar && canInvite(calendar) ? google.accounts[0] : null,
+      inviteFrom: calendar ? inviteAccount(calendar) : null,
       onShow: compared,
       standing: settings?.ui.calendarPlanNotes ?? "",
       askFirst,
@@ -595,6 +556,15 @@ export function CalendarView({
 
       {error && <p className="cal-error">{error}</p>}
 
+      {google.needsReconnect.length > 0 && (
+        <div className="cal-drafts cal-reconnect">
+          <span>
+            <b>Sign in to Google once more</b> to show {google.needsReconnect.join(", ")}'s calendars straight from Google: changes then appear at once, with no wait for the Mac to sync.
+          </span>
+          <button className="icon-btn tiny primary" onClick={() => window.open("/api/google/connect", "_blank", "noopener")}>Sign in again</button>
+        </div>
+      )}
+
       {proposals.length > 0 && (
         <div className="cal-drafts">
           <ClaudeMark />
@@ -670,11 +640,7 @@ export function CalendarView({
           people={people}
           googleAccounts={google.accounts}
           onApprove={(draft) => approve([draft.id])}
-          onDiscard={async (draft) => {
-            if (!draft.syncing) return discard([draft.id]);
-            setPending((list) => list.filter((p) => p.key !== draft.key));
-            setTarget(null);
-          }}
+          onDiscard={(draft) => discard([draft.id])}
           comparing={compared.map((o) => o.email)}
           colors={otherColors}
           onCreateTask={createTask}

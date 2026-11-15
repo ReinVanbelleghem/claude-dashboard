@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Attendee, Availability, CalendarEvent, EventDraft, GoogleStatus } from "../shared/calendar.ts";
+import type { Attendee, Availability, CalendarEvent, CalendarInfo, EventDraft, GoogleStatus } from "../shared/calendar.ts";
 import { addDays, localDay } from "../shared/taskDates.ts";
 import { DATA_DIR, PORT } from "./paths.ts";
 
@@ -11,6 +11,7 @@ const SCOPES = [
   "openid",
   "email",
   "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
   "https://www.googleapis.com/auth/calendar.freebusy",
 ].join(" ");
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -19,7 +20,20 @@ const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 const API = "https://www.googleapis.com/calendar/v3";
 const PENDING_TTL_MS = 10 * 60_000;
 
-type Account = { email: string; refreshToken: string };
+type Account = { email: string; refreshToken: string; scope?: string };
+
+const canListCalendars = (a: Account) => (a.scope ?? "").includes("calendar.calendarlist");
+const ID_PREFIX = "g:";
+
+/** A Google calendar's id as the rest of the dashboard sees it, and back again. */
+export const googleCalendarId = (account: string, calendar: string) => `${ID_PREFIX}${account}:${calendar}`;
+
+export function parseGoogleCalendarId(id: string | undefined): { account: string; calendar: string } | null {
+  if (!id?.startsWith(ID_PREFIX)) return null;
+  const rest = id.slice(ID_PREFIX.length);
+  const split = rest.indexOf(":");
+  return split === -1 ? null : { account: rest.slice(0, split), calendar: rest.slice(split + 1) };
+}
 type Store = { clientId?: string; clientSecret?: string; accounts?: Account[] };
 
 let store: Store | null = null;
@@ -59,6 +73,7 @@ export function googleStatus(): GoogleStatus {
     hasClient: client() !== null,
     clientSource: saved ? "saved" : client() ? "environment" : null,
     accounts: (s.accounts ?? []).map((a) => a.email),
+    needsReconnect: (s.accounts ?? []).filter((a) => !canListCalendars(a)).map((a) => a.email),
   };
 }
 
@@ -142,7 +157,8 @@ export async function finishGoogleConnect(code: string, state: string): Promise<
   const granted = String(data.scope ?? "");
   if (!granted.includes("calendar.events")) throw new Error("Calendar access was not ticked on Google's screen. Try again and allow it.");
   const s = read();
-  write({ ...s, accounts: [...(s.accounts ?? []).filter((a) => a.email !== email), { email, refreshToken: data.refresh_token }] });
+  write({ ...s, accounts: [...(s.accounts ?? []).filter((a) => a.email !== email), { email, refreshToken: data.refresh_token, scope: granted }] });
+  calendarLists.delete(email);
   access.set(email, { token: String(data.access_token), expiresAt: Date.now() + Number(data.expires_in ?? 0) * 1000 });
   return email;
 }
@@ -179,32 +195,190 @@ async function api<T>(email: string, path: string, init?: { method: string; body
   return data as T;
 }
 
-type GoogleAttendee = { email: string; resource?: boolean; responseStatus?: string };
-type GoogleEvent = { id: string; htmlLink?: string; hangoutLink?: string; attendees?: GoogleAttendee[] };
+type GoogleAttendee = { email: string; displayName?: string; resource?: boolean; responseStatus?: string; self?: boolean };
+type GoogleMoment = { date?: string; dateTime?: string };
+type GoogleEvent = {
+  id: string;
+  status?: string;
+  summary?: string;
+  description?: string;
+  location?: string;
+  htmlLink?: string;
+  hangoutLink?: string;
+  iCalUID?: string;
+  recurringEventId?: string;
+  start?: GoogleMoment;
+  end?: GoogleMoment;
+  attendees?: GoogleAttendee[];
+};
+type GoogleCalendar = { id: string; summary?: string; summaryOverride?: string; backgroundColor?: string; accessRole?: string; primary?: boolean };
+
+const CALENDAR_LIST_TTL_MS = 5 * 60_000;
+const calendarLists = new Map<string, { at: number; list: GoogleCalendar[] }>();
+
+/** The accounts whose calendars the dashboard reads straight from Google. */
+export const directAccounts = (): string[] => (read().accounts ?? []).filter(canListCalendars).map((a) => a.email);
+
+async function calendarList(account: string): Promise<GoogleCalendar[]> {
+  const cached = calendarLists.get(account);
+  if (cached && Date.now() - cached.at < CALENDAR_LIST_TTL_MS) return cached.list;
+  const page = await api<{ items?: GoogleCalendar[] }>(account, "/users/me/calendarList?maxResults=250");
+  const list = page.items ?? [];
+  calendarLists.set(account, { at: Date.now(), list });
+  return list;
+}
+
+const nameOf = (c: GoogleCalendar) => c.summaryOverride ?? c.summary ?? c.id;
+const writable = (c: GoogleCalendar) => c.accessRole === "owner" || c.accessRole === "writer";
+
+export async function googleCalendars(account: string): Promise<CalendarInfo[]> {
+  return (await calendarList(account)).map((c) => ({
+    id: googleCalendarId(account, c.id),
+    title: nameOf(c),
+    account,
+    color: c.backgroundColor ?? null,
+    editable: writable(c),
+    isDefault: c.primary === true,
+    google: account,
+  }));
+}
+
+const REPLY: Record<string, Attendee["status"]> = { accepted: "accepted", declined: "declined", tentative: "tentative" };
+
+const plainText = (html: string) => html.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").trim();
+
+type Placement = { key: string; calendarId: string; calendar: string; account: string; color: string | null; editable: boolean; me: string | null };
+
+function toCalendarEvent(e: GoogleEvent, at: Placement): CalendarEvent | null {
+  if (e.status === "cancelled" || !e.start || !e.end) return null;
+  const allDay = e.start.date !== undefined;
+  const start = new Date(e.start.dateTime ?? `${e.start.date}T00:00:00`).getTime();
+  const end = allDay ? new Date(`${e.end.date}T00:00:00`).getTime() - 1000 : new Date(e.end.dateTime ?? "").getTime();
+  if (Number.isNaN(start) || Number.isNaN(end)) return null;
+  return {
+    key: `${at.key}:${e.id}`,
+    id: e.id,
+    externalId: e.iCalUID ?? null,
+    occurrence: start,
+    calendarId: at.calendarId,
+    calendar: at.calendar,
+    account: at.account,
+    color: at.color,
+    title: e.summary ?? "Busy",
+    start,
+    end,
+    allDay,
+    location: e.location ?? null,
+    notes: e.description ? plainText(e.description) : null,
+    url: e.hangoutLink ?? null,
+    recurring: e.recurringEventId !== undefined,
+    seriesId: e.recurringEventId ?? null,
+    editable: at.editable,
+    attendees: (e.attendees ?? []).map((a) => ({
+      name: a.displayName ?? a.email ?? "",
+      email: a.email ?? null,
+      status: REPLY[a.responseStatus ?? ""] ?? "pending",
+      room: a.resource === true,
+      me: a.self === true || (at.me !== null && a.email?.toLowerCase() === at.me.toLowerCase()),
+    })),
+  };
+}
+
+const MAX_EVENT_PAGES = 4;
+
+/** Every event of an account's calendars in a range, read from Google. A calendar that fails is reported, not fatal. */
+export async function googleEvents(account: string, from: number, to: number): Promise<{ events: CalendarEvent[]; errors: string[] }> {
+  const calendars = await calendarList(account);
+  const errors: string[] = [];
+  const perCalendar = await Promise.all(
+    calendars.map(async (c) => {
+      const at: Placement = { key: `g:${account}:${c.id}`, calendarId: googleCalendarId(account, c.id), calendar: nameOf(c), account, color: c.backgroundColor ?? null, editable: writable(c), me: account };
+      const found: CalendarEvent[] = [];
+      try {
+        let pageToken: string | undefined;
+        for (let page = 0; page < MAX_EVENT_PAGES; page++) {
+          const params = new URLSearchParams({ singleEvents: "true", orderBy: "startTime", maxResults: "250", timeMin: new Date(from).toISOString(), timeMax: new Date(to).toISOString() });
+          if (pageToken) params.set("pageToken", pageToken);
+          const reply = await api<{ items?: GoogleEvent[]; nextPageToken?: string }>(account, `/calendars/${encodeURIComponent(c.id)}/events?${params}`);
+          for (const e of reply.items ?? []) {
+            const event = toCalendarEvent(e, at);
+            if (event) found.push(event);
+          }
+          pageToken = reply.nextPageToken;
+          if (!pageToken) break;
+        }
+      } catch (err) {
+        errors.push(`${nameOf(c)}: ${(err as Error).message}`);
+      }
+      return found;
+    }),
+  );
+  return { events: perCalendar.flat(), errors };
+}
+
+const momentsOf = (start: number, end: number, allDay: boolean) =>
+  allDay
+    ? { start: { date: localDay(new Date(start)) }, end: { date: addDays(localDay(new Date(end)), 1) } }
+    : { start: { dateTime: new Date(start).toISOString() }, end: { dateTime: new Date(end).toISOString() } };
+
+const eventPath = (calendar: string, id: string) => `/calendars/${encodeURIComponent(calendar)}/events/${encodeURIComponent(id)}`;
+
+/** Change an event in a Google calendar. On a repeating event this changes the one occurrence. */
+export async function updateGoogleEvent(calendarId: string, id: string, fields: Partial<EventDraft>, current?: { start: number; end: number; allDay: boolean }): Promise<void> {
+  const at = parseGoogleCalendarId(calendarId);
+  if (!at) throw new Error("that is not a Google calendar");
+  const body: Record<string, unknown> = {};
+  if (fields.title !== undefined) body.summary = fields.title;
+  if (fields.location !== undefined) body.location = fields.location;
+  if (fields.notes !== undefined) body.description = fields.notes;
+  if (fields.start !== undefined || fields.end !== undefined || fields.allDay !== undefined) {
+    const start = fields.start ?? current?.start;
+    const end = fields.end ?? current?.end;
+    if (start === undefined || end === undefined) throw new Error("a start and an end are both needed to move an event");
+    Object.assign(body, momentsOf(start, end, fields.allDay ?? current?.allDay ?? false));
+  }
+  await api(at.account, `${eventPath(at.calendar, id)}?sendUpdates=all`, { method: "PATCH", body });
+}
+
+export async function deleteGoogleEvent(calendarId: string, id: string): Promise<void> {
+  const at = parseGoogleCalendarId(calendarId);
+  if (!at) throw new Error("that is not a Google calendar");
+  const res = await fetch(`${API}${eventPath(at.calendar, id)}?sendUpdates=all`, { method: "DELETE", headers: { authorization: `Bearer ${await accessToken(at.account)}` } });
+  if (!res.ok && res.status !== 410) throw new Error(`Google Calendar answered ${res.status}`);
+}
+
+/** Replace who is invited to an event in a Google calendar, keeping the replies of everyone who stays. */
+export async function setGoogleEventGuests(calendarId: string, id: string, guests: string[], rooms: string[]): Promise<void> {
+  const at = parseGoogleCalendarId(calendarId);
+  if (!at) throw new Error("that is not a Google calendar");
+  const event = await api<GoogleEvent>(at.account, eventPath(at.calendar, id));
+  const current = new Map((event.attendees ?? []).map((a) => [a.email.toLowerCase(), a]));
+  const self = (event.attendees ?? []).filter((a) => a.self);
+  const attendees = [...self, ...attendeesOf(guests, rooms).filter((a) => !self.some((me) => me.email.toLowerCase() === a.email.toLowerCase())).map((a) => current.get(a.email.toLowerCase()) ?? a)];
+  await api(at.account, `${eventPath(at.calendar, id)}?sendUpdates=all`, { method: "PATCH", body: { attendees } });
+}
 
 const attendeesOf = (guests: string[], rooms: string[]): GoogleAttendee[] => [
   ...guests.map((email) => ({ email })),
   ...rooms.map((email) => ({ email, resource: true })),
 ];
 
-export async function createGoogleEvent(draft: EventDraft): Promise<{ link: string | null; meet: string | null }> {
+/** Create an event in Google: in the draft's own Google calendar, or the inviting account's main one. */
+export async function createGoogleEvent(draft: EventDraft): Promise<void> {
+  const at = parseGoogleCalendarId(draft.calendarId) ?? (draft.google ? { account: draft.google.account, calendar: "primary" } : null);
+  if (!at) throw new Error("No Google calendar was chosen for this event.");
   const invite = draft.google;
-  if (!invite) throw new Error("No Google account was chosen for this event.");
-  const when = draft.allDay
-    ? { start: { date: localDay(new Date(draft.start)) }, end: { date: addDays(localDay(new Date(draft.end)), 1) } }
-    : { start: { dateTime: new Date(draft.start).toISOString() }, end: { dateTime: new Date(draft.end).toISOString() } };
   const body = {
     summary: draft.title,
     location: draft.location || undefined,
     description: draft.notes || undefined,
-    ...when,
-    attendees: attendeesOf(invite.guests, invite.rooms),
-    ...(invite.meet
+    ...momentsOf(draft.start, draft.end, draft.allDay),
+    ...(invite ? { attendees: attendeesOf(invite.guests, invite.rooms) } : {}),
+    ...(invite?.meet
       ? { conferenceData: { createRequest: { requestId: base64url(randomBytes(12)), conferenceSolutionKey: { type: "hangoutsMeet" } } } }
       : {}),
   };
-  const created = await api<GoogleEvent>(invite.account, "/calendars/primary/events?sendUpdates=all&conferenceDataVersion=1", { method: "POST", body });
-  return { link: created.htmlLink ?? null, meet: created.hangoutLink ?? null };
+  await api(at.account, `/calendars/${encodeURIComponent(at.calendar)}/events?sendUpdates=all&conferenceDataVersion=1`, { method: "POST", body });
 }
 
 /** Replace who is invited to an event the Mac knows by its iCalendar id, keeping the replies of everyone who stays. */
@@ -232,24 +406,6 @@ export async function googleAvailability(account: string, emails: string[], star
   );
 }
 
-type OtherMoment = { date?: string; dateTime?: string };
-type OtherEvent = {
-  id: string;
-  status?: string;
-  summary?: string;
-  description?: string;
-  location?: string;
-  htmlLink?: string;
-  recurringEventId?: string;
-  start?: OtherMoment;
-  end?: OtherMoment;
-  attendees?: { email?: string; displayName?: string; responseStatus?: string; resource?: boolean; self?: boolean }[];
-};
-
-const REPLY: Record<string, Attendee["status"]> = { accepted: "accepted", declined: "declined", tentative: "tentative" };
-
-const plainText = (html: string) => html.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").trim();
-
 function accountFor(email: string): string {
   const accounts = (read().accounts ?? []).map((a) => a.email);
   const domain = email.split("@")[1];
@@ -258,40 +414,10 @@ function accountFor(email: string): string {
   return account;
 }
 
-function otherEvent(email: string, e: OtherEvent): CalendarEvent | null {
-  if (e.status === "cancelled" || !e.start || !e.end) return null;
+function otherEvent(email: string, e: GoogleEvent): CalendarEvent | null {
   if (e.attendees?.find((a) => a.email?.toLowerCase() === email.toLowerCase())?.responseStatus === "declined") return null;
-  const allDay = e.start.date !== undefined;
-  const start = new Date(e.start.dateTime ?? `${e.start.date}T00:00:00`).getTime();
-  const end = allDay ? new Date(`${e.end.date}T00:00:00`).getTime() - 1000 : new Date(e.end.dateTime ?? "").getTime();
-  if (Number.isNaN(start) || Number.isNaN(end)) return null;
-  return {
-    key: `other:${email}:${e.id}`,
-    id: e.id,
-    externalId: null,
-    occurrence: start,
-    calendarId: `other:${email}`,
-    calendar: email,
-    account: "",
-    color: null,
-    title: e.summary ?? "Busy",
-    start,
-    end,
-    allDay,
-    location: e.location ?? null,
-    notes: e.description ? plainText(e.description) : null,
-    url: e.htmlLink ?? null,
-    recurring: e.recurringEventId !== undefined,
-    editable: false,
-    attendees: (e.attendees ?? []).map((a) => ({
-      name: a.displayName ?? a.email ?? "",
-      email: a.email ?? null,
-      status: REPLY[a.responseStatus ?? ""] ?? "pending",
-      room: a.resource === true,
-      me: false,
-    })),
-    other: true,
-  };
+  const event = toCalendarEvent(e, { key: `other:${email}`, calendarId: `other:${email}`, calendar: email, account: "", color: null, editable: false, me: null });
+  return event ? { ...event, url: e.htmlLink ?? null, other: true } : null;
 }
 
 const busyBlock = (email: string, start: number, end: number): CalendarEvent => ({
@@ -325,7 +451,7 @@ export async function googleOtherEvents(email: string, from: number, to: number)
   const window = { timeMin: new Date(from).toISOString(), timeMax: new Date(to).toISOString() };
   try {
     const params = new URLSearchParams({ ...window, singleEvents: "true", orderBy: "startTime", maxResults: "250" });
-    const page = await api<{ items?: OtherEvent[] }>(account, `/calendars/${encodeURIComponent(email)}/events?${params}`);
+    const page = await api<{ items?: GoogleEvent[] }>(account, `/calendars/${encodeURIComponent(email)}/events?${params}`);
     const events = (page.items ?? []).map((e) => otherEvent(email, e)).filter((e): e is CalendarEvent => e !== null);
     return { events, limited: false };
   } catch {

@@ -160,11 +160,12 @@ import {
   updateTask,
   updateTaskProject,
 } from "./tasks.ts";
-import { createMacEvent, deleteMacEvent, disableMacCalendar, enableMacCalendar, macCalendarStatus, macCalendars, macEvents, macPeople, refreshMacCalendar, updateMacEvent } from "./macCalendar.ts";
+import { disableMacCalendar, enableMacCalendar, macCalendarStatus, macPeople, refreshMacCalendar } from "./macCalendar.ts";
 import type { EventDraft, EventPatch, EventRef } from "../shared/calendar.ts";
 import { CALENDAR_SAFE_TOOLS, calendarToolServer } from "./calendarTools.ts";
 import { addProposal, approveProposal, discardProposal, listProposals, updateProposal } from "./calendarProposals.ts";
-import { createGoogleEvent, disconnectGoogle, finishGoogleConnect, googleAvailability, googleConnectUrl, googleOtherEvents, googleStatus, removeGoogleClient, setGoogleClient, setGoogleGuests } from "./google.ts";
+import { disconnectGoogle, finishGoogleConnect, googleAvailability, googleConnectUrl, googleOtherEvents, googleStatus, removeGoogleClient, setGoogleClient, setGoogleEventGuests, setGoogleGuests } from "./google.ts";
+import { createEvent, deleteEvent, listCalendars, listEvents, updateEvent } from "./calendarSources.ts";
 import {
   attachSession,
   createWorkspace,
@@ -1169,13 +1170,14 @@ const server = Bun.serve<PtyData, never>({
       return json(await disconnectGoogle(String(body?.email ?? "")));
     }
     if ((p === "/api/google/availability" || p === "/api/google/guests") && req.method === "POST") {
-      const body = (await req.json().catch(() => null)) as { account?: string; emails?: string[]; start?: number; end?: number; externalId?: string; guests?: string[]; rooms?: string[] } | null;
+      const body = (await req.json().catch(() => null)) as { account?: string; emails?: string[]; start?: number; end?: number; externalId?: string; calendarId?: string; id?: string; guests?: string[]; rooms?: string[] } | null;
       if (!body?.account) return json({ error: "account is required" }, 400);
       try {
         if (p === "/api/google/availability") {
           return json({ availability: await googleAvailability(body.account, body.emails ?? [], Number(body.start), Number(body.end)) });
         }
-        await setGoogleGuests(body.account, String(body.externalId ?? ""), body.guests ?? [], body.rooms ?? []);
+        if (body.calendarId && body.id) await setGoogleEventGuests(body.calendarId, body.id, body.guests ?? [], body.rooms ?? []);
+        else await setGoogleGuests(body.account, String(body.externalId ?? ""), body.guests ?? [], body.rooms ?? []);
         return json({ ok: true });
       } catch (e) {
         return json({ error: (e as Error).message }, 502);
@@ -1201,12 +1203,12 @@ const server = Bun.serve<PtyData, never>({
     }
     if (p.startsWith("/api/calendar/") && (p === "/api/calendar/calendars" || p.startsWith("/api/calendar/events"))) {
       try {
-        if (p === "/api/calendar/calendars" && req.method === "GET") return json({ calendars: await macCalendars() });
+        if (p === "/api/calendar/calendars" && req.method === "GET") return json({ calendars: await listCalendars() });
         if (p === "/api/calendar/events" && req.method === "GET") {
           const from = Number(url.searchParams.get("from"));
           const to = Number(url.searchParams.get("to"));
           if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return json({ error: "from and to are required, in epoch ms" }, 400);
-          return json(await macEvents(from, to));
+          return json(await listEvents(from, to));
         }
         if (req.method === "POST") {
           const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
@@ -1216,25 +1218,19 @@ const server = Bun.serve<PtyData, never>({
             if (typeof draft.start !== "number" || typeof draft.end !== "number" || draft.end < draft.start) {
               return json({ error: "start and end are required, in epoch ms" }, 400);
             }
-            const clean = { ...draft, title: String(draft.title ?? "").trim() || "New event", allDay: draft.allDay === true };
-            if (clean.google) {
-              const google = await createGoogleEvent(clean);
-              broadcast("calendar", { at: Date.now() });
-              return json({ event: null, google });
-            }
-            const event = await createMacEvent(clean);
+            await createEvent({ ...draft, title: String(draft.title ?? "").trim() || "New event", allDay: draft.allDay === true });
             broadcast("calendar", { at: Date.now() });
-            return json({ event });
+            return json({ ok: true });
           }
           const ref = body as EventRef;
           if (typeof ref.id !== "string" || typeof ref.occurrence !== "number") return json({ error: "id and occurrence are required" }, 400);
           if (p === "/api/calendar/events/update") {
-            const event = await updateMacEvent(body as EventPatch);
+            await updateEvent(body as EventPatch);
             broadcast("calendar", { at: Date.now() });
-            return json({ event });
+            return json({ ok: true });
           }
           if (p === "/api/calendar/events/delete") {
-            await deleteMacEvent(ref);
+            await deleteEvent(ref);
             broadcast("calendar", { at: Date.now() });
             return json({ ok: true });
           }

@@ -44,12 +44,12 @@ export type CalendarEvent = {
   recurring: boolean;
   editable: boolean;
   attendees: Attendee[];
+  /** The repeating series a Google occurrence belongs to. */
+  seriesId?: string | null;
   /** From someone else's or a room's calendar, shown beside your own for comparison. */
   other?: boolean;
   /** A suggested meeting that does not exist yet; it waits for approval. */
   draft?: boolean;
-  /** A stand-in for an event Google has just created, shown until the Mac has synced the real one. */
-  syncing?: boolean;
 };
 
 /** A colleague's or a room's calendar kept in the sidebar. */
@@ -62,6 +62,8 @@ export type CalendarInfo = {
   color: string | null;
   editable: boolean;
   isDefault: boolean;
+  /** Set when the calendar is read and written through Google: the connected account it belongs to. */
+  google?: string;
 };
 
 export type EventDraft = {
@@ -86,6 +88,8 @@ export type GoogleStatus = {
   /** Where the client comes from: saved through the dashboard, or handed to the daemon in its environment. */
   clientSource: "saved" | "environment" | null;
   accounts: string[];
+  /** Connected before the dashboard could list an account's calendars; signing in again lets it read them directly. */
+  needsReconnect: string[];
 };
 
 export type Availability = "free" | "busy" | "unknown";
@@ -98,8 +102,12 @@ export type EventRef = {
   occurrence: number;
   /** For a repeating event: only this occurrence, or this one and every later one. */
   span?: "this" | "future";
+  /** The calendar the event is in; a Google calendar's id says the event lives in Google. */
+  calendarId?: string;
+  /** The repeating series the event belongs to, for acting on all of it. */
+  seriesId?: string | null;
 };
 
 export type EventPatch = EventRef & Partial<EventDraft>;
 
-export type CalendarPayload = { events: CalendarEvent[] };
+export type CalendarPayload = { events: CalendarEvent[]; errors?: string[] };

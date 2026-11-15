@@ -389,14 +389,18 @@ only on your computer (`~/.claude-dashboard/google.json`, readable by your user)
    project is Internal, Google shows "Google hasn't verified this app" once: continue,
    and tick both calendar permissions.
 
-The dashboard asks for two permissions: creating and changing events, and seeing when
-people and rooms are free or busy. It reads no mail, contacts or files; see
+The dashboard asks for three permissions: seeing the list of your calendars, creating
+and changing events, and seeing when people and rooms are free or busy. It reads no mail, contacts or files; see
 [PRIVACY.md](PRIVACY.md). A Workspace administrator can restrict outside apps, in which
 case the sign-in says so and they have to trust your client.
 
 Guests and rooms are suggested from the people and rooms already on your own events.
-An event with guests, a room or a Meet link is created by Google on that account's main
-calendar and appears greyed until the Mac has synced it.
+
+Once an account is connected, its calendars are read and written **straight through
+Google** rather than through the Mac: a change shows at once, with no wait for macOS to
+sync. The Mac's own copy of those calendars is recognised by name and left out, so
+nothing shows twice. Everything else — iCloud, Exchange, Google accounts you have not
+connected — keeps coming from the Calendar app.
 
 ### History and Usage
 
