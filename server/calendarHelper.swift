@@ -40,6 +40,7 @@ func describe(_ event: EKEvent) -> [String: Any] {
   let attendees: [[String: Any]] = (event.attendees ?? []).map {
     [
       "name": $0.name ?? $0.url.absoluteString.replacingOccurrences(of: "mailto:", with: ""),
+      "email": $0.url.scheme == "mailto" ? $0.url.absoluteString.replacingOccurrences(of: "mailto:", with: "") : NSNull(),
       "status": participantStatus($0.participantStatus),
       "room": $0.participantType == .room || $0.participantType == .resource,
       "me": $0.isCurrentUser,
@@ -47,6 +48,7 @@ func describe(_ event: EKEvent) -> [String: Any] {
   }
   return [
     "id": event.eventIdentifier ?? event.calendarItemIdentifier,
+    "externalId": orNull(event.calendarItemExternalIdentifier),
     "occurrence": occurrence.timeIntervalSince1970,
     "calendarId": event.calendar.calendarIdentifier,
     "calendar": event.calendar.title,

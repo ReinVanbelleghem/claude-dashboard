@@ -7015,6 +7015,35 @@ a.task-chip.task-link:focus-visible { outline: 2px solid var(--accent); outline-
 .cal-menu .cal-menu-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cal-menu .cal-menu-label em { margin-left: 7px; font-style: normal; font-size: 11.5px; color: var(--text-muted); }
 .cal-menu button.off .cal-dot { opacity: 0.35; }
+.cal-menu button.off .cal-menu-label { color: var(--text-muted); }
+.cal-menu .cal-menu-note { font-style: normal; font-size: 11.5px; color: var(--text-muted); }
+.cal-menu button:hover .cal-menu-note { color: var(--critical); }
+.cal-invite { margin: 4px 0 12px; padding-top: 14px; border-top: 1px solid var(--border); }
+.cal-invite .hint { margin: 0 0 4px; }
+.cal-people { position: relative; }
+.cal-people-box { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 5px 8px; min-height: 38px; cursor: text; }
+.cal-people-box input { flex: 1 1 120px; min-width: 80px; padding: 3px 2px; border: 0; outline: 0; background: none; color: inherit; font: inherit; }
+.cal-person {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 4px 2px 8px; border-radius: 999px;
+  background: var(--surface-2); font-size: 12.5px; white-space: nowrap;
+}
+.cal-person i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); opacity: 0.5; }
+.cal-person.free i { background: var(--good); opacity: 1; }
+.cal-person.busy i { background: var(--critical); opacity: 1; }
+.cal-person button { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--text-muted); cursor: pointer; }
+.cal-person button:hover { background: var(--surface-1); color: var(--text-primary); }
+.cal-person button .icon { width: 10px; height: 10px; }
+.cal-people-list { margin-top: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-0); }
+.cal-people-list button {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 6px 9px; border: 0; border-radius: 6px;
+  background: none; color: var(--text-primary); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.cal-people-list button.on, .cal-people-list button:hover { background: var(--surface-2); }
+.cal-people-list span { flex: none; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-people-list small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-muted); }
+.cal-people-list em { flex: none; margin-left: auto; font-style: normal; font-size: 11.5px; }
+.cal-people-list em.free { color: var(--good); }
+.cal-people-list em.busy { color: var(--critical); }
 
 .cal-frame { padding: 0; margin: 0; overflow: hidden; }
 .cal-scroll, .cal-month { height: calc(100vh - var(--topbar-h) - 122px); min-height: 440px; }

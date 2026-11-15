@@ -15,6 +15,7 @@ export type WeekStart = 0 | 1 | 6;
 export type Attendee = {
   name: string;
   status: "accepted" | "declined" | "tentative" | "pending";
+  email: string | null;
   /** A meeting room or other resource rather than a person. */
   room: boolean;
   me: boolean;
@@ -24,6 +25,8 @@ export type CalendarEvent = {
   /** Unique per occurrence, so two days of one repeating event can sit in one list. */
   key: string;
   id: string;
+  /** The event's iCalendar id, which is how Google knows the same event. */
+  externalId: string | null;
   /** When this occurrence was originally due, in ms; with `id` it names one occurrence of a repeating event. */
   occurrence: number;
   calendarId: string;
@@ -60,7 +63,18 @@ export type EventDraft = {
   allDay: boolean;
   location?: string;
   notes?: string;
+  /** Set when the event has guests, a room or a Meet link: Google then creates it and sends the invitations. */
+  google?: GoogleInvite;
 };
+
+export type GoogleInvite = { account: string; guests: string[]; rooms: string[]; meet: boolean };
+
+export type GoogleStatus = { hasClient: boolean; accounts: string[] };
+
+export type Availability = "free" | "busy" | "unknown";
+
+/** Someone or some room seen on your events, for suggesting who to invite. */
+export type Person = { email: string; name: string; room: boolean; count: number };
 
 export type EventRef = {
   id: string;

@@ -1222,8 +1222,9 @@ export const workspaceApi = {
 import type { Task, TaskAdd, TaskPatch, TaskProject, TasksPayload } from "../shared/tasks.ts";
 export type { Task, TaskProject, TasksPayload };
 
-import type { CalendarEvent, CalendarInfo, CalendarPayload, EventDraft, EventPatch, EventRef, MacCalendarStatus } from "../shared/calendar.ts";
-export type { Attendee, CalendarEvent, CalendarInfo, CalendarView, EventDraft, EventPatch, EventRef, MacCalendarStatus, WeekStart } from "../shared/calendar.ts";
+import type { Availability, CalendarEvent, CalendarInfo, CalendarPayload, EventDraft, EventPatch, EventRef, GoogleStatus, MacCalendarStatus, Person as CalendarPerson } from "../shared/calendar.ts";
+export type { Attendee, Availability, CalendarEvent, CalendarInfo, CalendarView, EventDraft, EventPatch, EventRef, GoogleInvite, GoogleStatus, MacCalendarStatus, WeekStart } from "../shared/calendar.ts";
+export type { CalendarPerson };
 
 export const calendarApi = {
   status: () => get<MacCalendarStatus>("/api/calendar"),
@@ -1231,9 +1232,16 @@ export const calendarApi = {
   disable: () => post<MacCalendarStatus>("/api/calendar/disable"),
   calendars: () => get<{ calendars: CalendarInfo[] }>("/api/calendar/calendars"),
   events: (from: number, to: number) => get<CalendarPayload>(`/api/calendar/events?from=${from}&to=${to}`),
-  create: (draft: EventDraft) => post<{ event: CalendarEvent }>("/api/calendar/events", draft),
+  create: (draft: EventDraft) => post<{ event: CalendarEvent | null; google?: { link: string | null; meet: string | null } }>("/api/calendar/events", draft),
   update: (patch: EventPatch) => post<{ event: CalendarEvent }>("/api/calendar/events/update", patch),
   remove: (ref: EventRef) => post<{ ok: true }>("/api/calendar/events/delete", ref),
+  people: () => get<{ people: CalendarPerson[] }>("/api/calendar/people"),
+  google: () => get<GoogleStatus>("/api/google"),
+  disconnectGoogle: (email: string) => post<GoogleStatus>("/api/google/disconnect", { email }),
+  availability: (account: string, emails: string[], start: number, end: number) =>
+    post<{ availability: Record<string, Availability> }>("/api/google/availability", { account, emails, start, end }),
+  setGuests: (account: string, externalId: string, guests: string[], rooms: string[]) =>
+    post<{ ok: true }>("/api/google/guests", { account, externalId, guests, rooms }),
 };
 
 export const taskApi = {

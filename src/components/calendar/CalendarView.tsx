@@ -5,6 +5,8 @@ import {
   taskApi,
   type CalendarEvent,
   type CalendarInfo,
+  type CalendarPerson,
+  type GoogleStatus,
   type CalendarView as ViewKind,
   type EventDraft,
   type EventPatch,
@@ -27,6 +29,30 @@ import { MINUTE_MS, atMinutes, dayStart, minutesOfDay, rangeTitle, shiftAnchor, 
 const REFRESH_MS = 2 * MINUTE_MS;
 
 const ANCHOR_KEY = "calendar.anchor";
+const PENDING_POLL_MS = 10_000;
+const PENDING_SHOWN_MS = 5 * MINUTE_MS;
+
+/** A stand-in for an event Google has just created, shown until the Mac's Calendar app has synced the real one. */
+const awaitingSync = (draft: EventDraft): CalendarEvent => ({
+  key: `pending-${draft.start}-${draft.title}`,
+  id: "",
+  externalId: null,
+  occurrence: Date.now(),
+  calendarId: "",
+  calendar: "Google",
+  account: draft.google?.account ?? "",
+  color: null,
+  title: draft.title,
+  start: draft.start,
+  end: draft.end,
+  allDay: draft.allDay,
+  location: draft.location || null,
+  notes: "Created in Google just now. It becomes editable here once the Mac's Calendar app has synced it.",
+  url: null,
+  recurring: false,
+  editable: false,
+  attendees: [],
+});
 
 function storedAnchor(): string | null {
   try {
@@ -68,6 +94,9 @@ export function CalendarView({
   const [status, setStatus] = useState<MacCalendarStatus | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [calendars, setCalendars] = useState<CalendarInfo[]>([]);
+  const [people, setPeople] = useState<CalendarPerson[]>([]);
+  const [google, setGoogle] = useState<GoogleStatus>({ hasClient: false, accounts: [] });
+  const [pending, setPending] = useState<CalendarEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [today, setToday] = useState(() => localDay(new Date()));
   const [anchor, setAnchor] = useState(() => storedAnchor() ?? today);
@@ -87,7 +116,10 @@ export function CalendarView({
   const view: ViewKind = settings?.ui.calendarView ?? "week";
   const weekStart: WeekStart = settings?.ui.calendarWeekStart ?? 1;
   const hidden = settings?.ui.calendarHidden ?? [];
-  const shownEvents = useMemo(() => events.filter((e) => !hidden.includes(e.calendarId)), [events, hidden]);
+  const shownEvents = useMemo(() => {
+    const arrived = (p: CalendarEvent) => events.some((e) => e.title === p.title && e.start === p.start);
+    return [...events.filter((e) => !hidden.includes(e.calendarId)), ...pending.filter((p) => !arrived(p))];
+  }, [events, hidden, pending]);
   const days = useMemo(() => visibleDays(view, anchor, weekStart), [view, anchor, weekStart]);
   const from = dayStart(days[0]);
   const to = dayStart(addDays(days[days.length - 1], 1));
@@ -105,6 +137,7 @@ export function CalendarView({
       const next = await calendarApi.status();
       if (request !== latest.current) return;
       setStatus(next);
+      calendarApi.google().then(setGoogle).catch(() => {});
       if (!next.enabled) return setEvents([]);
       const payload = await calendarApi.events(from, to);
       if (request !== latest.current) return;
@@ -138,7 +171,20 @@ export function CalendarView({
       .calendars()
       .then((r) => setCalendars(r.calendars))
       .catch((e: Error) => setError(e.message));
+    calendarApi
+      .people()
+      .then((r) => setPeople(r.people))
+      .catch(() => {});
   }, [status?.enabled]);
+
+  useEffect(() => {
+    if (pending.length === 0) return;
+    const timer = window.setInterval(() => {
+      setPending((list) => list.filter((p) => Date.now() - p.occurrence < PENDING_SHOWN_MS));
+      void load();
+    }, PENDING_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [pending.length, load]);
 
   const settle = (work: Promise<unknown>) =>
     work
@@ -155,6 +201,7 @@ export function CalendarView({
 
   const create = async (draft: EventDraft) => {
     await calendarApi.create(draft);
+    if (draft.google) setPending((list) => [...list, awaitingSync(draft)]);
     setTarget(null);
     void load();
   };
@@ -276,6 +323,22 @@ export function CalendarView({
               </button>
             );
           })}
+          {google.hasClient && (
+            <>
+              <hr />
+              <div className="svc-menu-heading">Google, for guests and rooms</div>
+              {google.accounts.map((email) => (
+                <button key={email} role="menuitem" title="Disconnect this account" onClick={() => calendarApi.disconnectGoogle(email).then(setGoogle)}>
+                  <span className="cal-menu-label">{email}</span>
+                  <em className="cal-menu-note">Disconnect</em>
+                </button>
+              ))}
+              <button role="menuitem" onClick={() => window.open("/api/google/connect", "_blank", "noopener")}>
+                <PlusIcon />
+                <span className="cal-menu-label">{google.accounts.length ? "Connect another account" : "Connect a Google account"}</span>
+              </button>
+            </>
+          )}
           <hr />
           <button
             role="menuitem"
@@ -312,6 +375,8 @@ export function CalendarView({
           target={target}
           calendars={calendars}
           projects={projects}
+          people={people}
+          googleAccounts={google.accounts}
           onCreateTask={createTask}
           onClose={() => setTarget(null)}
           onEdit={(event) => setTarget({ mode: "edit", event })}

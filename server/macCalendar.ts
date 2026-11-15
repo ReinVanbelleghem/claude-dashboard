@@ -2,7 +2,8 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { CalendarEvent, CalendarInfo, CalendarPayload, EventDraft, EventPatch, EventRef, MacAccess, MacCalendarStatus } from "../shared/calendar.ts";
+import { homedir } from "node:os";
+import type { CalendarEvent, CalendarInfo, CalendarPayload, EventDraft, EventPatch, EventRef, MacAccess, MacCalendarStatus, Person } from "../shared/calendar.ts";
 import { DATA_DIR } from "./paths.ts";
 
 const run = promisify(execFile);
@@ -126,8 +127,44 @@ export async function macCalendars(): Promise<CalendarInfo[]> {
   return (reply.calendars ?? []).sort((a, b) => a.account.localeCompare(b.account) || a.title.localeCompare(b.title));
 }
 
+const PEOPLE_TTL_MS = 60 * 60_000;
+const PEOPLE_BACK_MS = 180 * 86_400_000;
+const PEOPLE_AHEAD_MS = 60 * 86_400_000;
+const CONTACTS_PATH = join(homedir(), ".claude", "contacts.json");
+
+let people: { at: number; list: Person[] } | null = null;
+
+function savedContacts(): Person[] {
+  try {
+    const file = JSON.parse(readFileSync(CONTACTS_PATH, "utf8")) as { contacts?: { name?: string; email?: string | null }[] };
+    return (file.contacts ?? []).filter((c) => c.email).map((c) => ({ email: c.email!, name: c.name ?? c.email!, room: false, count: 0 }));
+  } catch {
+    return [];
+  }
+}
+
+/** Everyone and every room on your recent and coming events, most frequent first. */
+export async function macPeople(now = Date.now()): Promise<Person[]> {
+  if (!isEnabled()) return [];
+  if (people && now - people.at < PEOPLE_TTL_MS) return people.list;
+  const reply = await granted(["events", String(toSeconds(now - PEOPLE_BACK_MS)), String(toSeconds(now + PEOPLE_AHEAD_MS))], 60_000);
+  const seen = new Map<string, Person>(savedContacts().map((c) => [c.email.toLowerCase(), c]));
+  for (const event of reply.events ?? []) {
+    for (const a of event.attendees) {
+      if (!a.email || a.me) continue;
+      const key = a.email.toLowerCase();
+      const known = seen.get(key);
+      const name = a.name && a.name !== a.email ? a.name : (known?.name ?? a.email);
+      seen.set(key, { email: a.email, name, room: a.room, count: (known?.count ?? 0) + 1 });
+    }
+  }
+  const list = [...seen.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  people = { at: now, list };
+  return list;
+}
+
 function wire(fields: Partial<EventDraft>): Record<string, unknown> {
-  const { start, end, ...rest } = fields;
+  const { start, end, google: _google, ...rest } = fields;
   return {
     ...rest,
     ...(start === undefined ? {} : { start: toSeconds(start) }),

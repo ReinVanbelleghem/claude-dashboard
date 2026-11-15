@@ -160,8 +160,9 @@ import {
   updateTask,
   updateTaskProject,
 } from "./tasks.ts";
-import { createMacEvent, deleteMacEvent, disableMacCalendar, enableMacCalendar, macCalendarStatus, macCalendars, macEvents, updateMacEvent } from "./macCalendar.ts";
+import { createMacEvent, deleteMacEvent, disableMacCalendar, enableMacCalendar, macCalendarStatus, macCalendars, macEvents, macPeople, updateMacEvent } from "./macCalendar.ts";
 import type { EventDraft, EventPatch, EventRef } from "../shared/calendar.ts";
+import { createGoogleEvent, disconnectGoogle, finishGoogleConnect, googleAvailability, googleConnectUrl, googleStatus, setGoogleGuests } from "./google.ts";
 import {
   attachSession,
   createWorkspace,
@@ -1072,6 +1073,53 @@ const server = Bun.serve<PtyData, never>({
       }
     }
     if (p === "/api/calendar/disable" && req.method === "POST") return json(disableMacCalendar());
+    if (p === "/api/google" && req.method === "GET") return json(googleStatus());
+    if (p === "/api/google/connect" && req.method === "GET") {
+      const target = googleConnectUrl();
+      if (!target) return json({ error: "no Google client is set up" }, 400);
+      return Response.redirect(target, 302);
+    }
+    if (p === "/api/google/callback" && req.method === "GET") {
+      const escape = (text: string) => text.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+      const page = (title: string, detail: string, status = 200) =>
+        new Response(
+          `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:16px system-ui;margin:15vh auto;max-width:520px;padding:0 24px"><h1 style="font-size:22px">${title}</h1><p>${escape(detail)}</p><p>You can close this tab and go back to the dashboard.</p>`,
+          { status, headers: { "content-type": "text/html; charset=utf-8" } },
+        );
+      const denied = url.searchParams.get("error");
+      if (denied) return page("Google was not connected", denied, 400);
+      try {
+        const email = await finishGoogleConnect(url.searchParams.get("code") ?? "", url.searchParams.get("state") ?? "");
+        broadcast("calendar", { at: Date.now() });
+        return page("Google is connected", email);
+      } catch (e) {
+        return page("Google was not connected", (e as Error).message, 400);
+      }
+    }
+    if (p === "/api/google/disconnect" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { email?: string } | null;
+      return json(await disconnectGoogle(String(body?.email ?? "")));
+    }
+    if ((p === "/api/google/availability" || p === "/api/google/guests") && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { account?: string; emails?: string[]; start?: number; end?: number; externalId?: string; guests?: string[]; rooms?: string[] } | null;
+      if (!body?.account) return json({ error: "account is required" }, 400);
+      try {
+        if (p === "/api/google/availability") {
+          return json({ availability: await googleAvailability(body.account, body.emails ?? [], Number(body.start), Number(body.end)) });
+        }
+        await setGoogleGuests(body.account, String(body.externalId ?? ""), body.guests ?? [], body.rooms ?? []);
+        return json({ ok: true });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 502);
+      }
+    }
+    if (p === "/api/calendar/people" && req.method === "GET") {
+      try {
+        return json({ people: await macPeople() });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 502);
+      }
+    }
     if (p.startsWith("/api/calendar/") && (p === "/api/calendar/calendars" || p.startsWith("/api/calendar/events"))) {
       try {
         if (p === "/api/calendar/calendars" && req.method === "GET") return json({ calendars: await macCalendars() });
@@ -1089,7 +1137,9 @@ const server = Bun.serve<PtyData, never>({
             if (typeof draft.start !== "number" || typeof draft.end !== "number" || draft.end < draft.start) {
               return json({ error: "start and end are required, in epoch ms" }, 400);
             }
-            const event = await createMacEvent({ ...draft, title: String(draft.title ?? "").trim() || "New event", allDay: draft.allDay === true });
+            const clean = { ...draft, title: String(draft.title ?? "").trim() || "New event", allDay: draft.allDay === true };
+            if (clean.google) return json({ event: null, google: await createGoogleEvent(clean) });
+            const event = await createMacEvent(clean);
             broadcast("calendar", { at: Date.now() });
             return json({ event });
           }

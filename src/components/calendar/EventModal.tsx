@@ -1,5 +1,6 @@
-import { useEffect, useState, type CSSProperties } from "react";
-import type { Attendee, CalendarEvent, CalendarInfo, EventDraft, EventPatch, EventRef, Task, TaskProject } from "../../api.ts";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { calendarApi, type Attendee, type Availability, type CalendarEvent, type CalendarInfo, type CalendarPerson, type EventDraft, type EventPatch, type EventRef, type Task, type TaskProject } from "../../api.ts";
+import { PeoplePicker } from "./PeoplePicker.tsx";
 import type { TaskPatch } from "../../../shared/tasks.ts";
 import type { Priority } from "../../../shared/taskDates.ts";
 import { TASK_COLORS, type TaskColor } from "../../../shared/tasks.ts";
@@ -20,6 +21,9 @@ export type TaskDraft = { content: string; description: string; projectId: numbe
 
 type Span = "this" | "future";
 type Kind = "event" | "task";
+
+const AVAILABILITY_DELAY_MS = 400;
+const ROOMS_CHECKED = 25;
 
 const STATUS_LABEL = { accepted: "Accepted", declined: "Declined", tentative: "Maybe", pending: "No reply" } as const;
 const STATUS_ORDER: Attendee["status"][] = ["accepted", "tentative", "pending", "declined"];
@@ -71,6 +75,8 @@ export function EventModal({
   target,
   calendars,
   projects,
+  people,
+  googleAccounts,
   onClose,
   onEdit,
   onCreate,
@@ -81,6 +87,8 @@ export function EventModal({
   target: CalendarTarget;
   calendars: CalendarInfo[];
   projects: TaskProject[];
+  people: CalendarPerson[];
+  googleAccounts: string[];
   onCreateTask: (draft: TaskDraft) => Promise<void>;
   onClose: () => void;
   onEdit: (event: CalendarEvent) => void;
@@ -95,7 +103,7 @@ export function EventModal({
       {target.mode === "view" ? (
         <EventDetails event={target.event} onClose={onClose} onEdit={() => onEdit(target.event)} onDelete={onDelete} />
       ) : (
-        <EventForm target={target} calendars={calendars} projects={projects} onClose={onClose} onCreate={onCreate} onCreateTask={onCreateTask} onUpdate={onUpdate} />
+        <EventForm target={target} calendars={calendars} projects={projects} people={people} googleAccounts={googleAccounts} onClose={onClose} onCreate={onCreate} onCreateTask={onCreateTask} onUpdate={onUpdate} />
       )}
     </>
   );
@@ -246,6 +254,8 @@ function EventForm({
   target,
   calendars,
   projects,
+  people,
+  googleAccounts,
   onClose,
   onCreate,
   onCreateTask,
@@ -254,6 +264,8 @@ function EventForm({
   target: Exclude<CalendarTarget, { mode: "view" }>;
   calendars: CalendarInfo[];
   projects: TaskProject[];
+  people: CalendarPerson[];
+  googleAccounts: string[];
   onCreateTask: (draft: TaskDraft) => Promise<void>;
   onClose: () => void;
   onCreate: (draft: EventDraft) => Promise<void>;
@@ -279,6 +291,32 @@ function EventForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const asTask = !existing && kind === "task";
+
+  const invited = (room: boolean) => (existing?.attendees ?? []).filter((a) => a.room === room && !a.me && a.email).map((a) => a.email!);
+  const [guests, setGuests] = useState(() => invited(false));
+  const [rooms, setRooms] = useState(() => invited(true));
+  const [meet, setMeet] = useState(false);
+  const [account, setAccount] = useState(googleAccounts[0] ?? "");
+  const [availability, setAvailability] = useState<Record<string, Availability>>({});
+  const persons = useMemo(() => people.filter((p) => !p.room), [people]);
+  const roomChoices = useMemo(() => people.filter((p) => p.room), [people]);
+  const canInvite = googleAccounts.length > 0 && !asTask && (!existing || existing.externalId !== null);
+  const usesGoogle = canInvite && (guests.length > 0 || rooms.length > 0 || meet);
+  const guestsChanged = existing !== null && (guests.join() !== invited(false).join() || rooms.join() !== invited(true).join());
+  const startMs = allDay ? dayStart(startDay) : new Date(`${startDay}T${startTime}`).getTime();
+  const endMs = allDay ? dayStart(endDay) + 24 * 60 * MINUTE_MS : new Date(`${endDay}T${endTime}`).getTime();
+  const watched = [...guests, ...roomChoices.slice(0, ROOMS_CHECKED).map((r) => r.email), ...rooms].join(",");
+
+  useEffect(() => {
+    if (!canInvite || !account || watched === "" || !(endMs > startMs)) return;
+    const timer = window.setTimeout(() => {
+      calendarApi
+        .availability(account, [...new Set(watched.split(","))], startMs, endMs)
+        .then((r) => setAvailability(r.availability))
+        .catch(() => setAvailability({}));
+    }, AVAILABILITY_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [canInvite, account, watched, startMs, endMs]);
 
   useEffect(() => {
     if (!calendarId && writable.length) setCalendarId(writable.find((c) => c.isDefault)?.id ?? writable[0].id);
@@ -326,7 +364,10 @@ function EventForm({
     const draft: EventDraft = { title: title.trim() || "New event", start, end, allDay, location: location.trim(), notes: notes.trim(), calendarId: calendarId || undefined };
     setBusy(true);
     setError(null);
-    const request = existing ? onUpdate({ ...draft, id: existing.id, occurrence: existing.occurrence, span }) : onCreate(draft);
+    const saveGuests = existing && guestsChanged ? calendarApi.setGuests(account, existing.externalId!, guests, rooms) : Promise.resolve();
+    const request = existing
+      ? saveGuests.then(() => onUpdate({ ...draft, id: existing.id, occurrence: existing.occurrence, span }))
+      : onCreate(usesGoogle ? { ...draft, google: { account, guests, rooms, meet } } : draft);
     request.catch(fail);
   };
 
@@ -383,6 +424,32 @@ function EventForm({
           </label>
         )}
       </div>
+      {canInvite && (
+        <section className="cal-invite">
+          <div className="field">
+            <span>Guests</span>
+            <PeoplePicker people={persons} selected={guests} onChange={setGuests} availability={availability} placeholder="Name or email" allowAnyEmail />
+          </div>
+          <div className="field">
+            <span>Room</span>
+            <PeoplePicker people={roomChoices} selected={rooms} onChange={setRooms} availability={availability} placeholder="Pick a room, free ones first" rankByAvailability />
+          </div>
+          {!existing && (
+            <label className="set-row cal-check">
+              <input type="checkbox" checked={meet} onChange={(e) => setMeet(e.target.checked)} />
+              <span>Add a Google Meet link</span>
+            </label>
+          )}
+          {googleAccounts.length > 1 && (
+            <div className="field">
+              <span>Invite from</span>
+              <Select ariaLabel="Google account" value={account} onChange={setAccount} options={googleAccounts.map((a) => ({ value: a, label: a }))} />
+            </div>
+          )}
+          {usesGoogle && !existing && <p className="hint">Google creates this event on {account}'s calendar and emails the invitations.</p>}
+          {guestsChanged && <p className="hint">Google emails everyone whose invitation changes{existing?.recurring ? ", for the whole series" : ""}.</p>}
+        </section>
+      )}
       {asTask ? (
         <div className="field">
           <span>Project</span>
@@ -395,6 +462,7 @@ function EventForm({
         </div>
       ) : (
         <>
+          {!(usesGoogle && !existing) && (
           <div className="field">
             <span>Calendar</span>
             <Select
@@ -404,6 +472,7 @@ function EventForm({
               options={writable.map((c) => ({ value: c.id, label: c.title, hint: c.account !== c.title ? c.account : undefined, dot: c.color ?? "var(--accent)" }))}
             />
           </div>
+          )}
           <label className="field">
             <span>Where</span>
             <input className="search" value={location} onChange={(e) => setLocation(e.target.value)} />
