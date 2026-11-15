@@ -1,14 +1,15 @@
-import type { CalendarEvent, CalendarInfo, EventDraft, EventPatch, EventRef } from "../shared/calendar.ts";
+import type { CalendarEvent, CalendarInfo, EventDraft, EventPatch, EventRef, Person } from "../shared/calendar.ts";
 import {
   createGoogleEvent,
   deleteGoogleEvent,
   directAccounts,
   googleCalendars,
   googleEvents,
+  googleSubscribed,
   parseGoogleCalendarId,
   updateGoogleEvent,
 } from "./google.ts";
-import { createMacEvent, deleteMacEvent, macCalendars, macEvents, updateMacEvent } from "./macCalendar.ts";
+import { createMacEvent, deleteMacEvent, macCalendars, macEvents, macPeople, updateMacEvent } from "./macCalendar.ts";
 
 /**
  * One calendar out of two sources. A Google account that is connected is read and
@@ -61,6 +62,20 @@ export async function listEvents(from: number, to: number): Promise<{ events: Ca
     events: [...fromMac, ...google.flatMap((g) => g.events)].sort(byStart),
     errors: [...errors, ...google.flatMap((g) => g.errors)],
   };
+}
+
+/** People and rooms to suggest: those on your own events, plus the colleagues and rooms subscribed to in Google. */
+export async function listPeople(): Promise<Person[]> {
+  const [met, subscribed] = await Promise.all([
+    macPeople(),
+    Promise.all(directAccounts().map((account) => googleSubscribed(account).catch(() => [] as Person[]))),
+  ]);
+  const known = new Map(met.map((p) => [p.email.toLowerCase(), p]));
+  for (const p of subscribed.flat()) {
+    const seen = known.get(p.email.toLowerCase());
+    known.set(p.email.toLowerCase(), seen ? { ...seen, name: seen.name === seen.email ? p.name : seen.name, room: seen.room || p.room } : p);
+  }
+  return [...known.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 }
 
 export async function createEvent(draft: EventDraft): Promise<void> {

@@ -3,9 +3,8 @@ import { z } from "zod";
 import type { CalendarEvent, EventDraft } from "../shared/calendar.ts";
 import { localDay, localTime } from "../shared/taskDates.ts";
 import { addProposal } from "./calendarProposals.ts";
-import { createEvent, listCalendars, listEvents } from "./calendarSources.ts";
+import { createEvent, listCalendars, listEvents, listPeople } from "./calendarSources.ts";
 import { googleAvailability, googleOtherEvents, googleStatus } from "./google.ts";
-import { macPeople } from "./macCalendar.ts";
 
 const SERVER = "calendar";
 
@@ -83,7 +82,7 @@ export function calendarToolServer(onChange: () => void) {
           answer((await listEvents(toMs(from), toMs(to))).events.map(brief)),
         ),
         tool("list_people", "People and rooms the user has met with before: name, email and whether it is a room. Rooms often carry their capacity in the name.", {}, async () =>
-          answer((await macPeople()).map((p) => ({ name: p.name, email: p.email, room: p.room }))),
+          answer((await listPeople()).map((p) => ({ name: p.name, email: p.email, room: p.room }))),
         ),
         tool(
           "their_events",

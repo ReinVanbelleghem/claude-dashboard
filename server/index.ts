@@ -160,12 +160,12 @@ import {
   updateTask,
   updateTaskProject,
 } from "./tasks.ts";
-import { disableMacCalendar, enableMacCalendar, macCalendarStatus, macPeople, refreshMacCalendar } from "./macCalendar.ts";
+import { disableMacCalendar, enableMacCalendar, macCalendarStatus, refreshMacCalendar } from "./macCalendar.ts";
 import type { EventDraft, EventPatch, EventRef } from "../shared/calendar.ts";
 import { CALENDAR_SAFE_TOOLS, calendarToolServer } from "./calendarTools.ts";
 import { addProposal, approveProposal, discardProposal, listProposals, updateProposal } from "./calendarProposals.ts";
 import { disconnectGoogle, finishGoogleConnect, googleAvailability, googleConnectUrl, googleOtherEvents, googleStatus, removeGoogleClient, setGoogleClient, setGoogleEventGuests, setGoogleGuests } from "./google.ts";
-import { createEvent, deleteEvent, listCalendars, listEvents, updateEvent } from "./calendarSources.ts";
+import { createEvent, deleteEvent, listCalendars, listEvents, listPeople, updateEvent } from "./calendarSources.ts";
 import {
   attachSession,
   createWorkspace,
@@ -1196,7 +1196,7 @@ const server = Bun.serve<PtyData, never>({
     }
     if (p === "/api/calendar/people" && req.method === "GET") {
       try {
-        return json({ people: await macPeople() });
+        return json({ people: await listPeople() });
       } catch (e) {
         return json({ error: (e as Error).message }, 502);
       }

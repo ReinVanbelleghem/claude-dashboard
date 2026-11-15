@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Attendee, Availability, CalendarEvent, CalendarInfo, EventDraft, GoogleStatus } from "../shared/calendar.ts";
+import type { Attendee, Availability, CalendarEvent, CalendarInfo, EventDraft, GoogleStatus, Person } from "../shared/calendar.ts";
 import { addDays, localDay } from "../shared/taskDates.ts";
 import { DATA_DIR, PORT } from "./paths.ts";
 
@@ -229,10 +229,31 @@ async function calendarList(account: string): Promise<GoogleCalendar[]> {
 }
 
 const nameOf = (c: GoogleCalendar) => c.summaryOverride ?? c.summary ?? c.id;
+
+const ROOM_ID = /@resource\.calendar\.google\.com$/;
+const GROUP_ID = /@group\.(v\.)?calendar\.google\.com$/;
+
+/**
+ * Whether a calendar in the account's list is the user's own. The list also holds
+ * every colleague and room they have subscribed to in Google Calendar; those belong
+ * under "Other calendars", where they are searched for and pinned, not here.
+ */
+const isOwn = (c: GoogleCalendar) => c.primary === true || c.accessRole === "owner" || GROUP_ID.test(c.id);
+
+async function ownCalendars(account: string): Promise<GoogleCalendar[]> {
+  return (await calendarList(account)).filter(isOwn);
+}
+
+/** The colleagues and rooms an account has subscribed to in Google Calendar, as people to search for. */
+export async function googleSubscribed(account: string): Promise<Person[]> {
+  return (await calendarList(account))
+    .filter((c) => !isOwn(c))
+    .map((c) => ({ email: c.id, name: nameOf(c), room: ROOM_ID.test(c.id), count: 0 }));
+}
 const writable = (c: GoogleCalendar) => c.accessRole === "owner" || c.accessRole === "writer";
 
 export async function googleCalendars(account: string): Promise<CalendarInfo[]> {
-  return (await calendarList(account)).map((c) => ({
+  return (await ownCalendars(account)).map((c) => ({
     id: googleCalendarId(account, c.id),
     title: nameOf(c),
     account,
@@ -288,7 +309,7 @@ const MAX_EVENT_PAGES = 4;
 
 /** Every event of an account's calendars in a range, read from Google. A calendar that fails is reported, not fatal. */
 export async function googleEvents(account: string, from: number, to: number): Promise<{ events: CalendarEvent[]; errors: string[] }> {
-  const calendars = await calendarList(account);
+  const calendars = await ownCalendars(account);
   const errors: string[] = [];
   const perCalendar = await Promise.all(
     calendars.map(async (c) => {
