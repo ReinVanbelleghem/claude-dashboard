@@ -145,6 +145,7 @@ COPY=(
   index.html
   src
   server
+  shared
   public
   dist
   scripts
