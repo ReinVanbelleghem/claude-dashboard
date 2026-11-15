@@ -27,6 +27,8 @@ import {
   XIcon,
 } from "../Icons.tsx";
 
+const FOCUS_DELAY_MS = 80;
+
 type View = { kind: "today" } | { kind: "upcoming" } | { kind: "project"; id: number };
 
 const PRIORITY_LABEL = ["", "Priority 1", "Priority 2", "Priority 3", "No priority"];
@@ -73,7 +75,12 @@ export function TasksView({
   workspaces,
   onStartWorkspace,
   onOpenWorkspace,
+  focusTaskId = null,
+  onFocused,
 }: {
+  /** A task to bring into view: its project opens and its row is scrolled to and flashed. */
+  focusTaskId?: number | null;
+  onFocused?: () => void;
   payload: TasksPayload | null;
   workspaces: Workspace[];
   /** Start a workspace for this task: the dialog opens with the task as its goal. */
@@ -81,6 +88,20 @@ export function TasksView({
   onOpenWorkspace: (workspace: Workspace) => void;
 }) {
   const [view, setView] = useState<View>({ kind: "today" });
+  const focusProjectId = focusTaskId === null ? undefined : payload?.tasks.find((t) => t.id === focusTaskId)?.projectId;
+
+  useEffect(() => {
+    if (focusTaskId === null || focusProjectId === undefined) return;
+    setView({ kind: "project", id: focusProjectId });
+    const timer = window.setTimeout(() => {
+      const row = document.querySelector<HTMLElement>(`[data-task-id="${focusTaskId}"]`);
+      row?.scrollIntoView({ block: "center" });
+      row?.classList.add("flash");
+      window.setTimeout(() => row?.classList.remove("flash"), 1800);
+      onFocused?.();
+    }, FOCUS_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [focusTaskId, focusProjectId, onFocused]);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
@@ -619,6 +640,7 @@ function TaskRow({
     : "";
   return (
     <div
+      data-task-id={t.id}
       className={`task-row${done ? " done" : ""}${menuAnchor || dueAnchor ? " active" : ""}`}
       onContextMenu={(e) => {
         if (done || renaming) return;

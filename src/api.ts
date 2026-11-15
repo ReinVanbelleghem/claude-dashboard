@@ -398,6 +398,9 @@ export type Settings = {
     footerPages?: string[];
     workspaceAutoGoal?: boolean;
     taskDigestTime?: string;
+    calendarWeekStart?: 0 | 1 | 6;
+    calendarView?: "week" | "workweek" | "month";
+    calendarHidden?: string[];
     appName?: string;
     /** Where a plain click on a session card lands. */
     clickOpensIn: "drawer" | "page" | "tile";
@@ -1218,6 +1221,20 @@ export const workspaceApi = {
 
 import type { Task, TaskAdd, TaskPatch, TaskProject, TasksPayload } from "../shared/tasks.ts";
 export type { Task, TaskProject, TasksPayload };
+
+import type { CalendarEvent, CalendarInfo, CalendarPayload, EventDraft, EventPatch, EventRef, MacCalendarStatus } from "../shared/calendar.ts";
+export type { Attendee, CalendarEvent, CalendarInfo, CalendarView, EventDraft, EventPatch, EventRef, MacCalendarStatus, WeekStart } from "../shared/calendar.ts";
+
+export const calendarApi = {
+  status: () => get<MacCalendarStatus>("/api/calendar"),
+  enable: () => post<MacCalendarStatus>("/api/calendar/enable"),
+  disable: () => post<MacCalendarStatus>("/api/calendar/disable"),
+  calendars: () => get<{ calendars: CalendarInfo[] }>("/api/calendar/calendars"),
+  events: (from: number, to: number) => get<CalendarPayload>(`/api/calendar/events?from=${from}&to=${to}`),
+  create: (draft: EventDraft) => post<{ event: CalendarEvent }>("/api/calendar/events", draft),
+  update: (patch: EventPatch) => post<{ event: CalendarEvent }>("/api/calendar/events/update", patch),
+  remove: (ref: EventRef) => post<{ ok: true }>("/api/calendar/events/delete", ref),
+};
 
 export const taskApi = {
   list: () => get<TasksPayload>("/api/tasks"),

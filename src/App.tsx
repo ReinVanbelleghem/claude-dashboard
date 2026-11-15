@@ -44,6 +44,7 @@ import {
   SearchIcon,
   SunMoonIcon,
   TasksIcon,
+  CalendarIcon,
   TemplateIcon,
   TerminalIcon,
   WorktreeIcon,
@@ -54,6 +55,7 @@ import { usePrWatches } from "./components/pr/prState.ts";
 import { ServicesView } from "./components/services/ServicesView.tsx";
 import { TemplatesView } from "./components/TemplatesView.tsx";
 import { TasksView } from "./components/tasks/TasksView.tsx";
+import { CalendarView } from "./components/calendar/CalendarView.tsx";
 import { localDay } from "../shared/taskDates.ts";
 import type { ServicesState } from "../shared/services.ts";
 import { Sidebar } from "./components/Sidebar.tsx";
@@ -104,6 +106,7 @@ const TAB_LABEL: Record<Tab, string> = Object.fromEntries(PAGES.map((p) => [p.ke
 const TAB_ICON: Record<Exclude<Tab, "desktop">, () => JSX.Element> = {
   live: PulseIcon,
   tasks: TasksIcon,
+  calendar: CalendarIcon,
   history: ClockIcon,
   artifacts: ArtifactIcon,
   worktrees: WorktreeIcon,
@@ -209,6 +212,9 @@ export default function App() {
   /** The New workspace dialog, with the folder it opens on. */
   const [newWorkspace, setNewWorkspace] = useState<{ folder: string | null; task?: Task } | null>(null);
   const [tasks, setTasks] = useState<TasksPayload | null>(null);
+  const [calendarChanged, setCalendarChanged] = useState(0);
+  const [focusTaskId, setFocusTaskId] = useState<number | null>(null);
+  const clearFocusTask = useCallback(() => setFocusTaskId(null), []);
   const [showFolders, setShowFolders] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showFind, setShowFind] = useState(false);
@@ -384,6 +390,7 @@ export default function App() {
     es.addEventListener("settings", (e) => setSettings(JSON.parse((e as MessageEvent).data)));
     es.addEventListener("workspaces", (e) => setWorkspaces(JSON.parse((e as MessageEvent).data)));
     es.addEventListener("tasks", (e) => setTasks(JSON.parse((e as MessageEvent).data)));
+    es.addEventListener("calendar", () => setCalendarChanged((n) => n + 1));
     // The daemon owns the decision to notify; the tab only raises the banner.
     es.addEventListener("notify", (e) => {
       const p = JSON.parse((e as MessageEvent).data) as NotifyPayload;
@@ -897,7 +904,7 @@ export default function App() {
         />
       )}
 
-      {!onFullPage && usage && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "services" && tab !== "templates" && tab !== "tasks" && tab !== "history" && (
+      {!onFullPage && usage && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "services" && tab !== "templates" && tab !== "tasks" && tab !== "calendar" && tab !== "history" && (
         <div className="kpis">
           {/* Tokens here are fresh tokens: cache reads are excluded and shown
               separately, since they are ~97% of raw volume at a tenth the rate. */}
@@ -987,6 +994,8 @@ export default function App() {
       {!onFullPage && tab === "tasks" && (
         <TasksView
           payload={tasks}
+          focusTaskId={focusTaskId}
+          onFocused={clearFocusTask}
           workspaces={workspaces?.workspaces ?? []}
           onStartWorkspace={(task) => {
             const repo = tasks?.projects.find((p) => p.id === task.projectId)?.repoKey ?? null;
@@ -1000,6 +1009,14 @@ export default function App() {
           }}
         />
       )}
+      {!onFullPage && tab === "calendar" && <CalendarView tasks={tasks?.tasks ?? []} projects={tasks?.projects ?? []} settings={settings}
+          onSettings={setSettings}
+          changed={calendarChanged}
+          onOpenInTasks={(task) => {
+            setFocusTaskId(task.id);
+            setTab("tasks");
+          }}
+        />}
       {!onFullPage && tab === "history" && (
         <HistoryView
           onOpen={openSession}

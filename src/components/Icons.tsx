@@ -527,6 +527,34 @@ export function RepeatIcon() {
   );
 }
 
+export function UsersIcon() {
+  return (
+    <I>
+      <circle cx="9" cy="8" r="3.5" />
+      <path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5" />
+      <path d="M16 4.800a3.5 3.5 0 0 1 0 6.400M18.5 14.900c1.6.8 2.7 2.5 3 5.1" />
+    </I>
+  );
+}
+
+export function VideoIcon() {
+  return (
+    <I>
+      <rect x="2.5" y="6" width="13" height="12" rx="2.5" />
+      <path d="m15.5 10.5 6-3.500v10l-6-3.5" />
+    </I>
+  );
+}
+
+export function HelpIcon() {
+  return (
+    <I>
+      <path d="M9 9.200a3 3 0 1 1 4.4 2.700c-.9.5-1.4 1.1-1.4 2.1" />
+      <path d="M12 17.500v.1" />
+    </I>
+  );
+}
+
 export function TasksIcon() {
   return (
     <I>

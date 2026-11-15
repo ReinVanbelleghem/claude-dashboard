@@ -160,6 +160,8 @@ import {
   updateTask,
   updateTaskProject,
 } from "./tasks.ts";
+import { createMacEvent, deleteMacEvent, disableMacCalendar, enableMacCalendar, macCalendarStatus, macCalendars, macEvents, updateMacEvent } from "./macCalendar.ts";
+import type { EventDraft, EventPatch, EventRef } from "../shared/calendar.ts";
 import {
   attachSession,
   createWorkspace,
@@ -1060,6 +1062,53 @@ const server = Bun.serve<PtyData, never>({
       if (!folder) return json({ error: "folder is required" }, 400);
       if (!existsSync(folder)) return json({ error: `no such directory: ${folder}` }, 400);
       return json({ workspace: await createWorkspace({ goal: body?.goal ?? "", folder }) });
+    }
+    if (p === "/api/calendar" && req.method === "GET") return json(await macCalendarStatus());
+    if (p === "/api/calendar/enable" && req.method === "POST") {
+      try {
+        return json(await enableMacCalendar());
+      } catch (e) {
+        return json({ error: (e as Error).message }, 400);
+      }
+    }
+    if (p === "/api/calendar/disable" && req.method === "POST") return json(disableMacCalendar());
+    if (p.startsWith("/api/calendar/") && (p === "/api/calendar/calendars" || p.startsWith("/api/calendar/events"))) {
+      try {
+        if (p === "/api/calendar/calendars" && req.method === "GET") return json({ calendars: await macCalendars() });
+        if (p === "/api/calendar/events" && req.method === "GET") {
+          const from = Number(url.searchParams.get("from"));
+          const to = Number(url.searchParams.get("to"));
+          if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return json({ error: "from and to are required, in epoch ms" }, 400);
+          return json(await macEvents(from, to));
+        }
+        if (req.method === "POST") {
+          const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+          if (!body) return json({ error: "a JSON body is required" }, 400);
+          if (p === "/api/calendar/events") {
+            const draft = body as EventDraft;
+            if (typeof draft.start !== "number" || typeof draft.end !== "number" || draft.end < draft.start) {
+              return json({ error: "start and end are required, in epoch ms" }, 400);
+            }
+            const event = await createMacEvent({ ...draft, title: String(draft.title ?? "").trim() || "New event", allDay: draft.allDay === true });
+            broadcast("calendar", { at: Date.now() });
+            return json({ event });
+          }
+          const ref = body as EventRef;
+          if (typeof ref.id !== "string" || typeof ref.occurrence !== "number") return json({ error: "id and occurrence are required" }, 400);
+          if (p === "/api/calendar/events/update") {
+            const event = await updateMacEvent(body as EventPatch);
+            broadcast("calendar", { at: Date.now() });
+            return json({ event });
+          }
+          if (p === "/api/calendar/events/delete") {
+            await deleteMacEvent(ref);
+            broadcast("calendar", { at: Date.now() });
+            return json({ ok: true });
+          }
+        }
+      } catch (e) {
+        return json({ error: (e as Error).message }, 502);
+      }
     }
     if (p === "/api/tasks" && req.method === "GET") return json(tasksPayload());
     if (p === "/api/tasks" && req.method === "POST") {

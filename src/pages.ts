@@ -5,7 +5,7 @@
  * turns them off — a page hidden in settings has to disappear from all three, and
  * three separate lists drifted apart the moment one gained a page.
  */
-export type Tab = "desktop" | "live" | "tasks" | "history" | "artifacts" | "worktrees" | "services" | "templates" | "reviews" | "usage" | "settings";
+export type Tab = "desktop" | "live" | "tasks" | "calendar" | "history" | "artifacts" | "worktrees" | "services" | "templates" | "reviews" | "usage" | "settings";
 
 export type PageDef = {
   key: Tab;
@@ -24,6 +24,7 @@ export const PAGES: PageDef[] = [
   { key: "desktop", label: "", hint: "a blank canvas for arranging tiles" },
   { key: "live", label: "Live", hint: "your sessions", fixed: true },
   { key: "tasks", label: "Tasks", hint: "your to-dos, with dates and projects" },
+  { key: "calendar", label: "Calendar", hint: "your calendar events beside your tasks" },
   { key: "history", label: "History", hint: "past sessions" },
   { key: "artifacts", label: "Artifacts", hint: "generated pages" },
   { key: "worktrees", label: "Worktrees", hint: "checkouts" },

@@ -149,6 +149,12 @@ export type Settings = {
     workspaceAutoGoal: boolean;
     /** Local HH:MM from which the once-a-day "tasks for today" banner may fire. Empty turns it off. */
     taskDigestTime: string;
+    /** The day the calendar's week and month views start on: 0 Sunday, 1 Monday, 6 Saturday. */
+    calendarWeekStart: 0 | 1 | 6;
+    /** The calendar view last used, so the page reopens on it. */
+    calendarView: "week" | "workweek" | "month";
+    /** Calendars switched off in the calendar's menu, by id. */
+    calendarHidden: string[];
     /** What the sidebar, breadcrumb and window title call this app. */
     appName: string;
     clickOpensIn: "drawer" | "page" | "tile";
@@ -318,6 +324,9 @@ const DEFAULTS: Settings = {
     sidebarCollapsed: false,
     workspaceAutoGoal: true,
     taskDigestTime: "09:00",
+    calendarWeekStart: 1,
+    calendarView: "week",
+    calendarHidden: [],
     appName: "Claude Dashboard",
     clickOpensIn: "drawer",
     cmdClickOpensIn: "page",
