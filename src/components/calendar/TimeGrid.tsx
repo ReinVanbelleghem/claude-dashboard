@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { CalendarEvent, Task, TaskProject } from "../../api.ts";
 import { TaskMark, TaskProjectTag } from "./TaskBits.tsx";
+import { useEventHover } from "./EventHoverCard.tsx";
 import { addDays } from "../../../shared/taskDates.ts";
 import {
   MINUTE_MS,
@@ -80,6 +81,7 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
   const bodyRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const hover = useEventHover();
   const [hourPx, setHourPx] = useState(storedZoom);
   const shownHourPx = useRef(hourPx);
   const zoomAnchor = useRef<{ hours: number; fromTop: number } | null>(null);
@@ -205,6 +207,7 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    hover.hide();
     const x0 = e.clientX;
     const y0 = e.clientY;
     let current = initial;
@@ -295,7 +298,8 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
   const nowTop = (minutesOfDay(now) / 60) * hourPx;
 
   return (
-    <div className={`cal-scroll ${drag?.moved ? "dragging" : ""}`} ref={scrollRef} style={columns}>
+    <div className={`cal-scroll ${drag?.moved ? "dragging" : ""}`} ref={scrollRef} style={columns} onScroll={hover.hide}>
+      {!drag && hover.card}
       <div className="cal-top">
         <div className="cal-head">
           <div className="cal-gutter" />
@@ -342,10 +346,10 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
                   : undefined;
                 return (
                   <div
-                    className={`cal-bar ${bar.ghost ? "ghost" : ""} ${bar.event.editable ? "" : "locked"}`}
+                    className={`cal-bar ${bar.ghost ? "ghost" : ""} ${bar.event.editable ? "" : "locked"} ${bar.event.other ? "other" : ""}`}
                     key={bar.key}
                     style={{ ...place, ...tint(bar.event.color) }}
-                    title={bar.event.title}
+                    {...hover.bind(bar.event)}
                     onPointerDown={pointerDown}
                     onClick={bar.event.editable ? undefined : () => onOpenEvent(bar.event)}
                   >
@@ -412,10 +416,10 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
               const { event } = block;
               return (
                 <div
-                  className={`cal-ev ${short ? "short" : ""} ${block.ghost ? "ghost" : ""} ${event.editable ? "" : "locked"}`}
+                  className={`cal-ev ${short ? "short" : ""} ${block.ghost ? "ghost" : ""} ${event.editable ? "" : "locked"} ${event.other ? "other" : ""}`}
                   key={block.key}
                   style={{ ...box, ...tint(event.color) }}
-                  title={`${event.title} · ${fmtTime(block.start)} – ${fmtTime(block.end)}`}
+                  {...hover.bind(event)}
                   onPointerDown={
                     event.editable
                       ? (e) => begin(e, { kind: "move", event, grab: grabOf(e, block.start), start: block.start, end: block.end, moved: false })

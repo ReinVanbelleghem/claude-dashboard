@@ -1,6 +1,7 @@
 import { useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { CalendarEvent, Task, TaskProject } from "../../api.ts";
 import { TaskMark, TaskProjectTag } from "./TaskBits.tsx";
+import { useEventHover } from "./EventHoverCard.tsx";
 import { addDays } from "../../../shared/taskDates.ts";
 import { dayOfMonth, dayStart, diffDays, eventDays, fmtTime, isBar, shiftDays, weekdayShort } from "./dates.ts";
 
@@ -33,6 +34,7 @@ const tint = (color: string | null): CSSProperties => ({ "--ev": color ?? "var(-
 
 export function MonthGrid({ days, anchor, today, events, tasks, projects, onOpenEvent, onOpenTask, onCreate, onMoveEvent, onMoveTask, onShowDay }: MonthGridProps) {
   const [drag, setDrag] = useState<Drag | null>(null);
+  const hover = useEventHover();
   const month = anchor.slice(0, 7);
 
   const itemsByDay = useMemo(() => {
@@ -66,6 +68,7 @@ export function MonthGrid({ days, anchor, today, events, tasks, projects, onOpen
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    hover.hide();
     const movable = item.kind === "task" || item.event.editable;
     const x0 = e.clientX;
     const y0 = e.clientY;
@@ -95,6 +98,7 @@ export function MonthGrid({ days, anchor, today, events, tasks, projects, onOpen
 
   return (
     <div className={`cal-month ${drag ? "dragging" : ""}`} style={{ "--weeks": days.length / 7 } as CSSProperties}>
+      {!drag && hover.card}
       <div className="cal-month-head">
         {days.slice(0, 7).map((day) => (
           <span key={day}>{weekdayShort(day)}</span>
@@ -140,10 +144,10 @@ export function MonthGrid({ days, anchor, today, events, tasks, projects, onOpen
                 }
                 return (
                   <div
-                    className={`cal-chip ${item.bar ? "bar" : ""} ${lifted}`}
+                    className={`cal-chip ${item.bar ? "bar" : ""} ${item.event.other ? "other" : ""} ${lifted}`}
                     key={item.key}
                     style={tint(item.event.color)}
-                    title={item.event.title}
+                    {...hover.bind(item.event)}
                     onClick={(e) => e.stopPropagation()}
                     onPointerDown={(e) => begin(e, item, day)}
                   >

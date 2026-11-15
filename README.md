@@ -53,6 +53,7 @@ access, so it must not be reachable from your network.
 | `terminal-notifier` *(optional, macOS)* | clickable notification banners; without it, notifications fall back to `osascript` |
 | `gh`, logged in *(optional)* | the Reviews tab uses the token `gh auth token` returns; without it everything else still works |
 | `tmux` *(optional)* | the Services page runs your local dev stack in tmux sessions |
+| Swift compiler *(optional, macOS)* | builds the Calendar page's helper on first use; `xcode-select --install` provides it. Without it the calendar stays off |
 | `python3` *(optional)* | brokers the in-browser terminal for the Services page: attach, container logs and shells. Standard library only |
 | Docker with `docker compose` *(optional)* | the containers section under Services lists and drives a compose project |
 
@@ -347,6 +348,56 @@ Checkouts are made under `~/.claude-dashboard/pr` (configurable), one bare clone
 repository and one worktree per reviewed commit, so your own clones are never touched.
 Older checkouts no session is using are pruned past a configurable count.
 
+### Calendar
+
+Week, work-week and month views of the calendars in the **Calendar app on your Mac**, so
+every account you have added there — Google, iCloud, Exchange — shows up with no
+sign-in. A small Swift helper is built the first time you switch the calendar on, and
+macOS asks once for permission to read your calendars. Events can be added, moved by
+drag, resized, edited and deleted; due tasks sit beside them and can be dragged to a new
+date. A sidebar switches individual calendars on and off.
+
+Everything above stays on your machine: the helper talks to the Calendar app, and macOS
+does the syncing.
+
+#### Google, for guests, rooms and other calendars
+
+The Mac's Calendar access cannot invite people. Four things therefore go through
+Google's own API, and are switched off until you set it up:
+
+- inviting **guests** to an event, with free or busy shown for the chosen time
+- booking a **room**
+- adding a **Google Meet** link
+- laying **other people's and rooms' calendars** beside yours, from the sidebar
+
+No Google client ships with the dashboard, on purpose: a client decides whose Google
+Cloud project every sign-in goes through. You bring your own, once, and it is stored
+only on your computer (`~/.claude-dashboard/google.json`, readable by your user).
+
+1. Open [console.cloud.google.com](https://console.cloud.google.com), create a project
+   and enable the **Google Calendar API** for it.
+2. Under **Google Auth Platform → Audience**, choose *External*. Then either add your
+   own address under **Test users** — quick, but Google signs you out again every seven
+   days — or fill in the **Branding** page (app name, support email, a homepage and a
+   privacy policy address) and press **Publish app**, which lasts. Publishing needs no
+   review below 100 users. In a Google Workspace you can choose *Internal* instead: no
+   test users, no warning screen, no expiry, but only accounts of that organisation.
+3. Under **Clients**, create an OAuth client of type **Desktop app**. No redirect
+   address needs entering.
+4. In the dashboard, open **Calendar → ⋯ → Set up Google…**, paste the client ID and
+   secret, then choose **Connect a Google account** from the same menu. Unless the
+   project is Internal, Google shows "Google hasn't verified this app" once: continue,
+   and tick both calendar permissions.
+
+The dashboard asks for two permissions: creating and changing events, and seeing when
+people and rooms are free or busy. It reads no mail, contacts or files; see
+[PRIVACY.md](PRIVACY.md). A Workspace administrator can restrict outside apps, in which
+case the sign-in says so and they have to trust your client.
+
+Guests and rooms are suggested from the people and rooms already on your own events.
+An event with guests, a room or a Meet link is created by Google on that account's main
+calendar and appears greyed until the Mac has synced it.
+
 ### History and Usage
 
 Full-text search over every prompt you have typed, across every project, **paginated**
@@ -549,6 +600,7 @@ prints what it loaded on startup:
 | `DASHBOARD_TMUX_PREFIX` | `dash` | Prefix of the tmux sessions the Services page starts and lists |
 | `DASHBOARD_TMUX_BIN` | `tmux` | The tmux binary to use |
 | `DASHBOARD_PYTHON` | `python3` | The Python used to broker browser terminals |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | unset | A Google client for the calendar's guests and rooms, as an alternative to saving one in the dashboard; a saved one wins |
 | `DASHBOARD_SERVICES_IMPORT` | unset | Path to an INI-style services file to import once, on the first boot with no services configured |
 
 ---

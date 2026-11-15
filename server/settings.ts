@@ -155,6 +155,10 @@ export type Settings = {
     calendarView: "week" | "workweek" | "month";
     /** Calendars switched off in the calendar's menu, by id. */
     calendarHidden: string[];
+    /** Your own calendars in the order you arranged them in the sidebar, by id. */
+    calendarOrder: string[];
+    /** Colleagues' and rooms' calendars pinned in the calendar's sidebar. */
+    calendarOthers: { email: string; name: string; color: string; shown: boolean; room?: boolean }[];
     /** What the sidebar, breadcrumb and window title call this app. */
     appName: string;
     clickOpensIn: "drawer" | "page" | "tile";
@@ -327,6 +331,8 @@ const DEFAULTS: Settings = {
     calendarWeekStart: 1,
     calendarView: "week",
     calendarHidden: [],
+    calendarOrder: [],
+    calendarOthers: [],
     appName: "Claude Dashboard",
     clickOpensIn: "drawer",
     cmdClickOpensIn: "page",

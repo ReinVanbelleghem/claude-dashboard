@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Availability, EventDraft, GoogleStatus } from "../shared/calendar.ts";
+import type { Attendee, Availability, CalendarEvent, EventDraft, GoogleStatus } from "../shared/calendar.ts";
 import { addDays, localDay } from "../shared/taskDates.ts";
 import { DATA_DIR, PORT } from "./paths.ts";
 
@@ -53,7 +53,31 @@ function client(): { id: string; secret: string } | null {
 const base64url = (buf: Buffer) => buf.toString("base64url");
 
 export function googleStatus(): GoogleStatus {
-  return { hasClient: client() !== null, accounts: (read().accounts ?? []).map((a) => a.email) };
+  const s = read();
+  const saved = Boolean(s.clientId && s.clientSecret);
+  return {
+    hasClient: client() !== null,
+    clientSource: saved ? "saved" : client() ? "environment" : null,
+    accounts: (s.accounts ?? []).map((a) => a.email),
+  };
+}
+
+async function revokeAll(accounts: Account[]): Promise<void> {
+  await Promise.all(accounts.map((a) => fetch(`${REVOKE_URL}?token=${encodeURIComponent(a.refreshToken)}`, { method: "POST" }).catch(() => {})));
+  access.clear();
+}
+
+/** Save your own Google client. Accounts signed in through a previous client are signed out, since their access belonged to it. */
+export async function setGoogleClient(clientId: string, clientSecret: string): Promise<GoogleStatus> {
+  await revokeAll(read().accounts ?? []);
+  write({ clientId: clientId.trim(), clientSecret: clientSecret.trim(), accounts: [] });
+  return googleStatus();
+}
+
+export async function removeGoogleClient(): Promise<GoogleStatus> {
+  await revokeAll(read().accounts ?? []);
+  write({});
+  return googleStatus();
 }
 
 export function googleConnectUrl(): string | null {
@@ -206,4 +230,111 @@ export async function googleAvailability(account: string, emails: string[], star
       return [email, state];
     }),
   );
+}
+
+type OtherMoment = { date?: string; dateTime?: string };
+type OtherEvent = {
+  id: string;
+  status?: string;
+  summary?: string;
+  description?: string;
+  location?: string;
+  htmlLink?: string;
+  recurringEventId?: string;
+  start?: OtherMoment;
+  end?: OtherMoment;
+  attendees?: { email?: string; displayName?: string; responseStatus?: string; resource?: boolean; self?: boolean }[];
+};
+
+const REPLY: Record<string, Attendee["status"]> = { accepted: "accepted", declined: "declined", tentative: "tentative" };
+
+const plainText = (html: string) => html.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").trim();
+
+function accountFor(email: string): string {
+  const accounts = (read().accounts ?? []).map((a) => a.email);
+  const domain = email.split("@")[1];
+  const account = accounts.find((a) => a.endsWith(`@${domain}`)) ?? accounts[0];
+  if (!account) throw new Error("Connect a Google account first.");
+  return account;
+}
+
+function otherEvent(email: string, e: OtherEvent): CalendarEvent | null {
+  if (e.status === "cancelled" || !e.start || !e.end) return null;
+  if (e.attendees?.find((a) => a.email?.toLowerCase() === email.toLowerCase())?.responseStatus === "declined") return null;
+  const allDay = e.start.date !== undefined;
+  const start = new Date(e.start.dateTime ?? `${e.start.date}T00:00:00`).getTime();
+  const end = allDay ? new Date(`${e.end.date}T00:00:00`).getTime() - 1000 : new Date(e.end.dateTime ?? "").getTime();
+  if (Number.isNaN(start) || Number.isNaN(end)) return null;
+  return {
+    key: `other:${email}:${e.id}`,
+    id: e.id,
+    externalId: null,
+    occurrence: start,
+    calendarId: `other:${email}`,
+    calendar: email,
+    account: "",
+    color: null,
+    title: e.summary ?? "Busy",
+    start,
+    end,
+    allDay,
+    location: e.location ?? null,
+    notes: e.description ? plainText(e.description) : null,
+    url: e.htmlLink ?? null,
+    recurring: e.recurringEventId !== undefined,
+    editable: false,
+    attendees: (e.attendees ?? []).map((a) => ({
+      name: a.displayName ?? a.email ?? "",
+      email: a.email ?? null,
+      status: REPLY[a.responseStatus ?? ""] ?? "pending",
+      room: a.resource === true,
+      me: false,
+    })),
+    other: true,
+  };
+}
+
+const busyBlock = (email: string, start: number, end: number): CalendarEvent => ({
+  key: `other:${email}:busy-${start}`,
+  id: `busy-${start}`,
+  externalId: null,
+  occurrence: start,
+  calendarId: `other:${email}`,
+  calendar: email,
+  account: "",
+  color: null,
+  title: "Busy",
+  start,
+  end,
+  allDay: false,
+  location: null,
+  notes: null,
+  url: null,
+  recurring: false,
+  editable: false,
+  attendees: [],
+  other: true,
+});
+
+/**
+ * Someone else's or a room's events in a range. When their calendar only shares
+ * free and busy times with you, the result is busy blocks without details.
+ */
+export async function googleOtherEvents(email: string, from: number, to: number): Promise<{ events: CalendarEvent[]; limited: boolean }> {
+  const account = accountFor(email);
+  const window = { timeMin: new Date(from).toISOString(), timeMax: new Date(to).toISOString() };
+  try {
+    const params = new URLSearchParams({ ...window, singleEvents: "true", orderBy: "startTime", maxResults: "250" });
+    const page = await api<{ items?: OtherEvent[] }>(account, `/calendars/${encodeURIComponent(email)}/events?${params}`);
+    const events = (page.items ?? []).map((e) => otherEvent(email, e)).filter((e): e is CalendarEvent => e !== null);
+    return { events, limited: false };
+  } catch {
+    const reply = await api<{ calendars?: Record<string, { busy?: { start: string; end: string }[]; errors?: { reason?: string }[] }> }>(account, "/freeBusy", {
+      method: "POST",
+      body: { ...window, items: [{ id: email }] },
+    });
+    const entry = reply.calendars?.[email];
+    if (!entry || entry.errors?.length) throw new Error(`${email}'s calendar is not shared with ${account}.`);
+    return { events: (entry.busy ?? []).map((b) => busyBlock(email, new Date(b.start).getTime(), new Date(b.end).getTime())), limited: true };
+  }
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   calendarApi,
   settingsApi,
@@ -12,13 +12,16 @@ import {
   type EventPatch,
   type EventRef,
   type MacCalendarStatus,
+  type OtherCalendar,
   type Settings,
   type Task,
   type TaskProject,
   type WeekStart,
 } from "../../api.ts";
 import { addDays, localDay } from "../../../shared/taskDates.ts";
-import { CheckIcon, ChevronIcon, MoreIcon, PlusIcon } from "../Icons.tsx";
+import { CheckIcon, ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon } from "../Icons.tsx";
+import { CalendarSidebar } from "./CalendarSidebar.tsx";
+import { GoogleSetup } from "./GoogleSetup.tsx";
 import { Popover } from "../Popover.tsx";
 import { Select } from "../Select.tsx";
 import { EventModal, TaskModal, type CalendarTarget, type TaskDraft } from "./EventModal.tsx";
@@ -29,6 +32,16 @@ import { MINUTE_MS, atMinutes, dayStart, minutesOfDay, rangeTitle, shiftAnchor, 
 const REFRESH_MS = 2 * MINUTE_MS;
 
 const ANCHOR_KEY = "calendar.anchor";
+const SIDEBAR_KEY = "calendar.sidebar";
+const OTHER_COLORS = ["#e0556a", "#e0a030", "#2bb3c0", "#b06cf0", "#d9773a", "#5b8def", "#8a9a5b", "#c85fa8"];
+
+function storedSidebar(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
 const PENDING_POLL_MS = 10_000;
 const PENDING_SHOWN_MS = 5 * MINUTE_MS;
 
@@ -95,8 +108,13 @@ export function CalendarView({
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [calendars, setCalendars] = useState<CalendarInfo[]>([]);
   const [people, setPeople] = useState<CalendarPerson[]>([]);
-  const [google, setGoogle] = useState<GoogleStatus>({ hasClient: false, accounts: [] });
+  const [google, setGoogle] = useState<GoogleStatus>({ hasClient: false, clientSource: null, accounts: [] });
+  const [googleSetup, setGoogleSetup] = useState(false);
   const [pending, setPending] = useState<CalendarEvent[]>([]);
+  const [passing, setPassing] = useState<OtherCalendar[]>([]);
+  const [otherEvents, setOtherEvents] = useState<Record<string, CalendarEvent[]>>({});
+  const [otherProblems, setOtherProblems] = useState<Record<string, string>>({});
+  const [sidebar, setSidebar] = useState(storedSidebar);
   const [error, setError] = useState<string | null>(null);
   const [today, setToday] = useState(() => localDay(new Date()));
   const [anchor, setAnchor] = useState(() => storedAnchor() ?? today);
@@ -116,14 +134,35 @@ export function CalendarView({
   const view: ViewKind = settings?.ui.calendarView ?? "week";
   const weekStart: WeekStart = settings?.ui.calendarWeekStart ?? 1;
   const hidden = settings?.ui.calendarHidden ?? [];
+  const order = settings?.ui.calendarOrder ?? [];
+  const orderedCalendars = useMemo(() => {
+    const rank = (id: string) => (order.includes(id) ? order.indexOf(id) : order.length);
+    return [...calendars].sort((a, b) => rank(a.id) - rank(b.id));
+  }, [calendars, order]);
+  const pinned = settings?.ui.calendarOthers ?? [];
+  const compared = useMemo(() => [...passing, ...pinned.filter((o) => o.shown)], [passing, pinned]);
+  const comparedKey = compared.map((o) => o.email).join(",");
   const shownEvents = useMemo(() => {
     const arrived = (p: CalendarEvent) => events.some((e) => e.title === p.title && e.start === p.start);
-    return [...events.filter((e) => !hidden.includes(e.calendarId)), ...pending.filter((p) => !arrived(p))];
-  }, [events, hidden, pending]);
+    const others = compared.flatMap((o) => (otherEvents[o.email] ?? []).map((e) => ({ ...e, calendar: o.name, color: o.color })));
+    return [...events.filter((e) => !hidden.includes(e.calendarId)), ...pending.filter((p) => !arrived(p)), ...others];
+  }, [events, hidden, pending, compared, otherEvents]);
   const days = useMemo(() => visibleDays(view, anchor, weekStart), [view, anchor, weekStart]);
   const from = dayStart(days[0]);
   const to = dayStart(addDays(days[days.length - 1], 1));
   const latest = useRef(0);
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const [layoutTop, setLayoutTop] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const top = layoutRef.current?.getBoundingClientRect().top;
+      if (top !== undefined) setLayoutTop(Math.round(top + window.scrollY));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [status?.enabled, error]);
 
   const saveUi = (patch: Partial<Settings["ui"]>) =>
     settingsApi
@@ -185,6 +224,68 @@ export function CalendarView({
     }, PENDING_POLL_MS);
     return () => window.clearInterval(timer);
   }, [pending.length, load]);
+
+  useEffect(() => {
+    if (comparedKey === "" || google.accounts.length === 0) return;
+    let stale = false;
+    for (const email of comparedKey.split(",")) {
+      calendarApi
+        .otherCalendar(email, from, to)
+        .then((r) => {
+          if (stale) return;
+          setOtherEvents((all) => ({ ...all, [email]: r.events }));
+          setOtherProblems(({ [email]: _gone, ...rest }) => (r.limited ? { ...rest, [email]: "Only free and busy times are shared with you." } : rest));
+        })
+        .catch((e: Error) => {
+          if (stale) return;
+          setOtherEvents((all) => ({ ...all, [email]: [] }));
+          setOtherProblems((all) => ({ ...all, [email]: e.message }));
+        });
+    }
+    return () => {
+      stale = true;
+    };
+  }, [comparedKey, from, to, changed, google.accounts.length]);
+
+  const toggleSidebar = () =>
+    setSidebar((open) => {
+      try {
+        localStorage.setItem(SIDEBAR_KEY, open ? "0" : "1");
+      } catch {
+        return !open;
+      }
+      return !open;
+    });
+
+  const nextColor = () => OTHER_COLORS.find((c) => ![...pinned, ...passing].some((o) => o.color === c)) ?? OTHER_COLORS[(pinned.length + passing.length) % OTHER_COLORS.length];
+
+  const showOther = (person: { email: string; name: string; room: boolean }) =>
+    setPassing((list) => (list.some((o) => o.email === person.email) ? list : [{ ...person, color: nextColor(), shown: true }, ...list]));
+
+  const toggleOther = (email: string) => {
+    if (passing.some((o) => o.email === email)) return setPassing((list) => list.filter((o) => o.email !== email));
+    void saveUi({ calendarOthers: pinned.map((o) => (o.email === email ? { ...o, shown: !o.shown } : o)) });
+  };
+
+  const pinOther = (email: string) => {
+    const visiting = passing.find((o) => o.email === email);
+    if (visiting) {
+      setPassing((list) => list.filter((o) => o.email !== email));
+      return void saveUi({ calendarOthers: [...pinned, visiting] });
+    }
+    const kept = pinned.find((o) => o.email === email);
+    if (kept?.shown) setPassing((list) => [kept, ...list]);
+    void saveUi({ calendarOthers: pinned.filter((o) => o.email !== email) });
+  };
+
+  const moved = <T,>(list: T[], from: number, to: number): T[] => {
+    const next = [...list];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    return next;
+  };
+
+  const toggleCalendar = (id: string) => saveUi({ calendarHidden: hidden.includes(id) ? hidden.filter((h) => h !== id) : [...hidden, id] });
 
   const settle = (work: Promise<unknown>) =>
     work
@@ -260,6 +361,9 @@ export function CalendarView({
   return (
     <div className="cal">
       <div className="cal-bar-top">
+        <button className={`icon-btn square ${sidebar ? "active" : ""}`} aria-label={sidebar ? "Hide the calendar list" : "Show the calendar list"} aria-pressed={sidebar} title="Calendars" onClick={toggleSidebar}>
+          <PanelLeftIcon />
+        </button>
         <button className="icon-btn" onClick={() => setAnchor(today)}>Today</button>
         <div className="cal-nav">
           <button className="icon-btn square cal-prev" aria-label="Previous" onClick={() => setAnchor(shiftAnchor(view, anchor, -1))}><ChevronIcon /></button>
@@ -304,7 +408,7 @@ export function CalendarView({
           ))}
           <hr />
           <div className="svc-menu-heading">Calendars</div>
-          {calendars.map((c) => {
+          {orderedCalendars.map((c) => {
             const visible = !hidden.includes(c.id);
             return (
               <button
@@ -323,10 +427,22 @@ export function CalendarView({
               </button>
             );
           })}
+          <hr />
+          <div className="svc-menu-heading">Google, for guests and rooms</div>
+          {!google.hasClient && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenuAnchor(null);
+                setGoogleSetup(true);
+              }}
+            >
+              <PlusIcon />
+              <span className="cal-menu-label">Set up Google…</span>
+            </button>
+          )}
           {google.hasClient && (
             <>
-              <hr />
-              <div className="svc-menu-heading">Google, for guests and rooms</div>
               {google.accounts.map((email) => (
                 <button key={email} role="menuitem" title="Disconnect this account" onClick={() => calendarApi.disconnectGoogle(email).then(setGoogle)}>
                   <span className="cal-menu-label">{email}</span>
@@ -336,6 +452,15 @@ export function CalendarView({
               <button role="menuitem" onClick={() => window.open("/api/google/connect", "_blank", "noopener")}>
                 <PlusIcon />
                 <span className="cal-menu-label">{google.accounts.length ? "Connect another account" : "Connect a Google account"}</span>
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenuAnchor(null);
+                  setGoogleSetup(true);
+                }}
+              >
+                <span className="cal-menu-label">Google client…</span>
               </button>
             </>
           )}
@@ -355,6 +480,30 @@ export function CalendarView({
 
       {error && <p className="cal-error">{error}</p>}
 
+      <div
+        className={`cal-layout ${sidebar ? "with-side" : ""}`}
+        ref={layoutRef}
+        style={layoutTop === null ? undefined : ({ "--cal-top": `${layoutTop}px` } as CSSProperties)}
+      >
+      {sidebar && (
+        <CalendarSidebar
+          calendars={orderedCalendars}
+          hidden={hidden}
+          onToggleCalendar={toggleCalendar}
+          onMoveCalendar={(a, b) => saveUi({ calendarOrder: moved(orderedCalendars.map((c) => c.id), a, b) })}
+          onReorderPinned={(next) => saveUi({ calendarOthers: next })}
+          canCompare={google.accounts.length > 0}
+          hasClient={google.hasClient}
+          onSetUpGoogle={() => setGoogleSetup(true)}
+          people={people}
+          pinned={pinned}
+          passing={passing}
+          problems={otherProblems}
+          onShow={showOther}
+          onToggle={toggleOther}
+          onPin={pinOther}
+        />
+      )}
       <div className="panel cal-frame">
         {view === "month" ? (
           <MonthGrid
@@ -369,7 +518,9 @@ export function CalendarView({
           <TimeGrid {...grid} />
         )}
       </div>
+      </div>
 
+      {googleSetup && <GoogleSetup google={google} onGoogle={setGoogle} onClose={() => setGoogleSetup(false)} />}
       {target && (
         <EventModal
           target={target}
@@ -377,6 +528,7 @@ export function CalendarView({
           projects={projects}
           people={people}
           googleAccounts={google.accounts}
+          comparing={compared.map((o) => o.email)}
           onCreateTask={createTask}
           onClose={() => setTarget(null)}
           onEdit={(event) => setTarget({ mode: "edit", event })}

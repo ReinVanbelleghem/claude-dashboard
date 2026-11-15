@@ -401,6 +401,8 @@ export type Settings = {
     calendarWeekStart?: 0 | 1 | 6;
     calendarView?: "week" | "workweek" | "month";
     calendarHidden?: string[];
+    calendarOrder?: string[];
+    calendarOthers?: { email: string; name: string; color: string; shown: boolean; room?: boolean }[];
     appName?: string;
     /** Where a plain click on a session card lands. */
     clickOpensIn: "drawer" | "page" | "tile";
@@ -1223,7 +1225,7 @@ import type { Task, TaskAdd, TaskPatch, TaskProject, TasksPayload } from "../sha
 export type { Task, TaskProject, TasksPayload };
 
 import type { Availability, CalendarEvent, CalendarInfo, CalendarPayload, EventDraft, EventPatch, EventRef, GoogleStatus, MacCalendarStatus, Person as CalendarPerson } from "../shared/calendar.ts";
-export type { Attendee, Availability, CalendarEvent, CalendarInfo, CalendarView, EventDraft, EventPatch, EventRef, GoogleInvite, GoogleStatus, MacCalendarStatus, WeekStart } from "../shared/calendar.ts";
+export type { Attendee, Availability, OtherCalendar, CalendarEvent, CalendarInfo, CalendarView, EventDraft, EventPatch, EventRef, GoogleInvite, GoogleStatus, MacCalendarStatus, WeekStart } from "../shared/calendar.ts";
 export type { CalendarPerson };
 
 export const calendarApi = {
@@ -1237,9 +1239,13 @@ export const calendarApi = {
   remove: (ref: EventRef) => post<{ ok: true }>("/api/calendar/events/delete", ref),
   people: () => get<{ people: CalendarPerson[] }>("/api/calendar/people"),
   google: () => get<GoogleStatus>("/api/google"),
+  saveGoogleClient: (clientId: string, clientSecret: string) => post<GoogleStatus>("/api/google/client", { clientId, clientSecret }),
+  removeGoogleClient: () => post<GoogleStatus>("/api/google/client/remove"),
   disconnectGoogle: (email: string) => post<GoogleStatus>("/api/google/disconnect", { email }),
   availability: (account: string, emails: string[], start: number, end: number) =>
     post<{ availability: Record<string, Availability> }>("/api/google/availability", { account, emails, start, end }),
+  otherCalendar: (email: string, from: number, to: number) =>
+    get<{ events: CalendarEvent[]; limited: boolean }>(`/api/google/calendar?email=${encodeURIComponent(email)}&from=${from}&to=${to}`),
   setGuests: (account: string, externalId: string, guests: string[], rooms: string[]) =>
     post<{ ok: true }>("/api/google/guests", { account, externalId, guests, rooms }),
 };

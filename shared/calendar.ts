@@ -44,7 +44,12 @@ export type CalendarEvent = {
   recurring: boolean;
   editable: boolean;
   attendees: Attendee[];
+  /** From someone else's or a room's calendar, shown beside your own for comparison. */
+  other?: boolean;
 };
+
+/** A colleague's or a room's calendar kept in the sidebar. */
+export type OtherCalendar = { email: string; name: string; color: string; shown: boolean; room?: boolean };
 
 export type CalendarInfo = {
   id: string;
@@ -69,7 +74,12 @@ export type EventDraft = {
 
 export type GoogleInvite = { account: string; guests: string[]; rooms: string[]; meet: boolean };
 
-export type GoogleStatus = { hasClient: boolean; accounts: string[] };
+export type GoogleStatus = {
+  hasClient: boolean;
+  /** Where the client comes from: saved through the dashboard, or handed to the daemon in its environment. */
+  clientSource: "saved" | "environment" | null;
+  accounts: string[];
+};
 
 export type Availability = "free" | "busy" | "unknown";
 

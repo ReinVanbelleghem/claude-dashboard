@@ -22,6 +22,14 @@ export type TaskDraft = { content: string; description: string; projectId: numbe
 type Span = "this" | "future";
 type Kind = "event" | "task";
 
+const GOOGLE_NAME = /google|gmail/i;
+
+/** Whether a calendar from the Mac lives in a Google account: its account is named for Google, or carries a connected address. */
+const isGoogleCalendar = (title: string, account: string, connected: string[]): boolean => {
+  const text = `${title} ${account}`.toLowerCase();
+  return GOOGLE_NAME.test(text) || connected.some((email) => text.includes(email.toLowerCase()));
+};
+
 const AVAILABILITY_DELAY_MS = 400;
 const ROOMS_CHECKED = 25;
 
@@ -77,6 +85,7 @@ export function EventModal({
   projects,
   people,
   googleAccounts,
+  comparing,
   onClose,
   onEdit,
   onCreate,
@@ -89,6 +98,8 @@ export function EventModal({
   projects: TaskProject[];
   people: CalendarPerson[];
   googleAccounts: string[];
+  /** The people and rooms whose calendars are on show, invited from the start on a new event. */
+  comparing: string[];
   onCreateTask: (draft: TaskDraft) => Promise<void>;
   onClose: () => void;
   onEdit: (event: CalendarEvent) => void;
@@ -103,7 +114,7 @@ export function EventModal({
       {target.mode === "view" ? (
         <EventDetails event={target.event} onClose={onClose} onEdit={() => onEdit(target.event)} onDelete={onDelete} />
       ) : (
-        <EventForm target={target} calendars={calendars} projects={projects} people={people} googleAccounts={googleAccounts} onClose={onClose} onCreate={onCreate} onCreateTask={onCreateTask} onUpdate={onUpdate} />
+        <EventForm target={target} calendars={calendars} projects={projects} people={people} googleAccounts={googleAccounts} comparing={comparing} onClose={onClose} onCreate={onCreate} onCreateTask={onCreateTask} onUpdate={onUpdate} />
       )}
     </>
   );
@@ -232,7 +243,7 @@ function EventDetails({
       </div>
 
       <div className="cal-detail-foot">
-        {!event.editable && <p>This calendar is read-only.</p>}
+        {!event.editable && <p>{event.other ? `From ${event.calendar}'s calendar.` : "This calendar is read-only."}</p>}
         {event.editable &&
           (confirming ? (
             <>
@@ -256,6 +267,7 @@ function EventForm({
   projects,
   people,
   googleAccounts,
+  comparing,
   onClose,
   onCreate,
   onCreateTask,
@@ -266,6 +278,7 @@ function EventForm({
   projects: TaskProject[];
   people: CalendarPerson[];
   googleAccounts: string[];
+  comparing: string[];
   onCreateTask: (draft: TaskDraft) => Promise<void>;
   onClose: () => void;
   onCreate: (draft: EventDraft) => Promise<void>;
@@ -284,7 +297,10 @@ function EventForm({
   const [endTime, setEndTime] = useState(initial.allDay ? "10:00" : fmtTime(initial.end));
   const [calendarId, setCalendarId] = useState(existing?.calendarId ?? writable.find((c) => c.isDefault)?.id ?? writable[0]?.id ?? "");
   const [location, setLocation] = useState(existing?.location ?? "");
-  const [notes, setNotes] = useState(existing?.notes ?? "");
+  const initialNotes = existing?.notes ?? "";
+  const [notes, setNotes] = useState(initialNotes);
+  const [showWhere, setShowWhere] = useState(Boolean(existing?.location));
+  const [showNotes, setShowNotes] = useState(initialNotes !== "");
   const [span, setSpan] = useState<Span>("this");
   const [kind, setKind] = useState<Kind>("event");
   const [projectId, setProjectId] = useState(() => String(projects.find((p) => p.isInbox)?.id ?? projects[0]?.id ?? ""));
@@ -293,14 +309,17 @@ function EventForm({
   const asTask = !existing && kind === "task";
 
   const invited = (room: boolean) => (existing?.attendees ?? []).filter((a) => a.room === room && !a.me && a.email).map((a) => a.email!);
-  const [guests, setGuests] = useState(() => invited(false));
-  const [rooms, setRooms] = useState(() => invited(true));
+  const isRoom = (email: string) => people.some((p) => p.room && p.email.toLowerCase() === email.toLowerCase());
+  const [guests, setGuests] = useState(() => (existing ? invited(false) : comparing.filter((email) => !isRoom(email))));
+  const [rooms, setRooms] = useState(() => (existing ? invited(true) : comparing.filter(isRoom)));
   const [meet, setMeet] = useState(false);
   const [account, setAccount] = useState(googleAccounts[0] ?? "");
   const [availability, setAvailability] = useState<Record<string, Availability>>({});
   const persons = useMemo(() => people.filter((p) => !p.room), [people]);
   const roomChoices = useMemo(() => people.filter((p) => p.room), [people]);
-  const canInvite = googleAccounts.length > 0 && !asTask && (!existing || existing.externalId !== null);
+  const chosen = existing ?? calendars.find((c) => c.id === calendarId);
+  const onGoogle = chosen !== undefined && isGoogleCalendar(existing ? existing.calendar : chosen.title, chosen.account, googleAccounts);
+  const canInvite = googleAccounts.length > 0 && !asTask && onGoogle && (!existing || existing.externalId !== null);
   const usesGoogle = canInvite && (guests.length > 0 || rooms.length > 0 || meet);
   const guestsChanged = existing !== null && (guests.join() !== invited(false).join() || rooms.join() !== invited(true).join());
   const startMs = allDay ? dayStart(startDay) : new Date(`${startDay}T${startTime}`).getTime();
@@ -396,60 +415,29 @@ function EventForm({
         <span>{asTask ? "Task" : "Title"}</span>
         <input className="search" autoFocus value={title} placeholder={asTask ? "What needs doing?" : "New event"} onChange={(e) => setTitle(e.target.value)} />
       </label>
-      <label className="set-row cal-check">
-        <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
-        <span>{asTask ? "No time, just the day" : "All day"}</span>
-      </label>
-      <div className="cal-when">
-        <label className="field">
-          <span>{asTask ? "Due" : "Starts"}</span>
-          <input className="search" type="date" value={startDay} onChange={(e) => moveStartDay(e.target.value)} />
+      <div className="cal-field-head">
+        <span>{asTask ? "Due" : "When"}</span>
+        <label className="switch">
+          <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
+          <span>{asTask ? "No time" : "All day"}</span>
         </label>
-        {!allDay && (
-          <label className="field">
-            <span>At</span>
-            <input className="search" type="time" step={900} value={startTime} onChange={(e) => moveStartTime(e.target.value)} />
-          </label>
-        )}
-        {!asTask && (
-          <label className="field">
-            <span>Ends</span>
-            <input className="search" type="date" value={endDay} min={startDay} onChange={(e) => e.target.value && setEndDay(e.target.value)} />
-          </label>
-        )}
+      </div>
+      <div className="cal-when-row">
+        <input className="search" type="date" aria-label={asTask ? "Due day" : "Start day"} value={startDay} onChange={(e) => moveStartDay(e.target.value)} />
+        {!allDay && <input className="search" type="time" aria-label="Start time" step={900} value={startTime} onChange={(e) => moveStartTime(e.target.value)} />}
         {!asTask && !allDay && (
-          <label className="field">
-            <span>At</span>
-            <input className="search" type="time" step={900} value={endTime} onChange={(e) => e.target.value && setEndTime(e.target.value)} />
-          </label>
+          <>
+            <i>–</i>
+            <input className="search" type="time" aria-label="End time" step={900} value={endTime} onChange={(e) => e.target.value && setEndTime(e.target.value)} />
+          </>
+        )}
+        {!asTask && (allDay || endDay !== startDay) && (
+          <>
+            {allDay && <i>–</i>}
+            <input className="search" type="date" aria-label="End day" value={endDay} min={startDay} onChange={(e) => e.target.value && setEndDay(e.target.value)} />
+          </>
         )}
       </div>
-      {canInvite && (
-        <section className="cal-invite">
-          <div className="field">
-            <span>Guests</span>
-            <PeoplePicker people={persons} selected={guests} onChange={setGuests} availability={availability} placeholder="Name or email" allowAnyEmail />
-          </div>
-          <div className="field">
-            <span>Room</span>
-            <PeoplePicker people={roomChoices} selected={rooms} onChange={setRooms} availability={availability} placeholder="Pick a room, free ones first" rankByAvailability />
-          </div>
-          {!existing && (
-            <label className="set-row cal-check">
-              <input type="checkbox" checked={meet} onChange={(e) => setMeet(e.target.checked)} />
-              <span>Add a Google Meet link</span>
-            </label>
-          )}
-          {googleAccounts.length > 1 && (
-            <div className="field">
-              <span>Invite from</span>
-              <Select ariaLabel="Google account" value={account} onChange={setAccount} options={googleAccounts.map((a) => ({ value: a, label: a }))} />
-            </div>
-          )}
-          {usesGoogle && !existing && <p className="hint">Google creates this event on {account}'s calendar and emails the invitations.</p>}
-          {guestsChanged && <p className="hint">Google emails everyone whose invitation changes{existing?.recurring ? ", for the whole series" : ""}.</p>}
-        </section>
-      )}
       {asTask ? (
         <div className="field">
           <span>Project</span>
@@ -462,27 +450,63 @@ function EventForm({
         </div>
       ) : (
         <>
-          {!(usesGoogle && !existing) && (
           <div className="field">
             <span>Calendar</span>
             <Select
               ariaLabel="Calendar"
               value={calendarId}
               onChange={setCalendarId}
-              options={writable.map((c) => ({ value: c.id, label: c.title, hint: c.account !== c.title ? c.account : undefined, dot: c.color ?? "var(--accent)" }))}
+              options={writable.map((c) => ({ value: c.id, label: c.account !== c.title ? `${c.title} · ${c.account}` : c.title, dot: c.color ?? "var(--accent)" }))}
             />
           </div>
+          {canInvite && (
+            <section className="cal-invite">
+              <div className="field">
+                <span>Guests</span>
+                <PeoplePicker people={persons} selected={guests} onChange={setGuests} availability={availability} placeholder="Name or email" allowAnyEmail />
+              </div>
+              <div className="cal-field-head">
+                <span>Room</span>
+                {!existing && (
+                  <label className="switch">
+                    <input type="checkbox" checked={meet} onChange={(e) => setMeet(e.target.checked)} />
+                    <span>Google Meet link</span>
+                  </label>
+                )}
+              </div>
+              <div className="field">
+                <PeoplePicker people={roomChoices} selected={rooms} onChange={setRooms} availability={availability} placeholder="Pick a room, free ones first" rankByAvailability />
+              </div>
+              {googleAccounts.length > 1 && (
+                <div className="field">
+                  <span>Invite from</span>
+                  <Select ariaLabel="Google account" value={account} onChange={setAccount} options={googleAccounts.map((a) => ({ value: a, label: a }))} />
+                </div>
+              )}
+              {usesGoogle && !existing && <p className="hint">Google creates this event on {account}'s main calendar and emails the invitations.</p>}
+              {guestsChanged && <p className="hint">Google emails everyone whose invitation changes{existing?.recurring ? ", for the whole series" : ""}.</p>}
+            </section>
           )}
-          <label className="field">
-            <span>Where</span>
-            <input className="search" value={location} onChange={(e) => setLocation(e.target.value)} />
-          </label>
+          {showWhere && (
+            <label className="field">
+              <span>Where</span>
+              <input className="search" autoFocus={!existing?.location} value={location} onChange={(e) => setLocation(e.target.value)} />
+            </label>
+          )}
         </>
       )}
-      <label className="field">
-        <span>Notes</span>
-        <textarea className="search" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
-      </label>
+      {showNotes && (
+        <label className="field">
+          <span>Notes</span>
+          <textarea className="search" rows={3} autoFocus={!initialNotes} value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </label>
+      )}
+      {((!showWhere && !asTask) || !showNotes) && (
+        <div className="cal-add-links">
+          {!showWhere && !asTask && <button type="button" className="link-btn inline" onClick={() => setShowWhere(true)}>+ Location</button>}
+          {!showNotes && <button type="button" className="link-btn inline" onClick={() => setShowNotes(true)}>+ Notes</button>}
+        </div>
+      )}
       {existing?.recurring && <SpanChoice span={span} onSpan={setSpan} />}
       {error && <p className="cal-error">{error}</p>}
       <div className="modal-actions">

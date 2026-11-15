@@ -162,7 +162,7 @@ import {
 } from "./tasks.ts";
 import { createMacEvent, deleteMacEvent, disableMacCalendar, enableMacCalendar, macCalendarStatus, macCalendars, macEvents, macPeople, updateMacEvent } from "./macCalendar.ts";
 import type { EventDraft, EventPatch, EventRef } from "../shared/calendar.ts";
-import { createGoogleEvent, disconnectGoogle, finishGoogleConnect, googleAvailability, googleConnectUrl, googleStatus, setGoogleGuests } from "./google.ts";
+import { createGoogleEvent, disconnectGoogle, finishGoogleConnect, googleAvailability, googleConnectUrl, googleOtherEvents, googleStatus, removeGoogleClient, setGoogleClient, setGoogleGuests } from "./google.ts";
 import {
   attachSession,
   createWorkspace,
@@ -1074,6 +1074,15 @@ const server = Bun.serve<PtyData, never>({
     }
     if (p === "/api/calendar/disable" && req.method === "POST") return json(disableMacCalendar());
     if (p === "/api/google" && req.method === "GET") return json(googleStatus());
+    if (p === "/api/google/client" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { clientId?: string; clientSecret?: string } | null;
+      if (!body?.clientId?.trim() || !body.clientSecret?.trim()) return json({ error: "a client ID and a client secret are both required" }, 400);
+      if (!body.clientId.trim().endsWith(".apps.googleusercontent.com")) {
+        return json({ error: "that does not look like a Google client ID; it ends in .apps.googleusercontent.com" }, 400);
+      }
+      return json(await setGoogleClient(body.clientId, body.clientSecret));
+    }
+    if (p === "/api/google/client/remove" && req.method === "POST") return json(await removeGoogleClient());
     if (p === "/api/google/connect" && req.method === "GET") {
       const target = googleConnectUrl();
       if (!target) return json({ error: "no Google client is set up" }, 400);
@@ -1109,6 +1118,17 @@ const server = Bun.serve<PtyData, never>({
         }
         await setGoogleGuests(body.account, String(body.externalId ?? ""), body.guests ?? [], body.rooms ?? []);
         return json({ ok: true });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 502);
+      }
+    }
+    if (p === "/api/google/calendar" && req.method === "GET") {
+      const email = url.searchParams.get("email") ?? "";
+      const from = Number(url.searchParams.get("from"));
+      const to = Number(url.searchParams.get("to"));
+      if (!email || !Number.isFinite(from) || !Number.isFinite(to) || to <= from) return json({ error: "email, from and to are required" }, 400);
+      try {
+        return json(await googleOtherEvents(email, from, to));
       } catch (e) {
         return json({ error: (e as Error).message }, 502);
       }
