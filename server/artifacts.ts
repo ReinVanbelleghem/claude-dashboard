@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { mkdirSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { ARTIFACT_PORT, artifactsDir } from "./paths.ts";
+import { ARTIFACT_PORT, artifactsDir, isArtifactName } from "./paths.ts";
 
 /**
  * Generated HTML artifacts.
@@ -175,7 +175,7 @@ function scanDisk(): DiskArtifact[] {
 
   const out: DiskArtifact[] = [];
   for (const e of entries) {
-    if (e.name.startsWith(".") || SKIP_DIRS.has(e.name)) continue;
+    if (!isArtifactName(e.name) || SKIP_DIRS.has(e.name)) continue;
     const full = join(artifactsDir(), e.name);
 
     if (e.isDirectory()) {
@@ -220,6 +220,7 @@ function scanDisk(): DiskArtifact[] {
  */
 export async function reconcileArtifacts(db: Database): Promise<number> {
   const disk = scanDisk();
+  let changed = purgeNonArtifacts(db);
   const rows = db
     .query<{ slug: string; title: string | null; modified_ts: number | null; size: number; missing: number }, []>(
       "SELECT slug, title, modified_ts, size, missing FROM artifacts",
@@ -227,7 +228,6 @@ export async function reconcileArtifacts(db: Database): Promise<number> {
     .all();
   const known = new Map(rows.map((r) => [r.slug, r]));
 
-  let changed = 0;
   const upsert = db.query(
     `INSERT INTO artifacts (slug, title, entry, created_ts, modified_ts, size, file_count, missing)
      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
@@ -256,6 +256,28 @@ export async function reconcileArtifacts(db: Database): Promise<number> {
     changed++;
   }
   return changed;
+}
+
+/**
+ * Drop rows an older index minted for things that were never artifacts — the
+ * `_template` scaffold, or a slug scraped out of a glob in an `ls`. Provenance
+ * goes with them: the sessions those rows named were readers, not authors.
+ */
+function purgeNonArtifacts(db: Database): number {
+  let dropped = 0;
+  const slugs = new Set<string>();
+  for (const r of db.query<{ slug: string }, []>("SELECT slug FROM artifacts").all()) slugs.add(r.slug);
+  for (const r of db.query<{ slug: string }, []>("SELECT DISTINCT slug FROM artifact_writes").all()) {
+    slugs.add(r.slug);
+  }
+  for (const slug of slugs) {
+    if (isArtifactName(slug)) continue;
+    db.query("DELETE FROM artifacts WHERE slug = ?").run(slug);
+    db.query("DELETE FROM artifact_tags WHERE slug = ?").run(slug);
+    db.query("DELETE FROM artifact_writes WHERE slug = ?").run(slug);
+    dropped++;
+  }
+  return dropped;
 }
 
 type ArtifactRow = {

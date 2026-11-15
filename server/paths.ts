@@ -115,6 +115,19 @@ let artifactPathRe = buildArtifactPathRe();
  * bare `.html` file sitting at the root counts too — an artifact does not have to
  * have been given a folder to be real.
  */
+/**
+ * Folders the artifact root holds but which are not themselves artifacts.
+ *
+ * A leading underscore marks scaffolding — `_template/` is the house style every
+ * report is copied FROM, so a session that cites it is a reader, not its author.
+ * Dotfiles are never artifacts either, and a path still carrying a glob came out
+ * of an `ls`, not a write.
+ */
+export function isArtifactName(name: string): boolean {
+  if (!name || name.startsWith("_") || name.startsWith(".")) return false;
+  return !/[*?\[\]{}]/.test(name);
+}
+
 export function artifactSlug(filePath: string): string | null {
   if (!filePath) return null;
   const expanded = filePath.startsWith("~/") ? join(homedir(), filePath.slice(2)) : filePath;
@@ -124,6 +137,7 @@ export function artifactSlug(filePath: string): string | null {
   const parts = abs.slice(root.length + 1).split(sep).filter(Boolean);
   if (parts.length === 0) return null;
   const first = parts[0]!;
+  if (!isArtifactName(first)) return null;
   // A loose file at the root is only an artifact if it is the page itself.
   if (parts.length === 1) return first.toLowerCase().endsWith(".html") ? first.slice(0, -5) : null;
   return first;
