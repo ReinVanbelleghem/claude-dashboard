@@ -6,7 +6,7 @@ import {
   agentsUnder,
   answerPermission,
   cachedModels,
-  forgetAgent,
+  endSession,
   forgetRestorable,
   getAgent,
   getKnownCommands,
@@ -30,7 +30,6 @@ import {
   setAgentMode,
   setAgentModel,
   startAgent,
-  stopAgent,
   stopAllAgents,
   type ImageMediaType,
   type InboundImage,
@@ -1062,11 +1061,12 @@ const server = Bun.serve<PtyData, never>({
         return a ? json(a) : json({ error: "not found" }, 404);
       }
       if (!action && req.method === "DELETE") {
-        // First DELETE ends the session; a second one drops it from the roster,
-        // so the list can be tidied without a separate endpoint.
+        // One call, whatever state the session is in: stop it if it is still
+        // running, then drop it from both lists it appears in. It used to take
+        // two DELETEs — the first ending, the second forgetting — which is why
+        // ending a session took three presses and still left it on the page.
         const id = decodeURIComponent(key);
-        if (forgetAgent(id)) return json({ ok: true, forgotten: true });
-        return json({ ok: await stopAgent(id) });
+        return json({ ok: await endSession(id) });
       }
       if (req.method === "POST") {
         const id = decodeURIComponent(key);

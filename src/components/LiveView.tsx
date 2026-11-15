@@ -186,7 +186,10 @@ export function LiveView({
       {closed.length > 0 && (
         <div className="panel">
           <h2>Finished here ({closed.length})</h2>
-          <p className="hint">Ended dashboard sessions. Their transcripts stay searchable.</p>
+          <p className="hint">
+            Sessions that ended on their own. Clearing one only takes it off this page — its
+            transcript stays searchable, and the History tab can resume it.
+          </p>
           <AgentCards agents={closed} onOpen={onOpenAgent} settings={settings} onSettings={onSettings} />
         </div>
       )}
@@ -379,6 +382,20 @@ function AgentCards({
                   }}
                 >
                   Resume
+                </button>
+                {/* The only sessions that land here now are the ones that ended on
+                    their own — the daemon stopping, a process exiting. Ending one
+                    yourself already clears it. This is the same one press for the
+                    cards you did not ask for. */}
+                <button
+                  className="icon-btn"
+                  title="Clear from the Live tab — the transcript stays, and History can resume it"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void agentApi.stop(a.key).catch(() => {});
+                  }}
+                >
+                  Clear
                 </button>
                 {a.endedReason && <span className="card-why">{a.endedReason}</span>}
               </div>

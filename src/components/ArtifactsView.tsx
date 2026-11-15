@@ -518,7 +518,7 @@ function ArtifactFrame({ src, title }: { src: string; title: string }) {
   );
 }
 
-function ArtifactOverlay({
+export function ArtifactOverlay({
   artifact: a,
   port,
   onClose,

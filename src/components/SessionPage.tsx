@@ -15,9 +15,9 @@ import { LiveConversation } from "./Conversation.tsx";
 import { EditableTitle } from "./EditableTitle.tsx";
 import { GitControls } from "./GitControls.tsx";
 import { GitBadge, GitPanel } from "./GitPanel.tsx";
-import { MuteMenu } from "./MuteMenu.tsx";
 import { useGitRepo } from "./useGitRepo.ts";
 import { hasWorktreeSupport, WorktreesPanel } from "./WorktreesPanel.tsx";
+import { SessionMenu } from "./SessionMenu.tsx";
 import { ExternalNotice, turnsOf } from "./SessionPanelContent.tsx";
 import { Transcript } from "./Transcript.tsx";
 
@@ -126,25 +126,18 @@ export function SessionPage({
           {cwd && <GitBadge cwd={cwd} />}
         </div>
         <span style={{ flex: 1 }} />
-        <MuteMenu
-          id={agent?.sessionId ?? agent?.key ?? id}
+        {/* The same ⋮ the drawer and a tile carry, minus "Open full page" — this
+            is it. A session's actions should be in one place whichever way it is
+            open, so Notify and Restart moved in here with the rest. */}
+        <SessionMenu
+          id={id}
+          agent={agent}
           label={s?.title ?? agent?.title ?? id}
           settings={settings}
           onSettings={onSettings}
+          onEnded={onBack}
+          fullPage
         />
-        {/* A new process is the only thing that rebuilds the tool registry, so an MCP
-            server authorized mid-session needs this rather than another retry. */}
-        {agent && agent.sessionId && agent.status !== "ended" && agent.status !== "error" && (
-          <button
-            className="icon-btn"
-            title="Restart this session — same conversation, fresh process. Picks up an MCP server or setting authorized since it started."
-            onClick={() => {
-              agentApi.restart(agent.key).catch(() => {});
-            }}
-          >
-            Restart
-          </button>
-        )}
         {/* Adopting a session that is still running in a terminal would put two
             processes on one transcript, so it is offered only once that one is done. */}
         {onContinue && s?.cwd && !agent && !live && (

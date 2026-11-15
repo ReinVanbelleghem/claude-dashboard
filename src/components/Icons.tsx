@@ -486,6 +486,16 @@ export function MoreIcon() {
   );
 }
 
+export function MoreVerticalIcon() {
+  return (
+    <I>
+      <circle cx="12" cy="12" r="1" fill="currentColor" />
+      <circle cx="12" cy="5" r="1" fill="currentColor" />
+      <circle cx="12" cy="19" r="1" fill="currentColor" />
+    </I>
+  );
+}
+
 export function LogsIcon() {
   return (
     <I>

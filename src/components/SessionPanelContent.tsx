@@ -13,7 +13,7 @@ import { Receipt } from "./Receipt.tsx";
 import { LiveConversation } from "./Conversation.tsx";
 import { EditableTitle } from "./EditableTitle.tsx";
 import { GitBadge } from "./GitPanel.tsx";
-import { MuteMenu } from "./MuteMenu.tsx";
+import { SessionMenu } from "./SessionMenu.tsx";
 import { ScrollJump, useJumpToEnd, useScrollEdges } from "./scroll.tsx";
 import { Transcript, type TurnRow } from "./Transcript.tsx";
 
@@ -57,7 +57,6 @@ export function SessionPanelContent({
   jumpVariant = "fixed",
   onHeadPointerDown,
   headStart,
-  chrome = "full",
   titleEditable = true,
 }: {
   id: string;
@@ -76,13 +75,6 @@ export function SessionPanelContent({
   onHeadPointerDown?: (e: React.PointerEvent) => void;
   /** Content prepended to the header, before the title — a tile's traffic lights. */
   headStart?: React.ReactNode;
-  /**
-   * "minimal" drops the "Open full page" link and "Close" button: a tile
-   * already offers both as its own green/red traffic lights, and showing
-   * both forms of the same two actions in a window this small reads as
-   * clutter rather than choice.
-   */
-  chrome?: "full" | "minimal";
   /**
    * A tile's header doubles as a drag handle, so the click-to-rename
    * affordance — a full-width hover box practically inviting a click right
@@ -146,54 +138,20 @@ export function SessionPanelContent({
           <h3>{title}</h3>
         )}
         <div className="drawer-actions">
-          <MuteMenu
-            id={agent?.sessionId ?? agent?.key ?? id}
+          {/* Open full page, Notify, Restart and Stop used to sit here as four
+              controls, which in a tile left no room for the title they were
+              pushing around. They are each wanted rarely and never together, so
+              they live behind the ⋮ along with this session's artifacts. The
+              drawer's Close went with them: Escape and the scrim already close
+              it, and a tile has its own red light. */}
+          <SessionMenu
+            id={id}
+            agent={agent}
             label={title}
             settings={settings}
             onSettings={onSettings}
+            onEnded={onClose}
           />
-          {chrome === "full" && (
-            <>
-              <a className="icon-btn" href={`#/session/${encodeURIComponent(id)}`}>
-                Open full page
-              </a>
-              <button className="icon-btn" onClick={onClose}>
-                Close
-              </button>
-            </>
-          )}
-          {/* The tile already has the green light for "send this elsewhere" (full
-              page, or arranged onto the screen); a pop-out button here was a second,
-              redundant way to do roughly the same thing. Ending the session — the one
-              thing that otherwise means scrolling down to the composer's own Stop/End —
-              is the more useful thing to reach from the header. Only an owned, still-
-              running agent has anything here to end. */}
-          {agent && agent.sessionId && agent.status !== "ended" && agent.status !== "error" && (
-            <button
-              className="icon-btn"
-              title="Restart this session — same conversation, fresh process. Picks up an MCP server or setting authorized since it started."
-              onClick={() => {
-                agentApi.restart(agent.key).catch(() => {});
-              }}
-            >
-              Restart
-            </button>
-          )}
-          {chrome === "minimal" && agent && agent.status !== "ended" && agent.status !== "error" && (
-            <button
-              className="icon-btn"
-              title={agent.status === "thinking" || agent.status === "starting" ? "Stop the current turn" : "End this session"}
-              onClick={() => {
-                if (agent.status === "thinking" || agent.status === "starting") {
-                  agentApi.interrupt(agent.key).catch(() => {});
-                } else {
-                  agentApi.stop(agent.key).catch(() => {});
-                }
-              }}
-            >
-              {agent.status === "thinking" || agent.status === "starting" ? "Stop" : "End"}
-            </button>
-          )}
         </div>
       </div>
 
@@ -208,7 +166,7 @@ export function SessionPanelContent({
       {agent ? (
         <>
           {agent.turns === 0 && data && turnsOf(data).length > 0 && (
-            <p className="hint">Earlier turns from before the dashboard took over are on the full page.</p>
+            <p className="takeover-note">Earlier turns from before the dashboard took over are on the full page.</p>
           )}
           <LiveConversation
             agentKey={agent.key}

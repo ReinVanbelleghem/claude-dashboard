@@ -890,22 +890,27 @@ export function LiveConversation({
         </label>
         <span style={{ flex: 1 }} />
         {waiting > 0 && <span className="chat-pending">{waiting} waiting on you</span>}
+        {/* Stop is here because stopping a turn is urgent and wants one click.
+            Ending a live session is neither, and it now lives in the header's ⋮
+            with a bin on it — two Ends in one panel only invited the wrong one.
+            Clearing an already-ended session has no counterpart there, since the
+            menu drops its destructive items once there is no agent left to end. */}
         {busy ? (
           <button className="icon-btn" onClick={() => agentApi.interrupt(agentKey).catch(() => {})}>
             Stop
           </button>
-        ) : (
+        ) : ended ? (
           <button
             className="icon-btn"
             onClick={async () => {
               await agentApi.stop(agentKey).catch(() => {});
-              if (ended) onGone?.();
+              onGone?.();
             }}
-            title={ended ? "Remove from the live list" : "End this session"}
+            title="Clear this session from the Live tab — the transcript stays, and History can resume it"
           >
-            {ended ? "Remove" : "End"}
+            Clear
           </button>
-        )}
+        ) : null}
       </div>
 
       {note && <div className="control-note">{note}</div>}
@@ -998,7 +1003,7 @@ export function LiveConversation({
             <span className="stream-cursor" aria-hidden="true" />
           </div>
         )}
-        {busy && !streaming && tab === null && <div className="chat-working">working…</div>}
+        {busy && tab === null && <WorkingLine timeline={data.timeline} tasks={tasks} quiet={!!streaming} />}
       </div>
       <ScrollJump target={scroller} {...edges} variant={scrollJumpVariant} />
       </div>
@@ -1007,7 +1012,7 @@ export function LiveConversation({
         <div className="ended-note">
           <strong>Session ended</strong>
           {data.endedReason ? ` — ${data.endedReason}.` : "."} Its transcript is kept, so you can
-          resume the conversation from the Live tab.
+          resume the conversation from the History tab.
           {data.stderr && (
             <details className="tool" style={{ marginTop: 8 }}>
               <summary>
@@ -1503,18 +1508,124 @@ function Item({
     case "permission":
       return <Permission item={item} agentKey={agentKey} />;
 
-    case "result":
+    case "result": {
+      const answer = structuredAnswer(item.structured);
       return (
-        <div className="chat-result">
-          {item.error ? `ended: ${item.error}` : "done"}
-          {item.costUsd !== null && ` · ${fmtUsd(item.costUsd)}`}
-          {item.durationMs !== null && ` · ${(item.durationMs / 1000).toFixed(1)}s`}
-        </div>
+        <>
+          {answer && (
+            <div className="turn assistant">
+              <div className="turn-head">
+                <span className="turn-who">Claude</span>
+                <time>{new Date(item.ts).toLocaleTimeString()}</time>
+              </div>
+              {answer.text && <Markdown text={answer.text} />}
+              <details className="tool structured">
+                <summary>
+                  <span className="tool-name">{answer.text ? "full answer" : "answer"}</span>
+                  <span className="tool-arg">json</span>
+                </summary>
+                <pre>{highlight(answer.json, "json")}</pre>
+              </details>
+            </div>
+          )}
+          <div className="chat-result">
+            {item.error ? `ended: ${item.error}` : "done"}
+            {item.costUsd !== null && ` · ${fmtUsd(item.costUsd)}`}
+            {item.durationMs !== null && ` · ${(item.durationMs / 1000).toFixed(1)}s`}
+          </div>
+        </>
       );
+    }
 
     case "error":
       return <div className="chat-error">{item.text}</div>;
   }
+}
+
+/**
+ * The turn's answer, for a session started with an output schema.
+ *
+ * A structured turn usually ends with no assistant text at all — the answer went
+ * into the JSON — so the conversation showed a prompt, then "done · $2.43" and
+ * nothing else, which reads as the session having ignored you. The common
+ * convention across our schemas is a prose field carrying the human answer, so
+ * that one is rendered as the message and the rest stays one click away.
+ */
+const ANSWER_FIELDS = ["reply", "answer", "response", "summary", "message", "text"];
+
+function structuredAnswer(v: unknown): { text: string | null; json: string } | null {
+  if (v === undefined || v === null) return null;
+  const json = JSON.stringify(v, null, 2);
+  if (typeof v === "string") return { text: v, json };
+  if (typeof v !== "object") return { text: null, json };
+  const rec = v as Record<string, unknown>;
+  const key = ANSWER_FIELDS.find((k) => typeof rec[k] === "string" && (rec[k] as string).trim());
+  return { text: key ? (rec[key] as string) : null, json };
+}
+
+/**
+ * What the session is doing right now.
+ *
+ * "working…" was all this said, which with tool calls hidden is the whole of the
+ * feedback for minutes at a time — the terminal, meanwhile, names the tool it is
+ * in, counts the ones before it and keeps a clock running. Every piece of that is
+ * already in the timeline the browser holds; none of it was being read.
+ *
+ * Nothing new is fetched: the current call is the last tool item still missing its
+ * result, the count and the clock come from the items after the last prompt, and a
+ * subagent's activity is whatever it last reported.
+ */
+function WorkingLine({
+  timeline,
+  tasks,
+  quiet,
+}: {
+  timeline: TimelineItem[];
+  tasks: TaskInfo[];
+  /** Text is already streaming, so this drops to a thin strip under it. */
+  quiet: boolean;
+}) {
+  // A clock has to tick on its own: between tool calls nothing else re-renders.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => tick((n) => n + 1), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  const since = (() => {
+    for (let i = timeline.length - 1; i >= 0; i--) if (timeline[i]!.kind === "user") return timeline[i]!.ts;
+    return timeline[0]?.ts ?? null;
+  })();
+  const turn = since === null ? [] : timeline.filter((i) => i.ts >= since);
+  const tools = turn.filter((i) => i.kind === "tool");
+  const open = [...tools].reverse().find((i) => i.kind === "tool" && i.result === undefined);
+  const thinking = turn.length > 0 && turn[turn.length - 1]!.kind === "thinking";
+  const running = tasks.filter((t) => t.status === "running");
+
+  const what = open
+    ? toolSummary(open.name, open.input)
+    : thinking
+      ? "thinking"
+      : running.length > 0
+        ? (oneLine(running[0]!.activity) ?? running[0]!.name)
+        : "working";
+
+  const secs = since === null ? 0 : Math.max(0, Math.round((Date.now() - since) / 1000));
+  const elapsed = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+
+  return (
+    <div className={`chat-working ${quiet ? "quiet" : ""}`}>
+      <span className="chat-working-dot" aria-hidden="true" />
+      <span className="chat-working-what" title={what}>
+        {what}
+      </span>
+      <span className="chat-working-meta">
+        {tools.length > 0 && `${tools.length} tool${tools.length === 1 ? "" : "s"} · `}
+        {running.length > 0 && `${running.length} agent${running.length === 1 ? "" : "s"} · `}
+        {elapsed}
+      </span>
+    </div>
+  );
 }
 
 /** The shape AskUserQuestion puts in its input; only what the UI needs to render. */

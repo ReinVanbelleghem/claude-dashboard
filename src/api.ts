@@ -229,7 +229,15 @@ export type TimelineItem = (
       input: unknown;
       decision: "allow" | "allowAlways" | "deny" | null;
     }
-  | { kind: "result"; ts: number; costUsd: number | null; durationMs: number | null; error: string | null }
+  | {
+      kind: "result";
+      ts: number;
+      costUsd: number | null;
+      durationMs: number | null;
+      error: string | null;
+      /** The turn's JSON answer, for a session started with an output schema. */
+      structured?: unknown;
+    }
   | { kind: "error"; ts: number; text: string }
 ) & { agentId?: string };
 

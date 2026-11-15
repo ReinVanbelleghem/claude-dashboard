@@ -1274,6 +1274,32 @@ export function forgetRestorable(sessionId: string): boolean {
   return restorable.length !== before;
 }
 
+/**
+ * What the End button means: the session stops and leaves the Live view, in one
+ * move rather than three.
+ *
+ * It used to take an End, then a Remove, and then a Forget on a second card in
+ * the Resumable list below — the same session listed twice, each list clearing
+ * separately, so "removing" it visibly left it behind. Ending now clears the
+ * roster entry and the restore row together. Nothing is destroyed by this: the
+ * transcript is a file under ~/.claude/projects that none of these lists own,
+ * and the History tab resumes from it.
+ *
+ * Deliberately not what `stopAllAgents` or `restartAgent` call — a daemon
+ * shutdown must leave the restore rows exactly where they are, since recovering
+ * them is the only reason that list exists.
+ */
+export async function endSession(key: string): Promise<boolean> {
+  const a = agents.get(key);
+  if (!a) return false;
+  const { sessionId } = a;
+  if (a.status !== "ended" && a.status !== "error") await stopAgent(key);
+  agents.delete(key);
+  if (sessionId) forgetRestorable(sessionId);
+  else emitRoster();
+  return true;
+}
+
 export function forgetAgent(key: string): boolean {
   const a = agents.get(key);
   if (!a) return false;

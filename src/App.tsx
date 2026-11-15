@@ -926,7 +926,18 @@ export default function App() {
           onSettings={setSettings}
         />
       )}
-      {!onFullPage && tab === "history" && <HistoryView onOpen={openSession} />}
+      {!onFullPage && tab === "history" && (
+        <HistoryView
+          onOpen={openSession}
+          liveIds={
+            new Set(
+              agents
+                .filter((a) => a.sessionId && a.status !== "ended" && a.status !== "error")
+                .map((a) => a.sessionId!),
+            )
+          }
+        />
+      )}
       {!onFullPage && tab === "artifacts" && (
         <ArtifactsView onOpenSession={openSession} reloadKey={artifactTick} />
       )}

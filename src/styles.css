@@ -882,6 +882,27 @@ tr.click:hover td { background: var(--surface-2); }
 .tile-window .drawer-meta { padding: 0 20px; }
 .tile-window .drawer-meta .drawer-sub { font-size: 12px; }
 
+/* A read-only tile — an ended session, or one running externally — scrolls its
+   whole body, so the header scrolled away with it and took the drag handle and
+   the traffic lights along. A live tile never had the problem: `.tile-body-live`
+   below makes the head a non-scrolling flex child. Sticking it keeps the same
+   promise for the other half of the sessions without restructuring the panel,
+   which would mean a second scroll container the jump-to-end hook doesn't know
+   about. The negative insets pull it back over `.tile-body`'s own padding so the
+   band spans the full window width, and the glass matches `.tile-window`'s so
+   the transcript frosts under it rather than colliding with it. */
+.tile-body:not(.tile-body-live) { padding-top: 0; }
+.tile-body:not(.tile-body-live) > .drawer-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0 -20px;
+  padding: 14px 16px 10px;
+  background: color-mix(in oklab, var(--surface-0) var(--glass-opacity, 70%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.3);
+}
+
 /* A live agent gets the same flex-column treatment `.drawer-live` gives the
    drawer: header stays put, `.chat-scroll` becomes the one thing that
    scrolls, and the composer — the last flex child, nothing after it — simply
@@ -1470,7 +1491,19 @@ tr.click:hover td { background: var(--surface-2); }
 .modal .hint { margin: 0 0 16px; font-size: 12px; color: var(--text-muted); line-height: 1.55; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .link-btn.inline { display: inline; margin: 0; }
-.chat-working { font: 500 12px/1.6 var(--mono); color: var(--text-muted); animation: pulse 1.4s infinite; }
+/* The live status line. Mono, muted and one line — it is a progress readout, not
+   a message, and it must not read as something Claude said. */
+.chat-working {
+  display: flex; align-items: baseline; gap: 8px;
+  font: 500 12px/1.6 var(--mono); color: var(--text-muted);
+}
+.chat-working.quiet { font-size: 11px; opacity: 0.75; }
+.chat-working-dot {
+  flex: none; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); animation: pulse 1.4s infinite; align-self: center;
+}
+.chat-working-what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-working-meta { flex: none; opacity: 0.8; font-size: 11px; }
 /* Interface effects → streaming cursor: a live caret at the end of the reply in
    progress, in place of the flat colour pulse alone. Static (still visible, just
    not blinking) with the effect off or under reduced motion, rather than gone. */
@@ -1501,6 +1534,10 @@ tr.click:hover td { background: var(--surface-2); }
   :root[data-hover-fx="on"] .spark-line { animation: none; stroke-dashoffset: 0; }
 }
 .chat-result { margin: 4px 0 16px; font: 500 11px/1.6 var(--mono); color: var(--text-muted); }
+/* The JSON behind a structured turn: offered, not imposed — the prose field is
+   already rendered above it as the message. */
+.turn.assistant .tool.structured { margin: 8px 0 0; max-width: 100%; }
+.turn.assistant .tool.structured > summary { padding: 3px 8px; font-size: 11px; }
 .chat-error {
   margin: 8px 0;
   padding: 8px 10px;
@@ -4151,9 +4188,11 @@ a { color: var(--accent); }
 /* The bell sits on the session, not in Settings, because "too loud" is something
    you notice while looking at the session that is being loud. */
 .mute { position: relative; display: inline-flex; }
-.mute-btn { padding: 3px 7px; color: var(--text-muted); }
+/* Only the compact (icon-only, session-card) trigger needs the smaller box;
+   the header row's trigger is a plain .icon-btn sitting next to other ones. */
+.mute-btn.tiny { color: var(--text-muted); }
+.mute-btn.tiny .icon { width: 14px; height: 14px; }
 .mute-btn.on { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
-.mute-btn .icon { width: 14px; height: 14px; }
 
 .mute-menu {
   position: absolute;
@@ -5490,7 +5529,7 @@ pre.pr-error { padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--cr
 .pr-panel-body .comment { margin-bottom: 0; }
 .pr-review-menu { position: relative; display: inline-flex; align-items: center; gap: 8px; }
 .pr-review-pop { right: 0; top: 100%; margin-top: 6px; width: 380px; padding: 14px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
-.pr-review-pop .composer-box { width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-0); resize: vertical; }
+.pr-review-pop .composer-box { width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-0); resize: vertical; color: var(--text-primary); }
 .pr-submitted { font-size: 12px; color: var(--good); }
 .pr-float { position: fixed; z-index: 50; }
 
@@ -6047,6 +6086,71 @@ a.pr-side-check-name:hover { color: var(--accent); }
 .svc-menu .icon { width: 15px; height: 15px; }
 .svc-menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
 
+/* ── a session's overflow menu (tile + drawer header) ───────────────────── */
+/* Every rule here is scoped under `.sess-menu` because `.svc-menu button` —
+   which this menu borrows its shell from — is a class-plus-element selector, so
+   a bare `.sess-menu-back` loses to it and the sub-view heading came out at the
+   size of the rows it was supposed to label. */
+.sess-menu { min-width: 232px; max-width: 320px; padding: 5px; }
+.sess-menu button[role] { gap: 8px; padding: 6px 9px; font-size: 12.5px; }
+.sess-menu .sess-menu-label {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sess-menu .sess-menu-hint {
+  margin-left: auto; padding-left: 10px; flex: none;
+  font-size: 10.5px; color: var(--text-muted);
+}
+.sess-menu .sess-menu-more {
+  margin-left: auto; display: inline-flex; color: var(--text-muted); transform: rotate(-90deg);
+}
+.sess-menu .sess-menu-more .icon { width: 13px; height: 13px; }
+/* The tick keeps its box whether or not it is set, so toggling a kind does not
+   shuffle the labels sideways. A filled box reads as "silenced", which is what
+   the heading above it promises. */
+.sess-menu .sess-menu-tick {
+  width: 14px; height: 14px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: 4px; color: transparent;
+}
+.sess-menu .sess-menu-tick.on { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+.sess-menu .sess-menu-tick .icon { width: 10px; height: 10px; }
+.sess-menu .svc-menu-heading { padding: 3px 9px 6px; font-size: 10.5px; }
+/* "Open full page" is a real link — middle-click and ⌘-click are worth keeping —
+   so it needs the row styling `.svc-menu button` only gives to buttons. */
+.sess-menu a.sess-menu-link {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 9px;
+  border-radius: 7px; color: var(--text-primary); font-size: 12.5px; text-decoration: none;
+}
+.sess-menu a.sess-menu-link:hover { background: var(--surface-2); }
+/* The flyout. Absolute against its row rather than portaled next to the menu, so
+   a click inside it is a click inside the menu and does not dismiss it. The side
+   class is set from a measurement — a tile's menu usually opens against the right
+   edge of the window, where only the left side has room. */
+.sess-sub-row { position: relative; }
+.sess-sub-row.open > button[role] { background: var(--surface-2); }
+.sess-menu .sess-sub {
+  position: absolute; top: -5px; left: calc(100% + 7px); right: auto;
+  z-index: 1; min-width: 212px;
+}
+.sess-menu .sess-sub.left { left: auto; right: calc(100% + 7px); }
+.sess-menu .sess-menu-note { margin: 0; padding: 8px 9px 10px; font-size: 11px; color: var(--text-muted); }
+/* The footer's buttons are real buttons again: `.svc-menu button` had stripped
+   their border and background, leaving two words floating under the list. */
+.sess-menu .mute-foot { display: flex; gap: 6px; padding: 6px 4px 2px; margin-top: 2px; border-top: 1px solid var(--border); }
+.sess-menu .mute-foot .icon-btn {
+  flex: 1; justify-content: center; width: auto; padding: 4px 8px; font-size: 11px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2);
+}
+.sess-menu .mute-foot .icon-btn:hover:not(:disabled) { background: var(--surface-1); color: var(--text-primary); }
+.sess-menu .mute-note { padding: 0 5px; }
+.sess-menu-btn.muted { color: var(--text-muted); }
+
+/* A note about the conversation, not a thing in it: centred and quiet so it
+   reads as a seam between the history and what the dashboard itself has seen. */
+.takeover-note {
+  margin: 2px 0 8px; text-align: center; font-size: 10.5px; line-height: 1.5;
+  color: var(--text-muted); opacity: 0.85;
+}
+
 /* ── start menu ─────────────────────────────────────────────────────────── */
 .svc-scrim {
   position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
@@ -6433,16 +6537,29 @@ a.pr-side-check-name:hover { color: var(--accent); }
 
 /* ── templates ───────────────────────────────────────────────────────────── */
 .templates { display: flex; flex-direction: column; gap: 14px; }
-.tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+/* Four columns at most, however wide the monitor: past that a template card is
+   mostly air and the eye has to travel a metre to read six words. `max()` holds
+   the floor — below four columns' worth of room it falls back to as many 340px
+   columns as fit. Equal-height rows (`grid-auto-rows: 1fr`) and a footer pushed
+   down with `margin-top: auto` keep a card with three runs the same size as one
+   that has never run. */
+.tpl-grid {
+  --tpl-gap: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(max(340px, (100% - 3 * var(--tpl-gap)) / 4), 1fr));
+  grid-auto-rows: 1fr;
+  gap: var(--tpl-gap);
+  align-items: stretch;
+}
 .tpl-card {
-  display: flex; flex-direction: column; gap: 8px; padding: 14px 16px 12px;
+  display: flex; flex-direction: column; gap: 9px; padding: 16px 18px 14px;
   background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .tpl-card:hover { border-color: var(--border-strong); box-shadow: 0 6px 20px rgb(0 0 0 / 0.12); }
 .tpl-card.scheduled { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .tpl-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
-.tpl-name { font-size: 15px; font-weight: 600; line-height: 1.3; }
+.tpl-name { font-size: 15.5px; font-weight: 600; line-height: 1.3; }
 .tpl-prompt { font-size: 13px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tpl-prompt em { color: var(--text-muted); }
 .tpl-meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--text-muted); }
@@ -6450,7 +6567,7 @@ a.pr-side-check-name:hover { color: var(--accent); }
 .tpl-schedule { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-muted); }
 .tpl-schedule.on { color: var(--text-primary); }
 .tpl-schedule .icon { width: 14px; height: 14px; }
-.tpl-runs { display: flex; flex-wrap: wrap; gap: 4px 12px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; }
+.tpl-runs { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; }
 .tpl-run { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; padding: 0; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
 .tpl-run:hover { color: var(--text-primary); }
 .tpl-run .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }

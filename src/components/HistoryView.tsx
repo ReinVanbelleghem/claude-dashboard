@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  agentApi,
   api,
   fmtAgo,
   fmtTokens,
@@ -46,9 +47,13 @@ function readPerPage(): number {
 
 export function HistoryView({
   onOpen,
+  liveIds,
 }: {
   onOpen: (id: string, opts?: { full?: boolean }) => void;
+  /** Session ids the dashboard is already running, so they are not offered a second process. */
+  liveIds: Set<string>;
 }) {
+  const [resuming, setResuming] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [scope, setScope] = useState<SearchScope>("both");
   const [rows, setRows] = useState<SessionRow[]>([]);
@@ -175,6 +180,7 @@ export function HistoryView({
                   <th className="num">Output</th>
                   <th className="num">Last active</th>
                   <th />
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -217,6 +223,30 @@ export function HistoryView({
                     <td className="num">{s.tool_count}</td>
                     <td className="num">{fmtTokens(s.output_tokens)}</td>
                     <td className="num" style={{ color: "var(--text-muted)" }}>{fmtAgo(s.last_ts)}</td>
+                    {/* Resuming is here because ending a session now clears it from the
+                        Live tab outright: this is where you come back for it. It starts a
+                        fresh process on the same transcript, which is what the Resume on
+                        an ended card did, without needing the card to still exist. */}
+                    <td className="num">
+                      {s.cwd && !liveIds.has(s.id) && (
+                        <button
+                          className="icon-btn"
+                          disabled={resuming === s.id}
+                          title="Resume this conversation as a session the dashboard drives"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setResuming(s.id);
+                            agentApi
+                              .start({ cwd: s.cwd!, resume: s.id, title: s.title ?? undefined })
+                              .then(() => onOpen(s.id))
+                              .catch(() => {})
+                              .finally(() => setResuming(null));
+                          }}
+                        >
+                          {resuming === s.id ? "Resuming…" : "Resume"}
+                        </button>
+                      )}
+                    </td>
                     {/* A real link, so cmd-click opens the session in its own tab. */}
                     <td className="num">
                       <a

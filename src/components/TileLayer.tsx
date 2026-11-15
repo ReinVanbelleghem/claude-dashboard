@@ -690,7 +690,6 @@ function TileWindow({
           onClose={onClose}
           scrollRef={body}
           jumpVariant="compact"
-          chrome="minimal"
           titleEditable={false}
           onHeadPointerDown={onMoveStart}
           headStart={<TileLights onClose={onClose} onMinimize={onMinimize} onOpenFull={onOpenFull} onSnap={onSnap} />}
