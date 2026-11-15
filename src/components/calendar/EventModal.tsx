@@ -25,7 +25,7 @@ type Kind = "event" | "task";
 const GOOGLE_NAME = /google|gmail/i;
 
 /** Whether a calendar from the Mac lives in a Google account: its account is named for Google, or carries a connected address. */
-const isGoogleCalendar = (title: string, account: string, connected: string[]): boolean => {
+export const isGoogleCalendar = (title: string, account: string, connected: string[]): boolean => {
   const text = `${title} ${account}`.toLowerCase();
   return GOOGLE_NAME.test(text) || connected.some((email) => text.includes(email.toLowerCase()));
 };
@@ -87,6 +87,8 @@ export function EventModal({
   googleAccounts,
   comparing,
   colors,
+  onApprove,
+  onDiscard,
   onClose,
   onEdit,
   onCreate,
@@ -100,6 +102,9 @@ export function EventModal({
   people: CalendarPerson[];
   googleAccounts: string[];
   /** The people and rooms whose calendars are on show, invited from the start on a new event. */
+  /** Approve or discard a draft meeting; the event passed is the draft. */
+  onApprove: (draft: CalendarEvent) => Promise<void>;
+  onDiscard: (draft: CalendarEvent) => Promise<void>;
   comparing: string[];
   /** Sidebar colours of other people's and rooms' calendars, by lower-cased address. */
   colors: Record<string, string>;
@@ -115,7 +120,7 @@ export function EventModal({
     <>
       <div className="scrim stacked" onClick={onClose} />
       {target.mode === "view" ? (
-        <EventDetails event={target.event} onClose={onClose} onEdit={() => onEdit(target.event)} onDelete={onDelete} />
+        <EventDetails event={target.event} onClose={onClose} onEdit={() => onEdit(target.event)} onDelete={onDelete} onApprove={onApprove} onDiscard={onDiscard} />
       ) : (
         <EventForm target={target} calendars={calendars} projects={projects} people={people} googleAccounts={googleAccounts} comparing={comparing} colors={colors} onClose={onClose} onCreate={onCreate} onCreateTask={onCreateTask} onUpdate={onUpdate} />
       )}
@@ -145,11 +150,15 @@ function EventDetails({
   onClose,
   onEdit,
   onDelete,
+  onApprove,
+  onDiscard,
 }: {
   event: CalendarEvent;
   onClose: () => void;
   onEdit: () => void;
   onDelete: (ref: EventRef) => Promise<void>;
+  onApprove: (draft: CalendarEvent) => Promise<void>;
+  onDiscard: (draft: CalendarEvent) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [span, setSpan] = useState<Span>("this");
@@ -159,6 +168,14 @@ function EventDetails({
   const remove = () => {
     setBusy(true);
     onDelete({ id: event.id, occurrence: event.occurrence, span }).catch((e: Error) => {
+      setError(e.message);
+      setBusy(false);
+    });
+  };
+
+  const decide = (act: (draft: CalendarEvent) => Promise<void>) => {
+    setBusy(true);
+    act(event).catch((e: Error) => {
       setError(e.message);
       setBusy(false);
     });
@@ -246,8 +263,22 @@ function EventDetails({
       </div>
 
       <div className="cal-detail-foot">
-        {!event.editable && <p>{event.other ? `From ${event.calendar}'s calendar.` : "This calendar is read-only."}</p>}
+        {event.syncing && (
+          <>
+            <p>Google has created this. It turns into the real, editable event once the Mac has synced it, usually within a minute.</p>
+            <button className="icon-btn" onClick={() => decide(onDiscard)}>Hide</button>
+          </>
+        )}
+        {!event.editable && !event.syncing && <p>{event.other ? `From ${event.calendar}'s calendar.` : "This calendar is read-only."}</p>}
+        {event.draft && (
+          <>
+            <p>A draft. Drag it in the calendar to change its time.</p>
+            <button className="icon-btn" disabled={busy} onClick={() => decide(onDiscard)}><TrashIcon /> Discard</button>
+            <button className="icon-btn primary" disabled={busy} onClick={() => decide(onApprove)}><CheckIcon /> Approve</button>
+          </>
+        )}
         {event.editable &&
+          !event.draft &&
           (confirming ? (
             <>
               <button className="icon-btn" onClick={() => setConfirming(false)}>Keep it</button>

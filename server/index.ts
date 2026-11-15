@@ -160,8 +160,10 @@ import {
   updateTask,
   updateTaskProject,
 } from "./tasks.ts";
-import { createMacEvent, deleteMacEvent, disableMacCalendar, enableMacCalendar, macCalendarStatus, macCalendars, macEvents, macPeople, updateMacEvent } from "./macCalendar.ts";
+import { createMacEvent, deleteMacEvent, disableMacCalendar, enableMacCalendar, macCalendarStatus, macCalendars, macEvents, macPeople, refreshMacCalendar, updateMacEvent } from "./macCalendar.ts";
 import type { EventDraft, EventPatch, EventRef } from "../shared/calendar.ts";
+import { CALENDAR_SAFE_TOOLS, calendarToolServer } from "./calendarTools.ts";
+import { addProposal, approveProposal, discardProposal, listProposals, updateProposal } from "./calendarProposals.ts";
 import { createGoogleEvent, disconnectGoogle, finishGoogleConnect, googleAvailability, googleConnectUrl, googleOtherEvents, googleStatus, removeGoogleClient, setGoogleClient, setGoogleGuests } from "./google.ts";
 import {
   attachSession,
@@ -1072,6 +1074,63 @@ const server = Bun.serve<PtyData, never>({
         return json({ error: (e as Error).message }, 400);
       }
     }
+    if (p === "/api/calendar/plan" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { prompt?: string; title?: string; model?: string; permissionMode?: string } | null;
+      if (!body?.prompt?.trim()) return json({ error: "a prompt is required" }, 400);
+      const key = startAgent({
+        cwd: scratchDir(),
+        research: true,
+        model: body.model || undefined,
+        permissionMode: (body.permissionMode as never) || undefined,
+        prompt: body.prompt,
+        title: body.title || undefined,
+        mcpServers: calendarToolServer(() => broadcast("calendar", { at: Date.now() })),
+        allowedTools: CALENDAR_SAFE_TOOLS,
+      });
+      return json({ key });
+    }
+    if (p === "/api/calendar/proposals" && req.method === "GET") return json({ proposals: listProposals() });
+    if (p === "/api/calendar/proposals" && req.method === "POST") {
+      const draft = (await req.json().catch(() => null)) as EventDraft | null;
+      if (!draft || typeof draft.start !== "number" || typeof draft.end !== "number" || draft.end < draft.start) {
+        return json({ error: "start and end are required, in epoch ms" }, 400);
+      }
+      const proposal = addProposal({ ...draft, title: String(draft.title ?? "").trim() || "New event", allDay: draft.allDay === true });
+      broadcast("calendar", { at: Date.now() });
+      return json({ proposal });
+    }
+    if (p.startsWith("/api/calendar/proposals/") && req.method === "POST") {
+      const [id, action] = p.slice("/api/calendar/proposals/".length).split("/");
+      try {
+        if (action === "approve") {
+          const done = await approveProposal(id);
+          if (!done) return json({ error: "that draft no longer exists" }, 404);
+          broadcast("calendar", { at: Date.now() });
+          return json(done);
+        }
+        if (action === "discard") {
+          discardProposal(id);
+          broadcast("calendar", { at: Date.now() });
+          return json({ ok: true });
+        }
+        if (action === undefined) {
+          const patch = (await req.json().catch(() => null)) as Partial<EventDraft> | null;
+          const proposal = patch ? updateProposal(id, patch) : null;
+          if (!proposal) return json({ error: "that draft no longer exists" }, 404);
+          broadcast("calendar", { at: Date.now() });
+          return json({ proposal });
+        }
+      } catch (e) {
+        return json({ error: (e as Error).message }, 502);
+      }
+    }
+    if (p === "/api/calendar/refresh" && req.method === "POST") {
+      try {
+        return json({ changed: await refreshMacCalendar() });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 502);
+      }
+    }
     if (p === "/api/calendar/disable" && req.method === "POST") return json(disableMacCalendar());
     if (p === "/api/google" && req.method === "GET") return json(googleStatus());
     if (p === "/api/google/client" && req.method === "POST") {
@@ -1158,7 +1217,11 @@ const server = Bun.serve<PtyData, never>({
               return json({ error: "start and end are required, in epoch ms" }, 400);
             }
             const clean = { ...draft, title: String(draft.title ?? "").trim() || "New event", allDay: draft.allDay === true };
-            if (clean.google) return json({ event: null, google: await createGoogleEvent(clean) });
+            if (clean.google) {
+              const google = await createGoogleEvent(clean);
+              broadcast("calendar", { at: Date.now() });
+              return json({ event: null, google });
+            }
             const event = await createMacEvent(clean);
             broadcast("calendar", { at: Date.now() });
             return json({ event });

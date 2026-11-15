@@ -6,6 +6,7 @@ import {
   type CalendarEvent,
   type CalendarInfo,
   type CalendarPerson,
+  type CalendarProposal,
   type GoogleStatus,
   type CalendarView as ViewKind,
   type EventDraft,
@@ -13,18 +14,21 @@ import {
   type EventRef,
   type MacCalendarStatus,
   type OtherCalendar,
+  type PermissionMode,
   type Settings,
   type Task,
   type TaskProject,
   type WeekStart,
 } from "../../api.ts";
 import { addDays, localDay } from "../../../shared/taskDates.ts";
-import { CheckIcon, ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon } from "../Icons.tsx";
+import { CheckIcon, ChevronIcon, ClaudeMark, MoreIcon, PanelLeftIcon, PlusIcon, RefreshIcon } from "../Icons.tsx";
 import { CalendarSidebar } from "./CalendarSidebar.tsx";
 import { GoogleSetup } from "./GoogleSetup.tsx";
+import { PlanDialog } from "./PlanDialog.tsx";
+import { planPrompt } from "./planPrompt.ts";
 import { Popover } from "../Popover.tsx";
 import { Select } from "../Select.tsx";
-import { EventModal, TaskModal, type CalendarTarget, type TaskDraft } from "./EventModal.tsx";
+import { EventModal, TaskModal, isGoogleCalendar, type CalendarTarget, type TaskDraft } from "./EventModal.tsx";
 import { MonthGrid } from "./MonthGrid.tsx";
 import { TimeGrid } from "./TimeGrid.tsx";
 import { MINUTE_MS, atMinutes, dayStart, minutesOfDay, rangeTitle, shiftAnchor, visibleDays } from "./dates.ts";
@@ -35,6 +39,36 @@ const ANCHOR_KEY = "calendar.anchor";
 const SIDEBAR_KEY = "calendar.sidebar";
 const OTHER_COLORS = ["#e0556a", "#e0a030", "#2bb3c0", "#b06cf0", "#d9773a", "#5b8def", "#8a9a5b", "#c85fa8"];
 
+const DRAFT_COLOR = "#d97757";
+
+const draftEvent = (p: CalendarProposal, nameOf: (email: string) => CalendarPerson | undefined, calendar: string | undefined): CalendarEvent => ({
+  key: `draft:${p.id}`,
+  id: p.id,
+  externalId: null,
+  occurrence: p.start,
+  calendarId: p.calendarId ?? "",
+  calendar: calendar ? `Draft for ${calendar}` : "Draft",
+  account: "",
+  color: DRAFT_COLOR,
+  title: p.title,
+  start: p.start,
+  end: p.end,
+  allDay: p.allDay,
+  location: [p.location, ...(p.google?.rooms ?? []).map((email) => nameOf(email)?.name ?? email), p.google?.meet ? "Google Meet link" : null].filter(Boolean).join(" · ") || null,
+  notes: p.notes || null,
+  url: null,
+  recurring: false,
+  editable: true,
+  attendees: [...(p.google?.guests ?? []).map((email) => ({ email, room: false })), ...(p.google?.rooms ?? []).map((email) => ({ email, room: true }))].map((a) => ({
+    name: nameOf(a.email)?.name ?? a.email,
+    email: a.email,
+    status: "pending" as const,
+    room: a.room,
+    me: false,
+  })),
+  draft: true,
+});
+
 function storedSidebar(): boolean {
   try {
     return localStorage.getItem(SIDEBAR_KEY) !== "0";
@@ -43,7 +77,7 @@ function storedSidebar(): boolean {
   }
 }
 const PENDING_POLL_MS = 10_000;
-const PENDING_SHOWN_MS = 5 * MINUTE_MS;
+const PENDING_SHOWN_MS = 3 * MINUTE_MS;
 
 /** A stand-in for an event Google has just created, shown until the Mac's Calendar app has synced the real one. */
 const awaitingSync = (draft: EventDraft): CalendarEvent => ({
@@ -60,11 +94,12 @@ const awaitingSync = (draft: EventDraft): CalendarEvent => ({
   end: draft.end,
   allDay: draft.allDay,
   location: draft.location || null,
-  notes: "Created in Google just now. It becomes editable here once the Mac's Calendar app has synced it.",
+  notes: null,
   url: null,
   recurring: false,
   editable: false,
   attendees: [],
+  syncing: true,
 });
 
 function storedAnchor(): string | null {
@@ -95,7 +130,10 @@ export function CalendarView({
   onSettings,
   changed,
   onOpenInTasks,
+  onOpenSession,
 }: {
+  /** Bring a session the calendar started into view. */
+  onOpenSession: (key: string) => void;
   onOpenInTasks: (task: Task) => void;
   tasks: Task[];
   projects: TaskProject[];
@@ -110,6 +148,8 @@ export function CalendarView({
   const [people, setPeople] = useState<CalendarPerson[]>([]);
   const [google, setGoogle] = useState<GoogleStatus>({ hasClient: false, clientSource: null, accounts: [] });
   const [googleSetup, setGoogleSetup] = useState(false);
+  const [planning, setPlanning] = useState(false);
+  const [proposals, setProposals] = useState<CalendarProposal[]>([]);
   const [pending, setPending] = useState<CalendarEvent[]>([]);
   const [passing, setPassing] = useState<OtherCalendar[]>([]);
   const [otherEvents, setOtherEvents] = useState<Record<string, CalendarEvent[]>>({});
@@ -144,10 +184,12 @@ export function CalendarView({
   const comparedKey = compared.map((o) => o.email).join(",");
   const otherColors = useMemo(() => Object.fromEntries([...pinned, ...passing].map((o) => [o.email.toLowerCase(), o.color])), [pinned, passing]);
   const shownEvents = useMemo(() => {
-    const arrived = (p: CalendarEvent) => events.some((e) => e.title === p.title && e.start === p.start);
+    const arrived = (p: CalendarEvent) => events.some((e) => e.title === p.title && Math.abs(e.start - p.start) < MINUTE_MS);
+    const nameOf = (email: string) => people.find((p) => p.email.toLowerCase() === email.toLowerCase());
+    const drafts = proposals.map((p) => draftEvent(p, nameOf, orderedCalendars.find((c) => c.id === p.calendarId)?.title));
     const others = compared.flatMap((o) => (otherEvents[o.email] ?? []).map((e) => ({ ...e, calendar: o.name, color: o.color })));
-    return [...events.filter((e) => !hidden.includes(e.calendarId)), ...pending.filter((p) => !arrived(p)), ...others];
-  }, [events, hidden, pending, compared, otherEvents]);
+    return [...events.filter((e) => !hidden.includes(e.calendarId)), ...pending.filter((p) => !arrived(p)), ...others, ...drafts];
+  }, [events, hidden, pending, compared, otherEvents, proposals, people, orderedCalendars]);
   const days = useMemo(() => visibleDays(view, anchor, weekStart), [view, anchor, weekStart]);
   const from = dayStart(days[0]);
   const to = dayStart(addDays(days[days.length - 1], 1));
@@ -178,6 +220,10 @@ export function CalendarView({
       if (request !== latest.current) return;
       setStatus(next);
       calendarApi.google().then(setGoogle).catch(() => {});
+      calendarApi
+        .proposals()
+        .then((r) => setProposals(r.proposals))
+        .catch(() => {});
       if (!next.enabled) return setEvents([]);
       const payload = await calendarApi.events(from, to);
       if (request !== latest.current) return;
@@ -192,18 +238,37 @@ export function CalendarView({
     void load();
   }, [load, changed]);
 
-  useEffect(() => {
-    const tick = () => {
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshed, setRefreshed] = useState(0);
+
+  const refresh = useCallback(
+    async (visible: boolean) => {
+      if (visible) setRefreshing(true);
       setToday(localDay(new Date()));
-      void load();
-    };
+      setRefreshed((n) => n + 1);
+      await load();
+      try {
+        const { changed: arrived } = await calendarApi.refresh();
+        if (arrived) await load();
+        if (visible) setPending([]);
+      } catch (e) {
+        if (visible) setError((e as Error).message);
+      } finally {
+        if (visible) setRefreshing(false);
+      }
+    },
+    [load],
+  );
+
+  useEffect(() => {
+    const tick = () => void refresh(false);
     const timer = window.setInterval(tick, REFRESH_MS);
     window.addEventListener("focus", tick);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("focus", tick);
     };
-  }, [load]);
+  }, [refresh]);
 
   useEffect(() => {
     if (!status?.enabled) return;
@@ -221,10 +286,10 @@ export function CalendarView({
     if (pending.length === 0) return;
     const timer = window.setInterval(() => {
       setPending((list) => list.filter((p) => Date.now() - p.occurrence < PENDING_SHOWN_MS));
-      void load();
+      void refresh(false);
     }, PENDING_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [pending.length, load]);
+  }, [pending.length, refresh]);
 
   useEffect(() => {
     if (comparedKey === "" || google.accounts.length === 0) return;
@@ -246,7 +311,7 @@ export function CalendarView({
     return () => {
       stale = true;
     };
-  }, [comparedKey, from, to, changed, google.accounts.length]);
+  }, [comparedKey, from, to, changed, refreshed, google.accounts.length]);
 
   const toggleSidebar = () =>
     setSidebar((open) => {
@@ -294,7 +359,27 @@ export function CalendarView({
       .catch((e: Error) => setError(e.message))
       .finally(() => void load());
 
+  const approve = async (ids: string[]) => {
+    for (const id of ids) {
+      const proposal = proposals.find((p) => p.id === id);
+      const { viaGoogle } = await calendarApi.approveProposal(id);
+      if (viaGoogle && proposal) setPending((list) => [...list, awaitingSync(proposal)]);
+    }
+    setTarget(null);
+    await load();
+  };
+
+  const discard = async (ids: string[]) => {
+    await Promise.all(ids.map((id) => calendarApi.discardProposal(id)));
+    setTarget(null);
+    await load();
+  };
+
   const moveEvent = (event: CalendarEvent, start: number, end: number) => {
+    if (event.draft) {
+      setProposals((list) => list.map((p) => (p.id === event.id ? { ...p, start, end } : p)));
+      return void settle(calendarApi.moveProposal(event.id, start, end));
+    }
     setEvents((list) => list.map((e) => (e.key === event.key ? { ...e, start, end } : e)));
     void settle(calendarApi.update({ id: event.id, occurrence: event.occurrence, start, end }));
   };
@@ -324,6 +409,31 @@ export function CalendarView({
     await calendarApi.remove(ref);
     setTarget(null);
     void load();
+  };
+
+  const canInvite = (calendar: CalendarInfo) => google.accounts.length > 0 && isGoogleCalendar(calendar.title, calendar.account, google.accounts);
+
+  const startPlan = async (
+    request: string,
+    askFirst: boolean,
+    calendar: CalendarInfo | null,
+    session: { model: string | undefined; permissionMode: PermissionMode },
+  ) => {
+    const prompt = planPrompt({
+      request,
+      now: new Date(),
+      rangeFrom: from,
+      rangeTo: to,
+      calendar,
+      inviteFrom: calendar && canInvite(calendar) ? google.accounts[0] : null,
+      onShow: compared,
+      standing: settings?.ui.calendarPlanNotes ?? "",
+      askFirst,
+    });
+    const title = `Plan: ${request.trim().replace(/\s+/g, " ").slice(0, 60)}`;
+    const { key } = await calendarApi.plan({ title, prompt, ...session });
+    setPlanning(false);
+    onOpenSession(key);
   };
 
   const newEvent = () => {
@@ -370,6 +480,9 @@ export function CalendarView({
           <button className="icon-btn square cal-prev" aria-label="Previous" onClick={() => setAnchor(shiftAnchor(view, anchor, -1))}><ChevronIcon /></button>
           <button className="icon-btn square cal-next" aria-label="Next" onClick={() => setAnchor(shiftAnchor(view, anchor, 1))}><ChevronIcon /></button>
         </div>
+        <button className={`icon-btn square cal-refresh ${refreshing ? "busy" : ""}`} aria-label="Refresh" title="Refresh now" disabled={refreshing} onClick={() => void refresh(true)}>
+          <RefreshIcon />
+        </button>
         <h2>
           {heading.title}
           {heading.dates && <small>{heading.dates}</small>}
@@ -387,6 +500,7 @@ export function CalendarView({
             />
           </div>
         )}
+        <button className="icon-btn cal-plan-btn" onClick={() => setPlanning(true)}><ClaudeMark /> Plan with Claude</button>
         <button className="icon-btn primary" onClick={newEvent}><PlusIcon /> New event</button>
         <button
           className="icon-btn square"
@@ -481,6 +595,18 @@ export function CalendarView({
 
       {error && <p className="cal-error">{error}</p>}
 
+      {proposals.length > 0 && (
+        <div className="cal-drafts">
+          <ClaudeMark />
+          <span>
+            <b>{proposals.length} {proposals.length === 1 ? "draft meeting" : "draft meetings"}</b> waiting for you. Drag to adjust, click one to see who is invited.
+          </span>
+          <button className="icon-btn tiny" onClick={() => setAnchor(localDay(new Date(Math.min(...proposals.map((p) => p.start)))))}>Show first</button>
+          <button className="icon-btn tiny" onClick={() => void settle(discard(proposals.map((p) => p.id)))}>Discard all</button>
+          <button className="icon-btn tiny primary" onClick={() => void settle(approve(proposals.map((p) => p.id)))}>Approve all</button>
+        </div>
+      )}
+
       <div
         className={`cal-layout ${sidebar ? "with-side" : ""}`}
         ref={layoutRef}
@@ -521,6 +647,20 @@ export function CalendarView({
       </div>
       </div>
 
+      {planning && (
+        <PlanDialog
+          rangeLabel={heading.dates ? `${heading.title}, ${heading.dates}` : heading.title}
+          onShow={compared}
+          calendars={orderedCalendars.filter((c) => c.editable)}
+          canInvite={canInvite}
+          standing={settings?.ui.calendarPlanNotes ?? ""}
+          onStanding={(text) => void saveUi({ calendarPlanNotes: text })}
+          settings={settings}
+          onRemember={(choice) => void saveUi(choice)}
+          onClose={() => setPlanning(false)}
+          onPlan={startPlan}
+        />
+      )}
       {googleSetup && <GoogleSetup google={google} onGoogle={setGoogle} onClose={() => setGoogleSetup(false)} />}
       {target && (
         <EventModal
@@ -529,6 +669,12 @@ export function CalendarView({
           projects={projects}
           people={people}
           googleAccounts={google.accounts}
+          onApprove={(draft) => approve([draft.id])}
+          onDiscard={async (draft) => {
+            if (!draft.syncing) return discard([draft.id]);
+            setPending((list) => list.filter((p) => p.key !== draft.key));
+            setTarget(null);
+          }}
           comparing={compared.map((o) => o.email)}
           colors={otherColors}
           onCreateTask={createTask}

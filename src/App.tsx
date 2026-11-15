@@ -1012,6 +1012,7 @@ export default function App() {
       {!onFullPage && tab === "calendar" && <CalendarView tasks={tasks?.tasks ?? []} projects={tasks?.projects ?? []} settings={settings}
           onSettings={setSettings}
           changed={calendarChanged}
+          onOpenSession={openSession}
           onOpenInTasks={(task) => {
             setFocusTaskId(task.id);
             setTab("tasks");

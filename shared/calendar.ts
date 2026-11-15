@@ -46,6 +46,10 @@ export type CalendarEvent = {
   attendees: Attendee[];
   /** From someone else's or a room's calendar, shown beside your own for comparison. */
   other?: boolean;
+  /** A suggested meeting that does not exist yet; it waits for approval. */
+  draft?: boolean;
+  /** A stand-in for an event Google has just created, shown until the Mac has synced the real one. */
+  syncing?: boolean;
 };
 
 /** A colleague's or a room's calendar kept in the sidebar. */
@@ -71,6 +75,9 @@ export type EventDraft = {
   /** Set when the event has guests, a room or a Meet link: Google then creates it and sends the invitations. */
   google?: GoogleInvite;
 };
+
+/** A meeting suggested by a planning session, shown on the calendar as a draft until approved or discarded. */
+export type Proposal = EventDraft & { id: string; createdAt: number };
 
 export type GoogleInvite = { account: string; guests: string[]; rooms: string[]; meet: boolean };
 

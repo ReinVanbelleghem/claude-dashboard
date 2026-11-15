@@ -155,6 +155,11 @@ export type Settings = {
     calendarView: "week" | "workweek" | "month";
     /** Calendars switched off in the calendar's menu, by id. */
     calendarHidden: string[];
+    /** Standing instructions handed to every "Plan with Claude" session, such as working hours. */
+    calendarPlanNotes: string;
+    /** The model and permission mode last used for a "Plan with Claude" session. Empty follows the defaults. */
+    calendarPlanModel: string;
+    calendarPlanMode: string;
     /** Your own calendars in the order you arranged them in the sidebar, by id. */
     calendarOrder: string[];
     /** Colleagues' and rooms' calendars pinned in the calendar's sidebar. */
@@ -331,6 +336,9 @@ const DEFAULTS: Settings = {
     calendarWeekStart: 1,
     calendarView: "week",
     calendarHidden: [],
+    calendarPlanNotes: "",
+    calendarPlanModel: "",
+    calendarPlanMode: "",
     calendarOrder: [],
     calendarOthers: [],
     appName: "Claude Dashboard",

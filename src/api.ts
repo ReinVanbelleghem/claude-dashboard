@@ -401,6 +401,9 @@ export type Settings = {
     calendarWeekStart?: 0 | 1 | 6;
     calendarView?: "week" | "workweek" | "month";
     calendarHidden?: string[];
+    calendarPlanNotes?: string;
+    calendarPlanModel?: string;
+    calendarPlanMode?: string;
     calendarOrder?: string[];
     calendarOthers?: { email: string; name: string; color: string; shown: boolean; room?: boolean }[];
     appName?: string;
@@ -1224,6 +1227,8 @@ export const workspaceApi = {
 import type { Task, TaskAdd, TaskPatch, TaskProject, TasksPayload } from "../shared/tasks.ts";
 export type { Task, TaskProject, TasksPayload };
 
+import type { Proposal as CalendarProposal } from "../shared/calendar.ts";
+export type { CalendarProposal };
 import type { Availability, CalendarEvent, CalendarInfo, CalendarPayload, EventDraft, EventPatch, EventRef, GoogleStatus, MacCalendarStatus, Person as CalendarPerson } from "../shared/calendar.ts";
 export type { Attendee, Availability, OtherCalendar, CalendarEvent, CalendarInfo, CalendarView, EventDraft, EventPatch, EventRef, GoogleInvite, GoogleStatus, MacCalendarStatus, WeekStart } from "../shared/calendar.ts";
 export type { CalendarPerson };
@@ -1232,12 +1237,20 @@ export const calendarApi = {
   status: () => get<MacCalendarStatus>("/api/calendar"),
   enable: () => post<MacCalendarStatus>("/api/calendar/enable"),
   disable: () => post<MacCalendarStatus>("/api/calendar/disable"),
+  /** Have macOS fetch from the calendar accounts now; resolves once it has, or after a few seconds. */
+  refresh: () => post<{ changed: boolean }>("/api/calendar/refresh"),
   calendars: () => get<{ calendars: CalendarInfo[] }>("/api/calendar/calendars"),
   events: (from: number, to: number) => get<CalendarPayload>(`/api/calendar/events?from=${from}&to=${to}`),
   create: (draft: EventDraft) => post<{ event: CalendarEvent | null; google?: { link: string | null; meet: string | null } }>("/api/calendar/events", draft),
   update: (patch: EventPatch) => post<{ event: CalendarEvent }>("/api/calendar/events/update", patch),
   remove: (ref: EventRef) => post<{ ok: true }>("/api/calendar/events/delete", ref),
   people: () => get<{ people: CalendarPerson[] }>("/api/calendar/people"),
+  /** Start a planning session that has the calendar as tools. */
+  plan: (opts: { prompt: string; title: string; model?: string; permissionMode?: string }) => post<{ key: string }>("/api/calendar/plan", opts),
+  proposals: () => get<{ proposals: CalendarProposal[] }>("/api/calendar/proposals"),
+  moveProposal: (id: string, start: number, end: number) => post<{ proposal: CalendarProposal }>(`/api/calendar/proposals/${id}`, { start, end }),
+  approveProposal: (id: string) => post<{ viaGoogle: boolean }>(`/api/calendar/proposals/${id}/approve`),
+  discardProposal: (id: string) => post<{ ok: true }>(`/api/calendar/proposals/${id}/discard`),
   google: () => get<GoogleStatus>("/api/google"),
   saveGoogleClient: (clientId: string, clientSecret: string) => post<GoogleStatus>("/api/google/client", { clientId, clientSecret }),
   removeGoogleClient: () => post<GoogleStatus>("/api/google/client/remove"),

@@ -30,6 +30,7 @@ type HelperReply = {
   error?: string;
   events?: HelperEvent[];
   event?: HelperEvent;
+  changed?: boolean;
   calendars?: CalendarInfo[];
 };
 
@@ -119,6 +120,13 @@ export async function macEvents(from: number, to: number): Promise<CalendarPaylo
   if (!isEnabled()) return { events: [] };
   const reply = await granted(["events", String(toSeconds(from)), String(toSeconds(to))]);
   return { events: (reply.events ?? []).map(toEvent).sort(byStart) };
+}
+
+/** Ask macOS to fetch from the calendar accounts now, and say whether anything arrived. */
+export async function refreshMacCalendar(): Promise<boolean> {
+  if (!isEnabled()) return false;
+  const reply = await granted(["refresh"], 20_000);
+  return reply.changed === true;
 }
 
 export async function macCalendars(): Promise<CalendarInfo[]> {

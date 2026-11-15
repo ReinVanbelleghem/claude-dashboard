@@ -69,6 +69,8 @@ func describe(_ event: EKEvent) -> [String: Any] {
 
 final class Answer { var granted = false }
 
+final class Flag { var raised = false }
+
 func openStore() -> EKEventStore {
   let store = EKEventStore()
   let answer = Answer()
@@ -145,6 +147,19 @@ case "events":
   let window = store.predicateForEvents(withStart: Date(timeIntervalSince1970: from), end: Date(timeIntervalSince1970: to), calendars: nil)
   let events = store.events(matching: window).filter { $0.status != .canceled }.map(describe)
   emit(["access": "granted", "events": events])
+
+case "refresh":
+  let store = openStore()
+  let changed = Flag()
+  let observer = NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: store, queue: nil) { _ in changed.raised = true }
+  store.refreshSourcesIfNecessary()
+  let deadline = Date().addingTimeInterval(4)
+  while !changed.raised && Date() < deadline {
+    RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+  }
+  if changed.raised { RunLoop.current.run(until: Date().addingTimeInterval(1)) }
+  NotificationCenter.default.removeObserver(observer)
+  emit(["access": "granted", "changed": changed.raised])
 
 case "calendars":
   let store = openStore()

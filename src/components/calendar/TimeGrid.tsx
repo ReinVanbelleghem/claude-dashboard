@@ -346,7 +346,7 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
                   : undefined;
                 return (
                   <div
-                    className={`cal-bar ${bar.ghost ? "ghost" : ""} ${bar.event.editable ? "" : "locked"} ${bar.event.other ? "other" : ""}`}
+                    className={`cal-bar ${bar.ghost ? "ghost" : ""} ${bar.event.editable ? "" : "locked"} ${bar.event.other ? "other" : ""} ${bar.event.draft ? "draft" : ""}`}
                     key={bar.key}
                     style={{ ...place, ...tint(bar.event.color) }}
                     {...hover.bind(bar.event)}
@@ -416,7 +416,7 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
               const { event } = block;
               return (
                 <div
-                  className={`cal-ev ${short ? "short" : ""} ${block.ghost ? "ghost" : ""} ${event.editable ? "" : "locked"} ${event.other ? "other" : ""}`}
+                  className={`cal-ev ${short ? "short" : ""} ${block.ghost ? "ghost" : ""} ${event.editable ? "" : "locked"} ${event.other ? "other" : ""} ${event.draft ? "draft" : ""}`}
                   key={block.key}
                   style={{ ...box, ...tint(event.color) }}
                   {...hover.bind(event)}

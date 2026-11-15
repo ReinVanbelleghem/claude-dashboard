@@ -144,7 +144,7 @@ export function MonthGrid({ days, anchor, today, events, tasks, projects, onOpen
                 }
                 return (
                   <div
-                    className={`cal-chip ${item.bar ? "bar" : ""} ${item.event.other ? "other" : ""} ${lifted}`}
+                    className={`cal-chip ${item.bar ? "bar" : ""} ${item.event.other ? "other" : ""} ${item.event.draft ? "draft" : ""} ${lifted}`}
                     key={item.key}
                     style={tint(item.event.color)}
                     {...hover.bind(item.event)}

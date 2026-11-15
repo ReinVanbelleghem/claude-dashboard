@@ -585,6 +585,8 @@ export type StartOptions = {
   outputSchema?: Record<string, unknown>;
   /** The template this session was started from, if any. */
   templateId?: string;
+  /** Tools served from inside the daemon, for sessions that are given a job in the dashboard itself. */
+  mcpServers?: Options["mcpServers"];
 };
 
 /**
@@ -673,6 +675,7 @@ export function startAgent(opts: StartOptions): string {
       resume: opts.resume,
       title: opts.title?.trim() || undefined,
       allowedTools: opts.allowedTools,
+      mcpServers: opts.mcpServers,
       outputFormat: opts.outputSchema ? { type: "json_schema", schema: opts.outputSchema } : undefined,
       includePartialMessages: true,
       // Without these a Task call is an opaque tool row: the first forwards the
