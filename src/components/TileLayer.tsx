@@ -6,6 +6,7 @@ import {
   applyMoveMagnetism,
   clampRect,
   rectForZone,
+  refitRect,
   resizeRect,
   snapZoneAt,
   type ResizeDir,
@@ -136,6 +137,27 @@ export function TileLayer({
   // one's.
   const tilesRef = useRef(tiles);
   tilesRef.current = tiles;
+  const layer = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = layer.current;
+    if (!el) return;
+    let previousWidth = el.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const nextWidth = el.clientWidth;
+      if (nextWidth === previousWidth) return;
+      const from = previousWidth;
+      previousWidth = nextWidth;
+      for (const t of tilesRef.current) {
+        const rect = refitRect(t.rect, from, nextWidth);
+        if (rect.x !== t.rect.x || rect.y !== t.rect.y || rect.w !== t.rect.w || rect.h !== t.rect.h) {
+          onRectChangeRef.current(t.id, rect);
+        }
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     function onMove(e: PointerEvent) {
@@ -224,7 +246,7 @@ export function TileLayer({
   const preview = snapZone ? rectForZone(snapZone) : null;
 
   return (
-    <div className="tile-layer">
+    <div className="tile-layer" ref={layer}>
       {preview && (
         <div
           className="tile-snap-preview"

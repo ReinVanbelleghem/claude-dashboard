@@ -105,6 +105,32 @@ export function clampRect(rect: TileRect): TileRect {
   return { x, y, w, h };
 }
 
+/**
+ * Carries a rect across a change in the layer's width — the sidebar opening
+ * or closing, or the window being resized. A tile sitting against the right
+ * edge keeps its gap to it (and a tile spanning both edges keeps both), so a
+ * docked tile stays docked; a tile that was fully visible and would now
+ * overhang is pulled back inside. Anything else is only clamped.
+ */
+export function refitRect(rect: TileRect, previousWidth: number, nextWidth: number): TileRect {
+  const rightGap = previousWidth - (rect.x + rect.w);
+  const dockedRight = rightGap <= SNAP_EDGE_GAP * 2;
+  const dockedLeft = rect.x <= SNAP_EDGE_GAP * 2;
+  if (dockedRight && dockedLeft) {
+    return clampRect({ ...rect, w: nextWidth - rect.x - SNAP_EDGE_GAP });
+  }
+  if (dockedRight) {
+    const w = Math.min(rect.w, Math.max(nextWidth - 2 * SNAP_EDGE_GAP, TILE_MIN_WIDTH));
+    return clampRect({ ...rect, x: nextWidth - SNAP_EDGE_GAP - w, w });
+  }
+  const wasInside = rect.x >= 0 && rightGap >= 0;
+  if (wasInside && rect.x + rect.w > nextWidth) {
+    const w = Math.min(rect.w, Math.max(nextWidth - SNAP_EDGE_GAP, TILE_MIN_WIDTH));
+    return clampRect({ ...rect, x: Math.max(0, nextWidth - w), w });
+  }
+  return clampRect(rect);
+}
+
 /** A fresh tile's starting spot: cascaded so opening several in a row doesn't stack them exactly on top of each other. */
 export function defaultRect(index: number): TileRect {
   const { w: vw, h: vh } = viewport();
