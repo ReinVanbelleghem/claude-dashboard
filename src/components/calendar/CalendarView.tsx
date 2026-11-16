@@ -78,6 +78,8 @@ function storedSidebar(): boolean {
     return true;
   }
 }
+const GO_TO_FRESH_MS = 5_000;
+
 function storedAnchor(): string | null {
   try {
     const saved = sessionStorage.getItem(ANCHOR_KEY);
@@ -105,6 +107,7 @@ export function CalendarView({
   settings,
   onSettings,
   changed,
+  goTo = null,
   onOpenInTasks,
   onOpenSession,
 }: {
@@ -117,6 +120,8 @@ export function CalendarView({
   onSettings: (s: Settings) => void;
   /** Bumped when the daemon reports a calendar change made elsewhere. */
   changed: number;
+  /** A day to show, asked for from outside: a notification about a meeting on it. */
+  goTo?: { day: string; at: number } | null;
 }) {
   const [status, setStatus] = useState<MacCalendarStatus | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -136,7 +141,10 @@ export function CalendarView({
   const [sidebar, setSidebar] = useState(storedSidebar);
   const [error, setError] = useState<string | null>(null);
   const [today, setToday] = useState(() => localDay(new Date()));
-  const [anchor, setAnchor] = useState(() => storedAnchor() ?? today);
+  const [anchor, setAnchor] = useState(() => (goTo && Date.now() - goTo.at < GO_TO_FRESH_MS ? goTo.day : null) ?? storedAnchor() ?? today);
+  useEffect(() => {
+    if (goTo && Date.now() - goTo.at < GO_TO_FRESH_MS) setAnchor(goTo.day);
+  }, [goTo]);
 
   useEffect(() => {
     try {

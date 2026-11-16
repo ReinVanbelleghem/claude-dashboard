@@ -602,25 +602,32 @@ export function ArtifactOverlay({
  * the grid above because the question is different: there you are looking for a
  * page, here you are reading what a session did.
  */
-export function SessionArtifacts({ sessionId }: { sessionId: string }) {
+const MAX_SESSIONS_LISTED = 24;
+
+/** The artifacts one session wrote, or with `sessionIds` those of several, as a workspace shows them. */
+export function SessionArtifacts({ sessionId, sessionIds }: { sessionId?: string; sessionIds?: string[] }) {
+  const wanted = (sessionIds ?? (sessionId ? [sessionId] : [])).slice(0, MAX_SESSIONS_LISTED);
+  const wantedKey = wanted.join("\n");
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [port, setPort] = useState<number | null>(null);
   const [preview, setPreview] = useState<Artifact | null>(null);
 
   useEffect(() => {
     let live = true;
-    artifactApi
-      .list({ sessionId })
-      .then((r) => {
+    Promise.all(wanted.map((id) => artifactApi.list({ sessionId: id }).catch(() => null)))
+      .then((lists) => {
         if (!live) return;
-        setArtifacts(r.artifacts);
-        setPort(r.port);
+        const found = new Map<string, Artifact>();
+        for (const list of lists) for (const a of list?.artifacts ?? []) found.set(a.slug, a);
+        setArtifacts([...found.values()]);
+        setPort(lists.find((l) => l)?.port ?? null);
       })
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [sessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantedKey]);
 
   if (artifacts.length === 0) return null;
 

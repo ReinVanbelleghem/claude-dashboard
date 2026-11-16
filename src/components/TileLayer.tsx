@@ -1,3 +1,4 @@
+import { isTerminalKey } from "../../shared/terminals.ts";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AgentSummary, Settings } from "../api.ts";
@@ -467,7 +468,7 @@ function TileWindow({
       }}
       onPointerDownCapture={onFocus}
     >
-      <div className={`tile-body ${agent ? "tile-body-live" : ""}`} ref={body}>
+      <div className={`tile-body ${agent ? "tile-body-live" : ""}${isTerminalKey(sessionId) ? " tile-body-live tile-body-term" : ""}`} ref={body}>
         <SessionPanelContent
           id={sessionId}
           agent={agent}

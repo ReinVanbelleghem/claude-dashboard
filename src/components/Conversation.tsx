@@ -848,9 +848,8 @@ export function LiveConversation({
       i.kind === "permission" && i.decision === null,
   ).length;
 
-  return (
+  const pickers = (
     <>
-      <div className="live-controls">
         <ModelPicker
           value={data.model}
           models={data.models}
@@ -888,20 +887,17 @@ export function LiveConversation({
           />
           Hide tools
         </label>
-        <span style={{ flex: 1 }} />
-        {waiting > 0 && <span className="chat-pending">{waiting} waiting on you</span>}
-        {/* Stop is here because stopping a turn is urgent and wants one click.
-            Ending a live session is neither, and it now lives in the header's ⋮
-            with a bin on it — two Ends in one panel only invited the wrong one.
-            Clearing an already-ended session has no counterpart there, since the
-            menu drops its destructive items once there is no agent left to end. */}
+    </>
+  );
+  const turnControl = (
+    <>
         {busy ? (
-          <button className="icon-btn" onClick={() => agentApi.interrupt(agentKey).catch(() => {})}>
+          <button className="icon-btn composer-stop" onClick={() => agentApi.interrupt(agentKey).catch(() => {})}>
             Stop
           </button>
         ) : ended ? (
           <button
-            className="icon-btn"
+            className="icon-btn composer-stop"
             onClick={async () => {
               await agentApi.stop(agentKey).catch(() => {});
               onGone?.();
@@ -911,8 +907,11 @@ export function LiveConversation({
             Clear
           </button>
         ) : null}
-      </div>
+    </>
+  );
 
+  return (
+    <>
       {note && <div className="control-note">{note}</div>}
 
       {tasks.length > 0 && (
@@ -924,7 +923,7 @@ export function LiveConversation({
             onClick={() => setTab(null)}
           >
             <span className="agent-tab-name">Main</span>
-            <span className="agent-tab-sub">{tasks.length} agents</span>
+            <span className="agent-tab-sub">{tasks.length} agent{tasks.length === 1 ? "" : "s"}</span>
           </button>
           {shownTasks.map((t) => (
             <AgentTab
@@ -990,9 +989,19 @@ export function LiveConversation({
           </div>
         )}
         {hiddenCount > 0 && (
-          <div className="chat-hidden-note">
-            {hiddenCount} tool call{hiddenCount === 1 ? "" : "s"} hidden
-          </div>
+          <button
+            className="chat-hidden-note"
+            title="Show tool calls and thinking"
+            onClick={() =>
+              settingsApi
+                .save({ ui: { hideToolCalls: false } })
+                .then((r) => onSettings?.(r.settings))
+                .catch(() => {})
+            }
+          >
+            <b>{hiddenCount}</b> tool call{hiddenCount === 1 ? "" : "s"} hidden
+            <span>Show</span>
+          </button>
         )}
         {streaming && tab === null && (
           <div className="turn assistant streaming">
@@ -1281,7 +1290,11 @@ export function LiveConversation({
               if (el) el.scrollTop = (e.target as HTMLTextAreaElement).scrollTop;
             }}
           />
-          <div className="composer-side">
+          </div>
+          <div className="composer-bar">
+            <div className="composer-pickers">{pickers}</div>
+            {waiting > 0 && <span className="chat-pending">{waiting} waiting on you</span>}
+            <div className="composer-side">
             {/* Paste and drop were the only way in, and neither is visible. */}
             <button
               className="icon-btn composer-attach"
@@ -1305,6 +1318,7 @@ export function LiveConversation({
                 if (files.length) void absorbFiles(files);
               }}
             />
+            {turnControl}
             {/* One word either way. Mid-turn it queues rather than interrupts, which
                 the tooltip says — but a button whose label changes under you is worse
                 than a button that just sends. */}
@@ -1316,10 +1330,11 @@ export function LiveConversation({
             >
               Send
             </button>
+            </div>
           </div>
-          </div>
+          {data.meter && <UsageLine meter={data.meter} />}
         </div>
-        {data.meter && <UsageLine meter={data.meter} />}
+
       </div>
       {data.error && <div className="chat-error">{data.error}</div>}
     </>
@@ -1538,7 +1553,7 @@ function Item({
             </div>
           )}
           <div className="chat-result">
-            {item.error ? `ended: ${item.error}` : "done"}
+            {item.error ? `Ended: ${item.error}` : "Done"}
             {item.costUsd !== null && ` · ${fmtUsd(item.costUsd)}`}
             {item.durationMs !== null && ` · ${(item.durationMs / 1000).toFixed(1)}s`}
           </div>

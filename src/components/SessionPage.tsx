@@ -13,10 +13,9 @@ import { HBars } from "./Charts.tsx";
 import { Receipt } from "./Receipt.tsx";
 import { LiveConversation } from "./Conversation.tsx";
 import { EditableTitle } from "./EditableTitle.tsx";
-import { GitControls } from "./GitControls.tsx";
-import { GitBadge, GitPanel } from "./GitPanel.tsx";
-import { useGitRepo } from "./useGitRepo.ts";
-import { hasWorktreeSupport, WorktreesPanel } from "./WorktreesPanel.tsx";
+import { GitBadge } from "./GitPanel.tsx";
+import { FolderIcon } from "./Icons.tsx";
+import { workspaceTitle, type Workspace } from "../../shared/workspaces.ts";
 import { SessionMenu } from "./SessionMenu.tsx";
 import { ExternalNotice, turnsOf } from "./SessionPanelContent.tsx";
 import { Transcript } from "./Transcript.tsx";
@@ -34,7 +33,8 @@ export function SessionPage({
   onSettings,
   onBack,
   onContinue,
-  onOpenWorktree,
+  workspace = null,
+  onOpenWorkspace,
 }: {
   id: string;
   /** Set when the dashboard owns this session, which is what makes it writable. */
@@ -45,9 +45,13 @@ export function SessionPage({
   onSettings: (s: Settings) => void;
   onBack: () => void;
   onContinue?: (sessionId: string, cwd: string, title: string | null) => Promise<void>;
-  /** Start work in another checkout of this repository — see BranchSwitcher. */
-  onOpenWorktree?: (path: string) => void;
+  /** The workspace this session is filed in, where its changes, git and artifacts are shown. */
+  workspace?: Workspace | null;
+  onOpenWorkspace?: (workspace: Workspace) => void;
 }) {
+  const [details, setDetails] = useState(false);
+  const [pane, setPane] = useState<"live" | "earlier">("live");
+  useEffect(() => setPane("live"), [id]);
   const [data, setData] = useState<SessionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [adopting, setAdopting] = useState(false);
@@ -88,13 +92,6 @@ export function SessionPage({
     : turnsOf(data);
 
   /**
-   * One repository, two panels: the controls sit in the sidebar and the diff at the
-   * bottom of the page, so the state they share is owned here. A commit made in one
-   * has to empty the file list in the other.
-   */
-  const repo = useGitRepo(cwd ?? "");
-
-  /**
    * A live session is renamed through its agent so the in-memory label the roster
    * reads moves with the rest; only a session nobody is driving goes straight at the
    * index. The route id is the agent key until a session id exists, which is why the
@@ -107,7 +104,7 @@ export function SessionPage({
   }
 
   return (
-    <div className="page">
+    <div className="page session-chat">
       <div className="page-head">
         <button className="icon-btn" onClick={onBack}>
           ← Back
@@ -126,6 +123,18 @@ export function SessionPage({
           {cwd && <GitBadge cwd={cwd} />}
         </div>
         <span style={{ flex: 1 }} />
+        {workspace && onOpenWorkspace && (
+          <button
+            className="icon-btn"
+            title="Changes, git, worktrees and artifacts of this workspace"
+            onClick={() => onOpenWorkspace(workspace)}
+          >
+            <FolderIcon open /> {workspaceTitle(workspace)}
+          </button>
+        )}
+        <button className={`icon-btn${details ? " on" : ""}`} aria-pressed={details} onClick={() => setDetails((v) => !v)}>
+          Details
+        </button>
         {/* The same ⋮ the drawer and a tile carry, minus "Open full page" — this
             is it. A session's actions should be in one place whichever way it is
             open, so Notify and Restart moved in here with the rest. */}
@@ -166,9 +175,47 @@ export function SessionPage({
       {error && <div className="empty">{error}</div>}
       {!agent && live && <ExternalNotice />}
 
-      {/* The tile row is always present, empty before the index catches up: adding
-          a sibling above the columns later would shift them and remount the lot. */}
-      <div className="kpis">
+      <div className={`session-cols${details ? " with-details" : ""}`}>
+        <div className="session-main">
+          {agent && priorTurns.length > 0 && (
+          <div className="session-tabs" role="tablist" aria-label="Which part of the conversation">
+            <button role="tab" aria-selected={pane === "live"} className={pane === "live" ? "on" : ""} onClick={() => setPane("live")}>
+              Conversation
+            </button>
+            <button
+              role="tab"
+              aria-selected={pane === "earlier"}
+              className={pane === "earlier" ? "on" : ""}
+              title="What was said before the dashboard took this session over"
+              onClick={() => setPane("earlier")}
+            >
+              Earlier <span>{priorTurns.length}</span>
+            </button>
+          </div>
+        )}
+          {priorTurns.length > 0 && (
+            <div className="panel transcript-panel" hidden={!!agent && pane !== "earlier"}>
+              <Transcript turns={priorTurns} />
+            </div>
+          )}
+          {/* Mounted once, whatever the index knows: keyed by session so switching
+              sessions still gives a clean pane, while a data refresh does not. */}
+          {agent && (
+            <div className="panel chat-pane page-live" hidden={priorTurns.length > 0 && pane === "earlier"}>
+              <LiveConversation
+                key={agent.key}
+                agentKey={agent.key}
+                settings={settings}
+                onSettings={onSettings}
+                onGone={onBack}
+              />
+            </div>
+          )}
+        </div>
+
+        {details && (
+        <div className="page-side session-details">
+          <div className="kpis">
         {data && s && (
           <>
             <div className="tile">
@@ -194,54 +241,6 @@ export function SessionPage({
           </>
         )}
       </div>
-
-      <div className="page-cols">
-        <div>
-          {priorTurns.length > 0 && (
-            <div className="panel transcript-panel">
-              <Transcript turns={priorTurns} />
-            </div>
-          )}
-          {/* Mounted once, whatever the index knows: keyed by session so switching
-              sessions still gives a clean pane, while a data refresh does not. */}
-          {agent && (
-            <div className="panel chat-pane page-live">
-              <LiveConversation
-                key={agent.key}
-                agentKey={agent.key}
-                settings={settings}
-                onSettings={onSettings}
-                onGone={onBack}
-              />
-            </div>
-          )}
-          {cwd && (
-            <GitPanel
-              key={cwd}
-              repo={repo}
-              settings={settings}
-              onSettings={onSettings}
-              agentKey={agent?.key}
-            />
-          )}
-        </div>
-
-        <div className="page-side">
-          {/* First in the sidebar: it is the part you act on, and it should not move
-              down the page as the session accumulates statistics. */}
-          {cwd && (
-            <GitControls repo={repo} agentKey={agent?.key} onOpenWorktree={onOpenWorktree} />
-          )}
-          {/* Below the git controls: acting on this checkout comes first, choosing a
-              different one second. */}
-          {cwd && hasWorktreeSupport(repo.status) && repo.status && (
-            <WorktreesPanel
-              cwd={cwd}
-              status={repo.status}
-              worktreeRoot={settings?.ui.worktreeRoot}
-              onOpenWorktree={onOpenWorktree}
-            />
-          )}
 
           {data && s && (
             <div className="panel">
@@ -269,7 +268,7 @@ export function SessionPage({
             <>
               {data.receipt && <Receipt receipt={data.receipt} />}
 
-              <SessionArtifacts sessionId={id} />
+              {!workspace && <SessionArtifacts sessionId={id} />}
 
               {data.prLinks.length > 0 && (
                 <div className="panel">
@@ -299,6 +298,7 @@ export function SessionPage({
             </>
           )}
         </div>
+        )}
       </div>
     </div>
   );

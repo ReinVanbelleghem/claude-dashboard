@@ -120,6 +120,7 @@ import { handlePrRoute } from "./prRoutes.ts";
 import { initPrWatch } from "./prWatch.ts";
 import { initCalendarWatch } from "./calendarWatch.ts";
 import { clearNotifications, inboxPayload, initInbox, markNotificationsRead } from "./inbox.ts";
+import { closeTerminal, createTerminal, initTerminals, listTerminals, renameTerminal } from "./terminals.ts";
 import { initExplain, onAgentItem as explainOnItem, onRoster as explainOnRoster } from "./prExplain.ts";
 import { initReview } from "./prReview.ts";
 import { reviewRepoLabel, reviewRoot } from "./prRepos.ts";
@@ -301,6 +302,7 @@ async function broadcastServices(force = false): Promise<void> {
 // The review pages keep records about some sessions (which PR, which findings);
 // they learn what happened the same way the browser does, from the event stream.
 initInbox(db, (payload) => broadcast("inbox", payload));
+initTerminals(db, (terminals) => broadcast("terminals", { terminals }));
 initReview(db);
 initRuns(db, broadcast);
 initExplain(db, broadcast);
@@ -1651,6 +1653,25 @@ const server = Bun.serve<PtyData, never>({
       const next = setSessionMute(b.id, kinds, b.label?.trim() || b.id);
       broadcast("settings", next);
       return json({ settings: next });
+    }
+
+    if (p === "/api/terminals" && req.method === "GET") return json({ terminals: listTerminals() });
+    if (p === "/api/terminals" && req.method === "POST") {
+      const b = (await req.json().catch(() => ({}))) as { folder?: unknown; workspaceId?: unknown; title?: unknown };
+      const made = await createTerminal({
+        folder: typeof b.folder === "string" ? expand(b.folder) : "",
+        workspaceId: Number.isInteger(b.workspaceId) ? (b.workspaceId as number) : null,
+        title: typeof b.title === "string" ? b.title : undefined,
+      });
+      return "error" in made ? json(made, 400) : json({ terminal: made });
+    }
+    if (p.startsWith("/api/terminals/") && req.method === "POST") {
+      const [rawId, action] = p.slice("/api/terminals/".length).split("/");
+      const id = Number(rawId);
+      if (!Number.isInteger(id)) return json({ error: "no such terminal" }, 404);
+      if (action === "close") return (await closeTerminal(id)) ? json({ ok: true }) : json({ error: "no such terminal" }, 404);
+      const b = (await req.json().catch(() => ({}))) as { title?: unknown };
+      return renameTerminal(id, typeof b.title === "string" ? b.title : "") ? json({ ok: true }) : json({ error: "no such terminal" }, 404);
     }
 
     if (p === "/api/notifications" && req.method === "GET") return json(inboxPayload());

@@ -24,6 +24,8 @@ import {
   type WorkspacesPayload,
   inboxApi,
   type InboxPayload,
+  terminalApi,
+  type WorkspaceTerminal,
 } from "./api.ts";
 import {
   applyAppearance,
@@ -76,6 +78,10 @@ import { HistoryView } from "./components/HistoryView.tsx";
 import { LiveView } from "./components/LiveView.tsx";
 import { FoldersModal } from "./components/FoldersModal.tsx";
 import { NewSessionModal } from "./components/NewSessionModal.tsx";
+import { WorkspacePage } from "./components/WorkspacePage.tsx";
+import { TerminalPage } from "./components/TerminalPane.tsx";
+import { isTerminalKey, terminalKey } from "../shared/terminals.ts";
+import { isChatPath, workspaceTitle } from "../shared/workspaces.ts";
 import { Palette } from "./components/Palette.tsx";
 import { SessionDrawer } from "./components/SessionDrawer.tsx";
 import { SessionPage } from "./components/SessionPage.tsx";
@@ -126,8 +132,16 @@ function routeSessionId(): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+/** #/workspace/<id> for the page of one workspace. */
+function routeWorkspaceId(): number | null {
+  const m = window.location.hash.match(/^#\/workspace\/(\d+)$/);
+  return m ? Number(m[1]) : null;
+}
+
 const routePrNow = () => routePr(window.location.hash);
 const TAB_ROUTES: Record<string, Tab> = { "#/tasks": "tasks", "#/calendar": "calendar" };
+/** #/calendar/<epoch ms>: the calendar, on the week that moment falls in. */
+const CALENDAR_AT = /^#\/calendar\/(\d+)$/;
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("live");
@@ -136,6 +150,7 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [pageId, setPageId] = useState<string | null>(routeSessionId);
+  const [workspacePageId, setWorkspacePageId] = useState<number | null>(routeWorkspaceId);
   const [prRoute, setPrRoute] = useState<PrRoute | null>(routePrNow);
   /** Bumped when the daemon reports the artifact folder changed, to re-pull the list. */
   const [artifactTick, setArtifactTick] = useState(0);
@@ -222,8 +237,13 @@ export default function App() {
   const clearFocusTask = useCallback(() => setFocusTaskId(null), []);
   const [showFolders, setShowFolders] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
+  const [terminals, setTerminals] = useState<WorkspaceTerminal[]>([]);
+  useEffect(() => {
+    terminalApi.list().then((r) => setTerminals(r.terminals)).catch(() => {});
+  }, []);
   const [inbox, setInbox] = useState<InboxPayload>({ items: [], unread: 0 });
   const [showInbox, setShowInbox] = useState(false);
+  const [calendarGoTo, setCalendarGoTo] = useState<{ day: string; at: number } | null>(null);
   useEffect(() => {
     inboxApi.list().then(setInbox).catch(() => {});
   }, []);
@@ -268,6 +288,13 @@ export default function App() {
   // button both flow through here, so there is one source of truth.
   useEffect(() => {
     const onHash = () => {
+      const calendarAt = window.location.hash.match(CALENDAR_AT);
+      if (calendarAt) {
+        setCalendarGoTo({ day: localDay(new Date(Number(calendarAt[1]))), at: Date.now() });
+        setTab("calendar");
+        window.location.hash = "";
+        return;
+      }
       const routed = TAB_ROUTES[window.location.hash];
       if (routed) {
         setTab(routed);
@@ -276,10 +303,11 @@ export default function App() {
       }
       const id = routeSessionId();
       setPageId(id);
+      setWorkspacePageId(routeWorkspaceId());
       if (id) setOpenId(null);
       setPrRoute(routePrNow());
     };
-    if (TAB_ROUTES[window.location.hash]) onHash();
+    if (TAB_ROUTES[window.location.hash] || CALENDAR_AT.test(window.location.hash)) onHash();
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -404,6 +432,7 @@ export default function App() {
     es.addEventListener("tasks", (e) => setTasks(JSON.parse((e as MessageEvent).data)));
     es.addEventListener("calendar", () => setCalendarChanged((n) => n + 1));
     es.addEventListener("inbox", (e) => setInbox(JSON.parse((e as MessageEvent).data)));
+    es.addEventListener("terminals", (e) => setTerminals(JSON.parse((e as MessageEvent).data).terminals));
     // The daemon owns the decision to notify; the tab only raises the banner.
     es.addEventListener("notify", (e) => {
       const p = JSON.parse((e as MessageEvent).data) as NotifyPayload;
@@ -505,7 +534,11 @@ export default function App() {
     window.location.hash = "";
   }, []);
   // A PR page is a full page too: tiles hide and the dock deselects the same way.
-  const onFullPage = !!pageId || !!prRoute;
+  const workspacePage = workspacePageId === null ? null : (workspaces?.workspaces.find((w) => w.id === workspacePageId) ?? null);
+  const onFullPage = !!pageId || !!prRoute || !!workspacePage;
+  const openWorkspace = useCallback((w: { id: number }) => {
+    window.location.hash = `#/workspace/${w.id}`;
+  }, []);
   const closeDrawer = useCallback(() => setOpenId(null), []);
 
   // Persisted so a reload finds the same windows in the same places; re-saved
@@ -755,8 +788,59 @@ export default function App() {
     if (stale.length > 0) sidebarPrefs.markSeen(stale.map((a) => a.id));
   }, [agents, onScreen]);
   const sidebarSessions = useMemo(
-    () => buildSessions({ agents, live, titles, seen: sidebarSeen, visible: onScreen }),
-    [agents, live, titles, sidebarSeen, onScreen],
+    () => [
+      ...buildSessions({ agents, live, titles, seen: sidebarSeen, visible: onScreen }),
+      ...restorable
+        .filter((r) => !agents.some((a) => a.sessionId === r.sessionId))
+        .map((r) => ({
+          id: r.sessionId,
+          ids: [r.sessionId],
+          agentKey: null,
+          title: r.title ?? titles.get(r.sessionId)?.title ?? r.cwd.split("/").filter(Boolean).pop() ?? "Session",
+          cwd: r.cwd,
+          status: "ended" as const,
+          why: "Ended when the dashboard restarted",
+          pending: 0,
+          at: r.lastSeen,
+          since: r.lastSeen,
+          chat: isChatPath(r.cwd),
+          model: (r.model ?? "").replace(/^claude-/, "").replace(/\[.*\]$/, ""),
+          external: false,
+          resumable: true,
+        })),
+      ...terminals.map((t) => ({
+        id: terminalKey(t.id),
+        ids: [terminalKey(t.id)],
+        agentKey: null,
+        title: t.title,
+        cwd: t.folder,
+        status: "idle" as const,
+        why: null,
+        pending: 0,
+        at: t.createdAt,
+        since: t.createdAt,
+        chat: false,
+        model: "",
+        external: false,
+        terminal: true,
+      })),
+    ],
+    [agents, live, titles, sidebarSeen, onScreen, terminals, restorable],
+  );
+  const filedWorkspaces = useMemo(() => {
+    if (!workspaces) return workspaces;
+    const filed = { ...workspaces.sessions };
+    for (const t of terminals) if (t.workspaceId !== null) filed[terminalKey(t.id)] = t.workspaceId;
+    return { ...workspaces, sessions: filed };
+  }, [workspaces, terminals]);
+  const newTerminal = useCallback(
+    (folder: string, workspaceId: number | null) => {
+      terminalApi
+        .create(folder, workspaceId)
+        .then((r) => openSession(terminalKey(r.terminal.id)))
+        .catch(() => {});
+    },
+    [openSession],
   );
   const tasksDue = useMemo(() => {
     const today = localDay(new Date());
@@ -780,6 +864,10 @@ export default function App() {
     }
     return ids;
   }, [tiles, sessionIdFor]);
+  const workspaceOf = (id: string | null) => {
+    const ws = id ? workspaces?.sessions[id] : undefined;
+    return ws === undefined ? null : (workspaces?.workspaces.find((w) => w.id === ws) ?? null);
+  };
   const startSessionIn = useCallback((folder: string, workspaceId?: number) => {
     setNewIn(folder);
     setNewInWorkspace(workspaceId ?? null);
@@ -809,13 +897,16 @@ export default function App() {
     >
       <WorkspaceTree
         sessions={sidebarSessions}
-        payload={workspaces}
+        payload={filedWorkspaces}
         activeId={pageId ?? openId}
         minimized={minimizedTiles}
         workspaceTasks={workspaceTasks}
         onOpen={openSession}
         onNewWorkspace={(folder) => setNewWorkspace({ folder: folder ?? null })}
         onNewSession={startSessionIn}
+        onOpenWorkspace={openWorkspace}
+        onNewTerminal={newTerminal}
+        activeWorkspaceId={pageId ? null : (workspacePage?.id ?? null)}
         onNewChat={() => {
           setNewIn(null);
           setNewInWorkspace(null);
@@ -823,15 +914,19 @@ export default function App() {
           setShowNew(true);
         }}
       />
-      <RailSessions sessions={sidebarSessions} payload={workspaces} activeId={pageId ?? openId} onOpen={openSession} />
+      <RailSessions sessions={sidebarSessions} payload={filedWorkspaces} activeId={pageId ?? openId} onOpen={openSession} />
     </Sidebar>
   );
 
   const crumb = pageId
-    ? (agentFor(pageId)?.title ?? "Session")
-    : prRoute
-      ? "Pull request"
-      : TAB_LABEL[tab] || "Desktop";
+    ? isTerminalKey(pageId)
+      ? (terminals.find((t) => terminalKey(t.id) === pageId)?.title ?? "Terminal")
+      : (agentFor(pageId)?.title ?? "Session")
+    : workspacePage
+      ? workspaceTitle(workspacePage)
+      : prRoute
+        ? "Pull request"
+        : TAB_LABEL[tab] || "Desktop";
 
   const topbar = (
     <header className="topbar">
@@ -883,7 +978,10 @@ export default function App() {
         onOpen={openSession}
       />
 
-      {pageId && (
+      {pageId && isTerminalKey(pageId) && (
+        <TerminalPage id={pageId} onBack={closePage} onOpenWorkspace={(id) => openWorkspace({ id })} />
+      )}
+      {pageId && !isTerminalKey(pageId) && (
         <SessionPage
           id={sessionIdFor(pageId) ?? pageId}
           agent={agentFor(pageId)}
@@ -898,6 +996,25 @@ export default function App() {
           }}
           // A branch checked out in another worktree cannot be switched to here, so
           // the offer is to start a session in the checkout that does hold it.
+          workspace={workspaceOf(sessionIdFor(pageId) ?? pageId) ?? workspaceOf(pageId)}
+          onOpenWorkspace={openWorkspace}
+        />
+      )}
+
+      {workspacePage && !pageId && (
+        <WorkspacePage
+          key={workspacePage.id}
+          workspace={workspacePage}
+          sessions={sidebarSessions.filter((s) => s.ids.some((id) => filedWorkspaces?.sessions[id] === workspacePage.id))}
+          onNewTerminal={newTerminal}
+          sessionIds={Object.entries(workspaces?.sessions ?? {})
+            .filter(([, ws]) => ws === workspacePage.id)
+            .map(([id]) => id)}
+          settings={settings}
+          onSettings={setSettings}
+          onBack={closePage}
+          onOpenSession={openSession}
+          onNewSession={startSessionIn}
           onOpenWorktree={(path) => {
             setNewIn(path);
             setShowNew(true);
@@ -910,7 +1027,7 @@ export default function App() {
           past to reach the thing you came for, and Desktop is meant to be blank on
           purpose — a clean backdrop for arranging tiles against, not another page
           with its own content competing for the same space. */}
-      {prRoute && !pageId && (
+      {prRoute && !pageId && !workspacePage && (
         <PrPage
           route={prRoute}
           agents={agents}
@@ -1034,6 +1151,7 @@ export default function App() {
       {!onFullPage && tab === "calendar" && <CalendarView tasks={tasks?.tasks ?? []} projects={tasks?.projects ?? []} settings={settings}
           onSettings={setSettings}
           changed={calendarChanged}
+          goTo={calendarGoTo}
           onOpenSession={openSession}
           onOpenInTasks={(task) => {
             setFocusTaskId(task.id);

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { FileSink, ServerWebSocket, Subprocess } from "bun";
 import { tmux } from "./services.ts";
+import { TERMINAL_SESSION_PREFIX } from "./terminals.ts";
 
 /**
  * A browser terminal attached to a real tmux session.
@@ -81,6 +82,7 @@ async function prepareView(view: string, session: string, paneId: string | null)
   await tmux("new-session", "-d", "-t", session, "-s", view);
   await tmux("set-option", "-t", view, "mouse", "on");
   await tmux("set-option", "-t", view, "set-clipboard", "on");
+  if (session.startsWith(TERMINAL_SESSION_PREFIX)) await tmux("set-option", "-t", view, "status", "off");
   if (!paneId) return null;
 
   const index = (await tmux("display-message", "-p", "-t", paneId, "#{pane_index}")).out.trim();

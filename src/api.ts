@@ -1,3 +1,5 @@
+import type { WorkspaceTerminal } from "../shared/terminals.ts";
+export type { WorkspaceTerminal };
 import type {
   ComposeSettings,
   SearchAction,
@@ -472,6 +474,15 @@ export type SettingsPatch = {
   };
   ui?: Partial<Settings["ui"]>;
   reviews?: Partial<Settings["reviews"]>;
+};
+
+export const terminalApi = {
+  list: () => get<{ terminals: WorkspaceTerminal[] }>("/api/terminals"),
+  /** Open a shell in a folder, filed under a workspace when one is given. */
+  create: (folder: string, workspaceId?: number | null) => post<{ terminal: WorkspaceTerminal }>("/api/terminals", { folder, workspaceId: workspaceId ?? null }),
+  rename: (id: number, title: string) => post(`/api/terminals/${id}`, { title }),
+  /** End the shell and whatever runs in it. */
+  close: (id: number) => post(`/api/terminals/${id}/close`),
 };
 
 /** One kept notification, as the bell's panel lists it. */

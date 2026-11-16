@@ -1,3 +1,5 @@
+import { isTerminalKey } from "../../shared/terminals.ts";
+import { TerminalPanel } from "./TerminalPane.tsx";
 import { useEffect, useRef, useState } from "react";
 import {
   agentApi,
@@ -47,7 +49,14 @@ export function ExternalNotice({ canAdopt }: { canAdopt?: boolean }) {
  * differently-chromed, differently-scrolled host for exactly this content —
  * duplicating it would mean every future change here happening twice.
  */
-export function SessionPanelContent({
+export function SessionPanelContent(props: Parameters<typeof SessionPanelBody>[0]) {
+  if (isTerminalKey(props.id)) {
+    return <TerminalPanel id={props.id} onClose={props.onClose} onHeadPointerDown={props.onHeadPointerDown} headStart={props.headStart} />;
+  }
+  return <SessionPanelBody {...props} />;
+}
+
+function SessionPanelBody({
   id,
   agent,
   settings,

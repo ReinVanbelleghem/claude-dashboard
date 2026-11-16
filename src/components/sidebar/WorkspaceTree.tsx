@@ -7,7 +7,8 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { agentApi, workspaceApi, type Workspace, type WorkspacesPayload } from "../../api.ts";
+import { agentApi, terminalApi, workspaceApi, type Workspace, type WorkspacesPayload } from "../../api.ts";
+import { terminalIdOf } from "../../../shared/terminals.ts";
 import { namedByBranch, workspaceTitle } from "../../../shared/workspaces.ts";
 import {
   ChevronIcon,
@@ -130,6 +131,9 @@ export function WorkspaceTree({
   onNewWorkspace,
   onNewSession,
   onNewChat,
+  onOpenWorkspace,
+  onNewTerminal,
+  activeWorkspaceId,
 }: {
   sessions: SidebarSession[];
   payload: WorkspacesPayload | null;
@@ -146,6 +150,12 @@ export function WorkspaceTree({
   onNewSession: (folder: string, workspaceId?: number) => void;
   /** Start a chat that belongs to no project. */
   onNewChat: () => void;
+  /** Open a shell in a workspace's folder. */
+  onNewTerminal: (folder: string, workspaceId: number | null) => void;
+  /** Open a workspace's own page: its changes, git, worktrees and artifacts. */
+  onOpenWorkspace: (workspace: Workspace) => void;
+  /** The workspace whose page is on screen. */
+  activeWorkspaceId: number | null;
 }) {
   const prefs = useSidebarPrefs();
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -174,6 +184,22 @@ export function WorkspaceTree({
       { label: "Open in tile", icon: <TileWindowIcon />, run: () => onOpen(s.id, { tile: true }) },
       { label: "Open full page", icon: <FullPageIcon />, run: () => onOpen(s.id, { full: true }) },
     ];
+    if (s.terminal) {
+      return [
+        ...items,
+        "sep",
+        { label: "End terminal", icon: <TrashIcon />, danger: true, run: () => void terminalApi.close(terminalIdOf(s.id)).catch(() => {}) },
+      ];
+    }
+    if (s.resumable) {
+      return [
+        { label: "Resume", icon: <PlayIcon />, run: () => void agentApi.restore(s.id).catch(() => {}) },
+        "sep",
+        ...items,
+        "sep",
+        { label: "Remove from the list", icon: <TrashIcon />, run: () => void agentApi.forget(s.id).catch(() => {}) },
+      ];
+    }
     const key = s.agentKey;
     if (key) {
       items.push("sep", { label: "Rename", icon: <PencilIcon />, run: () => setRenaming({ kind: "session", key: s.id }) });
@@ -207,7 +233,9 @@ export function WorkspaceTree({
     const w = c.ws;
     if (!w) return [];
     return [
+      { label: "Open workspace", icon: <FolderIcon open />, run: () => onOpenWorkspace(w) },
       { label: "New session here", icon: <PlusIcon />, run: () => onNewSession(w.folder, w.id) },
+      { label: "New terminal here", icon: <TerminalIcon />, run: () => onNewTerminal(w.folder, w.id) },
       { label: "Rename goal…", icon: <PencilIcon />, run: () => setRenaming({ kind: "ws", key: c.key }) },
       "sep",
       {
@@ -284,8 +312,21 @@ export function WorkspaceTree({
         }}
         onContextMenu={(e) => openMenu(e, sessionItems(s, home, project))}
       >
-        <StatusDot kind={s.status} />
-        <ClaudeMark />
+        {s.terminal ? <span className="ws-term-dot" /> : <StatusDot kind={s.status} />}
+        {s.terminal ? <TerminalIcon /> : <ClaudeMark />}
+        {s.resumable && (
+          <button
+            className="ws-hover-btn ws-resume"
+            title="Resume this conversation"
+            aria-label={`Resume ${s.title}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              void agentApi.restore(s.id).catch(() => {});
+            }}
+          >
+            <PlayIcon />
+          </button>
+        )}
         <span className="ws-row-text">
           {editing ? (
             <span className="ws-row-title">
@@ -348,7 +389,7 @@ export function WorkspaceTree({
     return (
       <div
         key={c.key}
-        className={`ws-card${current ? " current" : ""}${editing ? " editing" : ""}${sort?.dragging ? " dragging" : ""}`}
+        className={`ws-card${current ? " current" : ""}${c.ws && c.ws.id === activeWorkspaceId ? " open-page" : ""}${editing ? " editing" : ""}${sort?.dragging ? " dragging" : ""}`}
         style={sort?.style}
       >
         <div
@@ -357,16 +398,22 @@ export function WorkspaceTree({
           tabIndex={0}
           title={c.ws ? [c.title, c.ws.branch, c.ws.folder].filter(Boolean).join("\n") : c.title}
           aria-expanded={!shut}
-          onClick={toggle}
+          onClick={() => (c.ws && !editing ? onOpenWorkspace(c.ws) : toggle())}
           onPointerDown={sort && !editing ? grab(sort.handle).onPointerDown : undefined}
           onKeyDown={(e) => {
             if (e.target !== e.currentTarget) return;
-            if (e.key === "Enter") toggle();
+            if (e.key === "Enter") (c.ws && !editing ? onOpenWorkspace(c.ws) : toggle());
             else sort?.handle.onKeyDown?.(e);
           }}
           onContextMenu={(e) => c.ws && openMenu(e, cardItems(c))}
         >
-          <span className={`ws-chev${shut ? "" : " open"}${c.rows.length === 0 ? " none" : ""}`}>
+          <span
+            className={`ws-chev${shut ? "" : " open"}${c.rows.length === 0 ? " none" : ""}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              toggle();
+            }}
+          >
             <ChevronIcon />
           </span>
           <span className="ws-card-text">

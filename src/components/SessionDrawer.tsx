@@ -1,3 +1,4 @@
+import { isTerminalKey } from "../../shared/terminals.ts";
 import { useEffect, useRef, useState } from "react";
 import type { AgentSummary, Settings } from "../api.ts";
 import { SessionPanelContent } from "./SessionPanelContent.tsx";
@@ -122,7 +123,7 @@ export function SessionDrawer({
       <div className="drawer-resize-handle" style={{ right: width }} onPointerDown={startDrag} title="Drag to resize">
         <span className="drawer-resize-grip" />
       </div>
-      <aside className={`drawer ${agent ? "drawer-live" : ""}`} ref={aside} style={{ width }}>
+      <aside className={`drawer ${agent ? "drawer-live" : ""}${isTerminalKey(id) ? " drawer-live drawer-term" : ""}`} ref={aside} style={{ width }}>
         <SessionPanelContent
           id={id}
           agent={agent}

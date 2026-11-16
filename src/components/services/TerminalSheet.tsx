@@ -20,7 +20,7 @@ export type TerminalTarget =
 
 const isTmux = (t: TerminalTarget): t is Extract<TerminalTarget, { session: string }> => t.kind !== "container";
 
-const CONTROL_PREFIX = "\u0000";
+export const CONTROL_PREFIX = "\u0000";
 const FONT = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace';
 
 const THEME = {
@@ -46,6 +46,9 @@ const THEME = {
   brightCyan: "#67e8f9",
   brightWhite: "#f8fafc",
 };
+
+export const TERMINAL_FONT = FONT;
+export const TERMINAL_THEME = THEME;
 
 const MIN_WIDTH = 480;
 

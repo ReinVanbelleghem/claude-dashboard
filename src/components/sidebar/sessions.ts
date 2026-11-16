@@ -37,6 +37,10 @@ export type SidebarSession = {
   model: string;
   /** Started in a terminal: listed here, driven there. */
   external: boolean;
+  /** Ended with the daemon that ran it; its conversation can be picked up again. */
+  resumable?: boolean;
+  /** A shell rather than a Claude session: same row, same ways to open it. */
+  terminal?: boolean;
 };
 
 export function modelTag(model: string | null | undefined): string {

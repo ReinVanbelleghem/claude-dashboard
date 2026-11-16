@@ -13,7 +13,7 @@ const FIRST_REFRESH_MS = 5_000;
 const INVITE_HORIZON_MS = 30 * 24 * 60 * 60_000;
 const DEFAULT_LEAD_MINUTES = 10;
 const MAX_LEAD_MINUTES = 240;
-const HREF = "#/calendar";
+const hrefFor = (e: CalendarEvent) => `#/calendar/${e.start}`;
 
 type Store = {
   /** Invitations already seen unanswered; null until the first reading, which only takes stock. */
@@ -107,7 +107,7 @@ async function refresh() {
         context: e.recurring ? `${e.calendar} · repeats` : e.calendar,
         detail: `${day(e.start)}, ${span(e)}${from}`,
       },
-      HREF,
+      hrefFor(e),
     );
   }
 }
@@ -133,7 +133,7 @@ function tick() {
         context: e.calendar,
         detail: `In ${minutes} min · ${span(e)}${where}`,
       },
-      HREF,
+      hrefFor(e),
     );
   }
 }

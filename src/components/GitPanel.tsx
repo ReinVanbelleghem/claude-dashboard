@@ -12,7 +12,8 @@ import {
   type ReviewComment,
   type Settings,
 } from "../api.ts";
-import { requestCompose } from "./compose.ts";
+import { Select } from "./Select.tsx";
+import { composeWhenOpen, requestCompose } from "./compose.ts";
 import { DiffView, langOf } from "./DiffView.tsx";
 import { FileEditor } from "./FileEditor.tsx";
 import { FilePicker } from "./FilePicker.tsx";
@@ -93,12 +94,17 @@ export const GitPanel = memo(function GitPanel({
   settings,
   onSettings,
   agentKey,
+  targets,
+  onOpenSession,
 }: {
   repo: GitRepo;
   settings: Settings | null;
   onSettings: (s: Settings) => void;
   /** The session driving this directory, when the dashboard owns one. */
   agentKey?: string | null;
+  /** Shown away from any conversation: the sessions a draft can be handed to, one of which is then opened. */
+  targets?: { key: string; title: string }[];
+  onOpenSession?: (agentKey: string) => void;
 }) {
   const { cwd, status, busy, stage, unstage, discard } = repo;
   const [scope, setScope] = useState<DiffScope>("uncommitted");
@@ -268,12 +274,18 @@ export const GitPanel = memo(function GitPanel({
    * seeing it is being able to change it before Claude acts on it. They are marked as
    * seen by the composer when the message actually goes.
    */
-  const draftForClaude = async () => {
+  const draftForClaude = async (target?: string) => {
     if (!repoRoot) return;
     setSent(null);
     const { text, ids } = await commentApi.prompt(repoRoot, branch);
     if (!text) {
       setSent("Nothing to send — every open comment belongs to another branch.");
+      return;
+    }
+    if (target) {
+      composeWhenOpen(target, { text, commentIds: ids });
+      onOpenSession?.(target);
+      setSent(`Put ${ids.length} comment${ids.length === 1 ? "" : "s"} in that session's composer — edit it, then send when you're happy.`);
       return;
     }
     if (agentKey && requestCompose(agentKey, { text, commentIds: ids })) {
@@ -623,18 +635,33 @@ export const GitPanel = memo(function GitPanel({
                       Clear all
                     </button>
                   )}
+                  {targets && targets.length > 1 ? (
+                    <Select
+                      compact
+                      value=""
+                      disabled={openComments.length === 0}
+                      ariaLabel="Draft for Claude in a session"
+                      heading="Draft in which session?"
+                      options={targets.map((t) => ({ value: t.key, label: t.title }))}
+                      onChange={(key) => void draftForClaude(key)}
+                      renderTrigger={() => (
+                        <span className={`icon-btn primary${openComments.length === 0 ? " disabled" : ""}`}>Draft for Claude</span>
+                      )}
+                    />
+                  ) : (
                   <button
                     className="icon-btn primary"
                     disabled={openComments.length === 0}
-                    onClick={draftForClaude}
+                    onClick={() => void draftForClaude(targets?.[0]?.key)}
                     title={
-                      agentKey
+                      agentKey || targets?.length
                         ? `Drafts all ${openComments.length} open comment${openComments.length === 1 ? "" : "s"} on this branch into the composer — nothing is sent until you send it`
                         : "No session running here — copies the prompt instead"
                     }
                   >
-                    {agentKey ? "Draft for Claude" : "Copy as prompt"}
+                    {agentKey || targets?.length ? "Draft for Claude" : "Copy as prompt"}
                   </button>
+                  )}
                 </div>
               )}
               {sent && <div className="review-sent">{sent}</div>}
