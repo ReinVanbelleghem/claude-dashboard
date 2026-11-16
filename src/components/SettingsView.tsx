@@ -13,6 +13,7 @@ import { AppearancePanel } from "./AppearancePanel.tsx";
 import { FolderField } from "./FolderPicker.tsx";
 import { CheckIcon, GripIcon, TrashIcon } from "./Icons.tsx";
 import { McpPanel } from "./McpPanel.tsx";
+import { NotificationsPanel } from "./NotificationsPanel.tsx";
 import { OpenTargetPicker } from "./OpenTargetPicker.tsx";
 import { footerPagesOf, orderedPages, type PageDef } from "../pages.ts";
 import { useSortable } from "../useSortable.ts";
@@ -35,55 +36,6 @@ function labelFromModelId(id: string): string {
  * to the daemon's settings.json, so a reload or another tab sees the same state.
  */
 
-/** Short names for the muted-sessions list, where the full EVENTS wording is a paragraph. */
-const MUTE_KIND_LABEL: Record<NotifyEventKind, string> = {
-  needsInput: "Needs you",
-  awaitingPermission: "Permission needed",
-  turnComplete: "Done",
-  sessionError: "Error",
-  prWatch: "PR activity",
-  prReviewRequested: "Review requested",
-  taskDue: "Task due",
-};
-
-const EVENTS: { kind: NotifyEventKind; label: string; help: string }[] = [
-  {
-    kind: "needsInput",
-    label: "Terminal session needs input",
-    help: "A session started outside the dashboard reported a blocked status — it is waiting on you in its own terminal.",
-  },
-  {
-    kind: "awaitingPermission",
-    label: "Permission request",
-    help: "A dashboard session is parked waiting for you to allow or deny a tool call. Nothing proceeds until you answer.",
-  },
-  {
-    kind: "turnComplete",
-    label: "Reply finished",
-    help: "A dashboard session finished its turn and is idle. The most useful signal if you walk away mid-task, and the loudest.",
-  },
-  {
-    kind: "sessionError",
-    label: "Session error",
-    help: "A session stopped unexpectedly or reported an error.",
-  },
-  {
-    kind: "prWatch",
-    label: "Watched pull request changed",
-    help: "A PR you watch on the Reviews page got a commit, review, comment, CI verdict, conflict, merge or close. One alert per PR per poll.",
-  },
-  {
-    kind: "prReviewRequested",
-    label: "Asked to review a pull request",
-    help: "Someone requested your review, personally or through one of your teams. Once per request; what else happens is set under Reviews → Watching.",
-  },
-  {
-    kind: "taskDue",
-    label: "A task is due",
-    help: "A task with a time, when that time comes, and once a morning a count of what is due today.",
-  },
-];
-
 /**
  * Sections are one panel each, reached from the left rail rather than by
  * scrolling: notifications alone is longer than a screen, and the three short
@@ -104,24 +56,6 @@ const SECTIONS: { key: SectionKey; label: string; help: string }[] = [
 
 const SECTION_KEY = "settings-section";
 
-const CHANNELS: { key: keyof Settings["notifications"]["channels"]; label: string; help: string }[] = [
-  {
-    key: "native",
-    label: "macOS notification",
-    help: "A real notification centre banner, clickable through to the session. Works with the browser closed — the only channel that does.",
-  },
-  {
-    key: "browser",
-    label: "Browser notification",
-    help: "Raised by the dashboard tab. Only fires while a tab is open, and needs permission from the browser once.",
-  },
-  {
-    key: "googleChat",
-    label: "Google Chat",
-    help: "Posts to a webhook, so alerts reach you away from this machine.",
-  },
-];
-
 export function SettingsView({
   settings,
   onSettings,
@@ -134,12 +68,6 @@ export function SettingsView({
   onAppearance: (patch: Partial<Appearance>) => void;
 }) {
   const [saving, setSaving] = useState(false);
-  const [tested, setTested] = useState<string | null>(null);
-  const [webhook, setWebhook] = useState("");
-  const [url, setUrl] = useState("");
-  const [browserPerm, setBrowserPerm] = useState<NotificationPermission | "unsupported">(
-    typeof Notification === "undefined" ? "unsupported" : Notification.permission,
-  );
   // Remembered, because settings is a place you come back to for one thing.
   const [section, setSection] = useState<SectionKey>(() => {
     const saved = localStorage.getItem(SECTION_KEY);
@@ -154,12 +82,6 @@ export function SettingsView({
   useEffect(() => {
     localStorage.setItem(SECTION_KEY, section);
   }, [section]);
-
-  useEffect(() => {
-    if (!settings) return;
-    setWebhook(settings.notifications.googleChatWebhook);
-    setUrl(settings.notifications.dashboardUrl);
-  }, [settings]);
 
   const [allModels, setAllModels] = useState<ModelInfo[]>([]);
   useEffect(() => {
@@ -214,8 +136,6 @@ export function SettingsView({
       </div>
     );
   }
-  const n = settings.notifications;
-
   const save = (patch: SettingsPatch) => {
     setSaving(true);
     settingsApi
@@ -223,11 +143,6 @@ export function SettingsView({
       .then((r) => onSettings(r.settings))
       .catch(() => {})
       .finally(() => setSaving(false));
-  };
-
-  const askBrowser = async () => {
-    if (typeof Notification === "undefined") return;
-    setBrowserPerm(await Notification.requestPermission());
   };
 
   return (
@@ -267,268 +182,7 @@ export function SettingsView({
           </div>
         )}
 
-        {section === "notifications" && (
-          <div className="panel">
-            <div className="panel-head">
-              <h2>Notifications</h2>
-              <label className="switch">
-                <input
-                  type="checkbox"
-                  checked={n.enabled}
-                  onChange={(e) => save({ notifications: { enabled: e.target.checked } })}
-                />
-                <span>{n.enabled ? "On" : "Off"}</span>
-              </label>
-            </div>
-            <p className="hint">Alerts when a session needs you{saving ? " · saving…" : ""}.</p>
-
-            <div className={`set-group ${n.enabled ? "" : "disabled"}`}>
-              <h3 className="set-h">What to tell me about</h3>
-              {EVENTS.map((e) => (
-                <label className="set-row" key={e.kind}>
-                  <input
-                    type="checkbox"
-                    checked={n.events[e.kind]}
-                    disabled={!n.enabled}
-                    onChange={(ev) =>
-                      save({ notifications: { events: { [e.kind]: ev.target.checked } } })
-                    }
-                  />
-                  <span className="set-text">
-                    <span className="set-label">{e.label}</span>
-                    <span className="set-help">{e.help}</span>
-                  </span>
-                </label>
-              ))}
-
-              <h3 className="set-h">How to tell me</h3>
-              {CHANNELS.map((c) => (
-                <label className="set-row" key={c.key}>
-                  <input
-                    type="checkbox"
-                    checked={n.channels[c.key]}
-                    disabled={!n.enabled}
-                    onChange={(ev) =>
-                      save({ notifications: { channels: { [c.key]: ev.target.checked } } })
-                    }
-                  />
-                  <span className="set-text">
-                    <span className="set-label">
-                      {c.label}
-                      {c.key === "browser" && browserPerm === "granted" && (
-                        <span className="set-ok">
-                          <CheckIcon /> allowed
-                        </span>
-                    )}
-                    {c.key === "browser" && browserPerm === "default" && n.channels.browser && (
-                      <button
-                        className="link-btn inline"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          void askBrowser();
-                        }}
-                      >
-                        grant permission
-                      </button>
-                    )}
-                    {c.key === "browser" && browserPerm === "denied" && (
-                      <span className="set-warn">blocked by the browser</span>
-                    )}
-                  </span>
-                  <span className="set-help">{c.help}</span>
-                </span>
-              </label>
-            ))}
-
-            {n.channels.googleChat && (
-              <label className="field indented">
-                <span>Google Chat webhook</span>
-                <input
-                  className="search"
-                  value={webhook}
-                  placeholder="https://chat.googleapis.com/v1/spaces/…"
-                  onChange={(e) => setWebhook(e.target.value)}
-                  onBlur={() => save({ notifications: { googleChatWebhook: webhook } })}
-                />
-              </label>
-            )}
-
-            <h3 className="set-h">When</h3>
-            <div className="set-grid">
-              <label className="field">
-                <span>Wait before notifying</span>
-                <div className="with-unit">
-                  <input
-                    className="search"
-                    type="number"
-                    min={0}
-                    max={600}
-                    value={n.delaySeconds}
-                    disabled={!n.enabled}
-                    onChange={(e) =>
-                      save({ notifications: { delaySeconds: Number(e.target.value) } })
-                    }
-                  />
-                  <span>seconds</span>
-                </div>
-                <span className="set-help">
-                  A prompt you answer inside this window never interrupts you.
-                </span>
-              </label>
-              <label className="field">
-                <span>Then stay quiet for</span>
-                <div className="with-unit">
-                  <input
-                    className="search"
-                    type="number"
-                    min={0}
-                    max={3600}
-                    value={n.cooldownSeconds}
-                    disabled={!n.enabled}
-                    onChange={(e) =>
-                      save({ notifications: { cooldownSeconds: Number(e.target.value) } })
-                    }
-                  />
-                  <span>seconds</span>
-                </div>
-                <span className="set-help">Per session and event, so one blocked session cannot spam you.</span>
-              </label>
-            </div>
-
-            <label className="set-row">
-              <input
-                type="checkbox"
-                checked={n.suppressWhenFocused}
-                disabled={!n.enabled}
-                onChange={(e) =>
-                  save({ notifications: { suppressWhenFocused: e.target.checked } })
-                }
-              />
-              <span className="set-text">
-                <span className="set-label">Stay quiet about the session I am looking at</span>
-                <span className="set-help">
-                  No point telling you about a permission prompt already on your screen.
-                </span>
-              </span>
-            </label>
-
-            <label className="set-row">
-              <input
-                type="checkbox"
-                checked={n.quietHours.enabled}
-                disabled={!n.enabled}
-                onChange={(e) =>
-                  save({ notifications: { quietHours: { enabled: e.target.checked } } })
-                }
-              />
-              <span className="set-text">
-                <span className="set-label">Quiet hours</span>
-                <span className="set-help">Silence everything between two local times.</span>
-              </span>
-            </label>
-
-            {n.quietHours.enabled && (
-              <div className="set-grid indented">
-                <label className="field">
-                  <span>From</span>
-                  <input
-                    className="search"
-                    type="time"
-                    value={n.quietHours.from}
-                    onChange={(e) =>
-                      save({ notifications: { quietHours: { from: e.target.value } } })
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>To</span>
-                  <input
-                    className="search"
-                    type="time"
-                    value={n.quietHours.to}
-                    onChange={(e) => save({ notifications: { quietHours: { to: e.target.value } } })}
-                  />
-                </label>
-              </div>
-            )}
-
-            {/*
-              Mutes are set on the session, not here — but a mute you cannot find is a
-              mute you cannot undo, and months later the loop that needed silencing is
-              closed and forgotten. This is the list of everything currently silenced,
-              with the way out next to it.
-            */}
-            <h3 className="set-h">Muted sessions</h3>
-            {Object.keys(n.mutes ?? {}).length === 0 ? (
-              <p className="set-help">
-                None. Mute a session from its card or its page — the bell beside the title —
-                to silence some kinds of notification for that session alone.
-              </p>
-            ) : (
-              <div className="mute-list">
-                {Object.entries(n.mutes ?? {}).map(([id, m]) => (
-                  <div className="mute-item" key={id}>
-                    <span className="mute-item-label" title={id}>
-                      {m.label}
-                    </span>
-                    <span className="mute-item-kinds">
-                      {m.kinds.map((k) => MUTE_KIND_LABEL[k] ?? k).join(", ")}
-                    </span>
-                    <button
-                      className="icon-btn tiny"
-                      onClick={() =>
-                        settingsApi.mute(id, [], m.label).then((r) => onSettings(r.settings))
-                      }
-                    >
-                      Unmute
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <h3 className="set-h">Where a notification opens</h3>
-            <label className="field">
-              <span>Dashboard URL</span>
-              <input
-                className="search"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                onBlur={() => save({ notifications: { dashboardUrl: url } })}
-                placeholder="http://localhost:5758"
-              />
-              <span className="set-help">
-                Clicking a notification opens this address at the session. The dev UI runs on 5758; the
-                built one is served by the daemon on 5757.
-              </span>
-            </label>
-
-              <div className="set-actions">
-                <button
-                  className="icon-btn"
-                  onClick={() =>
-                    settingsApi
-                      .test()
-                      .then((r) => {
-                        const on = Object.entries(r.channels)
-                          .filter(([, v]) => v)
-                          .map(([k]) => k);
-                        setTested(
-                          on.length === 0
-                            ? "No channel is enabled, so nothing was sent."
-                            : `Sent via ${on.join(", ")}${r.notifier ? "" : " — terminal-notifier not found, used osascript"}.`,
-                        );
-                      })
-                      .catch((e: Error) => setTested(e.message))
-                  }
-                >
-                  Send a test notification
-                </button>
-                {tested && <span className="set-help">{tested}</span>}
-              </div>
-            </div>
-          </div>
-        )}
+        {section === "notifications" && <NotificationsPanel settings={settings} saving={saving} save={save} onSettings={onSettings} />}
 
         {section === "sessions" && (
           <div className="panel">

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { calendarApi, type Attendee, type Availability, type CalendarEvent, type CalendarInfo, type CalendarPerson, type EventDraft, type EventPatch, type EventRef, type Task, type TaskProject } from "../../api.ts";
 import { PeoplePicker } from "./PeoplePicker.tsx";
+import { canReply, replyOf, type Reply } from "../../../shared/calendar.ts";
 import type { TaskPatch } from "../../../shared/tasks.ts";
 import type { Priority } from "../../../shared/taskDates.ts";
 import { TASK_COLORS, type TaskColor } from "../../../shared/tasks.ts";
 import { CalendarIcon, CheckIcon, ClockIcon, DocIcon, ExternalIcon, HelpIcon, PencilIcon, PinIcon, RepeatIcon, TagIcon, TasksIcon, TrashIcon, UsersIcon, VideoIcon, XIcon } from "../Icons.tsx";
 import { Select } from "../Select.tsx";
+import { Markdown } from "../Markdown.tsx";
 import { ServiceMark } from "../tasks/ServiceMark.tsx";
 import { extractUrls, linkInfo } from "../../../shared/taskLinks.ts";
 import { describeRecurrence } from "../../../shared/taskDates.ts";
@@ -34,6 +36,12 @@ const AVAILABILITY_DELAY_MS = 400;
 const ROOMS_CHECKED = 25;
 
 const STATUS_LABEL = { accepted: "Accepted", declined: "Declined", tentative: "Maybe", pending: "No reply" } as const;
+type Answer = Exclude<Reply, "pending">;
+const ANSWERS: { reply: Answer; label: string }[] = [
+  { reply: "accepted", label: "Yes" },
+  { reply: "tentative", label: "Maybe" },
+  { reply: "declined", label: "No" },
+];
 const STATUS_ORDER: Attendee["status"][] = ["accepted", "tentative", "pending", "declined"];
 const STATUS_ICON = { accepted: CheckIcon, declined: XIcon, tentative: HelpIcon, pending: ClockIcon } as const;
 
@@ -95,6 +103,7 @@ export function EventModal({
   onCreateTask,
   onUpdate,
   onDelete,
+  onReply,
 }: {
   target: CalendarTarget;
   calendars: CalendarInfo[];
@@ -114,13 +123,15 @@ export function EventModal({
   onCreate: (draft: EventDraft) => Promise<void>;
   onUpdate: (patch: EventPatch) => Promise<void>;
   onDelete: (ref: EventRef) => Promise<void>;
+  /** Answer the invitation of a Google event, by the id of the occurrence or of its whole series. */
+  onReply: (calendarId: string, id: string, reply: Answer) => Promise<void>;
 }) {
   useEscape(onClose);
   return (
     <>
       <div className="scrim stacked" onClick={onClose} />
       {target.mode === "view" ? (
-        <EventDetails event={target.event} onClose={onClose} onEdit={() => onEdit(target.event)} onDelete={onDelete} onApprove={onApprove} onDiscard={onDiscard} />
+        <EventDetails event={target.event} onClose={onClose} onEdit={() => onEdit(target.event)} onDelete={onDelete} onReply={onReply} onApprove={onApprove} onDiscard={onDiscard} />
       ) : (
         <EventForm target={target} calendars={calendars} projects={projects} people={people} googleAccounts={googleAccounts} comparing={comparing} colors={colors} onClose={onClose} onCreate={onCreate} onCreateTask={onCreateTask} onUpdate={onUpdate} />
       )}
@@ -150,6 +161,7 @@ function EventDetails({
   onClose,
   onEdit,
   onDelete,
+  onReply,
   onApprove,
   onDiscard,
 }: {
@@ -157,6 +169,7 @@ function EventDetails({
   onClose: () => void;
   onEdit: () => void;
   onDelete: (ref: EventRef) => Promise<void>;
+  onReply: (calendarId: string, id: string, reply: Answer) => Promise<void>;
   onApprove: (draft: CalendarEvent) => Promise<void>;
   onDiscard: (draft: CalendarEvent) => Promise<void>;
 }) {
@@ -164,6 +177,21 @@ function EventDetails({
   const [span, setSpan] = useState<Span>("this");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reply, setReply] = useState<Reply | null>(replyOf(event));
+  const [replySpan, setReplySpan] = useState<Span>("this");
+
+  const answer = (next: Answer) => {
+    const before = reply;
+    setReply(next);
+    setError(null);
+    setBusy(true);
+    onReply(event.calendarId, replySpan === "future" && event.seriesId ? event.seriesId : event.id, next)
+      .catch((e: Error) => {
+        setReply(before);
+        setError(e.message);
+      })
+      .finally(() => setBusy(false));
+  };
 
   const remove = () => {
     setBusy(true);
@@ -185,6 +213,7 @@ function EventDetails({
   const notes = ownNotes(event.notes);
   const guests = event.attendees
     .filter((a) => !a.room)
+    .map((a) => (a.me && reply ? { ...a, status: reply } : a))
     .sort((a, b) => Number(b.me) - Number(a.me) || STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status));
   const tally = STATUS_ORDER.map((status) => ({ status, count: guests.filter((g) => g.status === status).length })).filter((t) => t.count > 0);
 
@@ -225,6 +254,39 @@ function EventDetails({
             </div>
           )}
         </div>
+
+        {canReply(event) && (
+          <section className="cal-section">
+            <header>
+              <CalendarIcon />
+              <b>Going?</b>
+              {event.recurring && event.seriesId && (
+                <div className="cal-rsvp-span">
+                  <Select
+                    compact
+                    ariaLabel="Which occurrences to answer for"
+                    value={replySpan}
+                    onChange={(v) => setReplySpan(v as Span)}
+                    options={[
+                      { value: "this", label: "Only this one" },
+                      { value: "future", label: "The whole series" },
+                    ]}
+                  />
+                </div>
+              )}
+            </header>
+            <div className="cal-rsvp" role="group" aria-label="Your answer">
+              {ANSWERS.map((a) => {
+                const AnswerIcon = STATUS_ICON[a.reply];
+                return (
+                  <button className={`${a.reply} ${reply === a.reply ? "chosen" : ""}`} aria-pressed={reply === a.reply} disabled={busy} key={a.reply} onClick={() => answer(a.reply)}>
+                    <AnswerIcon /> {a.label}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {guests.length > 0 && (
           <section className="cal-section">
@@ -557,7 +619,8 @@ export function TaskModal({
   projects: TaskProject[];
   today: string;
   onClose: () => void;
-  onOpenInTasks: () => void;
+  /** Left out where the task is already shown in its list. */
+  onOpenInTasks?: () => void;
   onComplete: () => void;
 }) {
   useEscape(onClose);
@@ -579,7 +642,7 @@ export function TaskModal({
   return (
     <>
       <div className="scrim stacked" onClick={onClose} />
-      <div className="modal stacked cal-modal cal-details" role="dialog" aria-modal="true" aria-label={task.content}>
+      <div className="modal stacked cal-modal cal-details cal-task-details" role="dialog" aria-modal="true" aria-label={task.content}>
         <div className="cal-modal-head">
           <TaskMark task={task} />
           <div className="cal-modal-title">
@@ -641,14 +704,14 @@ export function TaskModal({
                 <DocIcon />
                 <b>Notes</b>
               </header>
-              <div className="cal-notes">{serviceLinked(task.description)}</div>
+              <div className="cal-notes md-notes"><Markdown text={task.description} /></div>
             </section>
           )}
         </div>
 
         <div className="cal-detail-foot">
-          <button className="icon-btn" onClick={onOpenInTasks}>Show in Tasks</button>
-          <button className="icon-btn primary" onClick={onComplete}><CheckIcon /> Complete</button>
+          {onOpenInTasks && <button className="icon-btn" onClick={onOpenInTasks}>Show in Tasks</button>}
+          <button className="icon-btn primary" onClick={onComplete}><CheckIcon /> {task.completedAt === null ? "Complete" : "Reopen"}</button>
         </div>
       </div>
     </>
@@ -704,7 +767,7 @@ function TaskForm({
 
   return (
     <form
-      className="modal stacked cal-modal"
+      className="modal stacked cal-modal cal-task-details cal-task-form"
       role="dialog"
       aria-modal="true"
       aria-label="Edit task"
@@ -717,27 +780,23 @@ function TaskForm({
         <h3>Edit task</h3>
         <button type="button" className="icon-btn square" aria-label="Close" onClick={onClose}><XIcon /></button>
       </div>
-      <label className="field">
-        <span>Task</span>
-        <input className="search" autoFocus value={content} onChange={(e) => setContent(e.target.value)} />
-      </label>
-      <label className="set-row cal-check">
-        <input type="checkbox" checked={!timed} onChange={(e) => setTimed(!e.target.checked)} />
-        <span>No time, just the day</span>
-      </label>
-      <div className="cal-when">
+      <input className="search cal-task-title" aria-label="Task" placeholder="Task name" autoFocus value={content} onChange={(e) => setContent(e.target.value)} />
+      <div className="cal-task-fields">
         <label className="field">
           <span>Due</span>
           <input className="search" type="date" value={dueDate} onChange={(e) => e.target.value && setDueDate(e.target.value)} />
         </label>
-        {timed && (
-          <label className="field">
-            <span>At</span>
-            <input className="search" type="time" step={900} value={dueTime} onChange={(e) => e.target.value && setDueTime(e.target.value)} />
-          </label>
-        )}
-      </div>
-      <div className="cal-when cal-even">
+        <div className="field">
+          <span>Time</span>
+          {timed ? (
+            <div className="cal-task-time">
+              <input className="search" type="time" aria-label="Time" step={900} value={dueTime} onChange={(e) => e.target.value && setDueTime(e.target.value)} />
+              <button type="button" className="icon-btn square" aria-label="Remove the time" title="Remove the time" onClick={() => setTimed(false)}><XIcon /></button>
+            </div>
+          ) : (
+            <button type="button" className="cal-task-addtime" onClick={() => setTimed(true)}><ClockIcon /> Add a time</button>
+          )}
+        </div>
         <div className="field">
           <span>Project</span>
           <Select
@@ -757,9 +816,9 @@ function TaskForm({
           />
         </div>
       </div>
-      <label className="field">
-        <span>Notes</span>
-        <textarea className="search" rows={4} value={description} onChange={(e) => setDescription(e.target.value)} />
+      <label className="field cal-task-notes">
+        <span>Notes <em>Markdown</em></span>
+        <textarea className="search" rows={14} value={description} onChange={(e) => setDescription(e.target.value)} />
       </label>
       {error && <p className="cal-error">{error}</p>}
       <div className="modal-actions">

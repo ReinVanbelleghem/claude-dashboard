@@ -166,10 +166,16 @@ export function Select(props: Single | Multi) {
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setCursor((c) => Math.max(0, c - 1));
-    } else if (e.key === "Enter") {
+    } else if (e.key === "Home" || e.key === "End") {
+      if (e.target instanceof HTMLInputElement) return;
+      e.preventDefault();
+      setCursor(e.key === "Home" ? 0 : Math.max(0, shown.length - 1));
+    } else if (e.key === "Enter" || (e.key === " " && !(e.target instanceof HTMLInputElement))) {
       e.preventDefault();
       const o = shown[cursor];
       if (o) pick(o);
+    } else if (e.key === "Tab") {
+      close();
     }
   };
 
@@ -201,7 +207,11 @@ export function Select(props: Single | Multi) {
         onClick={toggle}
         onKeyDown={(e) => {
           if (disabled) return;
-          if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
+          if (open) {
+            onMenuKey(e);
+            return;
+          }
+          if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();
             setOpen(true);
           }

@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { recordNotification } from "./inbox.ts";
 import { getSettings, inQuietHours, type NotifyEventKind } from "./settings.ts";
 
 /**
@@ -74,6 +75,8 @@ const KIND: Record<NotifyEventKind, { icon: string; headline: string; sound: str
   prWatch: { icon: "🔔", headline: "PR activity", sound: "Glass", urgent: false },
   prReviewRequested: { icon: "👀", headline: "Review requested", sound: "Ping", urgent: false },
   taskDue: { icon: "☑️", headline: "Task due", sound: "Glass", urgent: false },
+  calendarInvite: { icon: "📨", headline: "New invite", sound: "Glass", urgent: false },
+  calendarStarting: { icon: "⏰", headline: "Starting soon", sound: "Ping", urgent: true },
 };
 
 /**
@@ -129,7 +132,6 @@ function allowed(subject: NotifySubject): boolean {
   const n = s.notifications;
   if (!n.enabled) return false;
   if (!n.events[subject.kind]) return false;
-  if (inQuietHours(s, new Date())) return false;
   // Muted for this session specifically. Checked per kind, so a session can go quiet
   // about finishing its turns and still shout when it breaks — which is the whole
   // point for something running on a loop.
@@ -171,9 +173,13 @@ async function fire(entry: Tracked) {
 }
 
 async function send(subject: NotifySubject, href: string, now: number) {
-  const n = getSettings().notifications;
+  const settings = getSettings();
+  const n = settings.notifications;
   const kind = KIND[subject.kind];
   const title = `${kind.icon} ${kind.headline} · ${subject.label}`;
+  recordNotification({ key: subject.key, kind: subject.kind, label: subject.label, detail: subject.detail, context: subject.context, href }, now);
+  // Quiet hours silence the banner, not the record: it waits in the inbox.
+  if (inQuietHours(settings, new Date(now))) return;
   const url = deepLink(href);
   const payload = {
     kind: subject.kind,

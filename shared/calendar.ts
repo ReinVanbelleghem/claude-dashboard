@@ -21,6 +21,8 @@ export type Attendee = {
   me: boolean;
 };
 
+export type Reply = Attendee["status"];
+
 export type CalendarEvent = {
   /** Unique per occurrence, so two days of one repeating event can sit in one list. */
   key: string;
@@ -44,6 +46,10 @@ export type CalendarEvent = {
   recurring: boolean;
   editable: boolean;
   attendees: Attendee[];
+  /** Who set the meeting up, when it was someone else. */
+  organizer?: string | null;
+  /** How the owner of a colleague's calendar answered this invitation; your own answer is read from `attendees`. */
+  reply?: Reply | null;
   /** The repeating series a Google occurrence belongs to. */
   seriesId?: string | null;
   /** From someone else's or a room's calendar, shown beside your own for comparison. */
@@ -111,3 +117,9 @@ export type EventRef = {
 export type EventPatch = EventRef & Partial<EventDraft>;
 
 export type CalendarPayload = { events: CalendarEvent[]; errors?: string[] };
+
+/** The answer to an event's invitation by whoever's calendar it is on, or null when there was nothing to answer. */
+export const replyOf = (event: Pick<CalendarEvent, "reply" | "attendees">): Reply | null => event.reply ?? event.attendees.find((a) => a.me)?.status ?? null;
+
+/** Whether you can answer this event's invitation from here: it lives in a connected Google calendar and you are a guest. */
+export const canReply = (event: CalendarEvent): boolean => event.calendarId.startsWith("g:") && !event.other && !event.draft && event.attendees.some((a) => a.me);

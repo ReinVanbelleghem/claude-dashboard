@@ -129,6 +129,7 @@ export function WorkspaceTree({
   onOpen,
   onNewWorkspace,
   onNewSession,
+  onNewChat,
 }: {
   sessions: SidebarSession[];
   payload: WorkspacesPayload | null;
@@ -143,6 +144,8 @@ export function WorkspaceTree({
   onNewWorkspace: (folder?: string) => void;
   /** The new-session dialog on a folder, filed in a workspace when one is given. */
   onNewSession: (folder: string, workspaceId?: number) => void;
+  /** Start a chat that belongs to no project. */
+  onNewChat: () => void;
 }) {
   const prefs = useSidebarPrefs();
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -603,7 +606,7 @@ export function WorkspaceTree({
         >
           {(p, s) => projectView(p, s)}
         </SortableGroup>
-        {chats.length > 0 && (
+        {(!only || chats.length > 0) && (
           <section className="ws-project">
             <div className="ws-project-head">
               <button
@@ -615,13 +618,21 @@ export function WorkspaceTree({
                   <ChevronIcon />
                 </span>
                 <CommentIcon />
-                <span className="ws-project-name">Chats</span>
+                <span className="ws-project-name">Standalone chats</span>
               </button>
               <span className="ws-project-trail">
-                <span className="ws-project-count">{chats.length}</span>
+                {chats.length > 0 && folded("chats") && <span className="ws-project-count">{chats.length}</span>}
+                <button
+                  className={`ws-hover-btn${chats.length > 0 && folded("chats") ? "" : " show"}`}
+                  title="New chat"
+                  aria-label="New chat"
+                  onClick={() => onNewChat()}
+                >
+                  <PlusIcon />
+                </button>
               </span>
             </div>
-            {(!folded("chats") || only) && <div className="ws-rows flat">{chats.map((s) => row(s, null, null))}</div>}
+            {(!folded("chats") || only) && chats.length > 0 && <div className="ws-rows flat">{chats.map((s) => row(s, null, null))}</div>}
           </section>
         )}
       </div>

@@ -36,7 +36,7 @@ export function RailSessions({
         ),
       )
       .filter((g) => g.length > 0);
-    if (tree.chats.length > 0) out.push(tree.chats.map((session) => ({ session, project: "Chats", workspace: null })));
+    if (tree.chats.length > 0) out.push(tree.chats.map((session) => ({ session, project: "Standalone chats", workspace: null })));
     return out;
   }, [sessions, payload]);
 

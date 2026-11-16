@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { taskApi, type Task, type TaskProject, type TasksPayload, type Workspace } from "../../api.ts";
+import { createPortal } from "react-dom";
+import { calendarApi, taskApi, type CalendarEvent, type Task, type TaskProject, type TasksPayload, type Workspace } from "../../api.ts";
+import { replyOf } from "../../../shared/calendar.ts";
 import { addDays, describeRecurrence, localDay, parseQuickAdd, weekdayOf } from "../../../shared/taskDates.ts";
 import { cleanLinks, linkInfo, MAX_TASK_LINKS } from "../../../shared/taskLinks.ts";
 import { TASK_COLORS, type TaskColor } from "../../../shared/tasks.ts";
@@ -8,6 +10,7 @@ import { FolderPicker } from "../FolderPicker.tsx";
 import { useSortable, type Sortable } from "../../useSortable.ts";
 import { Popover } from "../Popover.tsx";
 import { ServiceMark } from "./ServiceMark.tsx";
+import { TaskModal } from "../calendar/EventModal.tsx";
 import { workspaceTitle } from "../../../shared/workspaces.ts";
 import {
   CalendarIcon,
@@ -77,7 +80,12 @@ export function TasksView({
   onOpenWorkspace,
   focusTaskId = null,
   onFocused,
+  calendarHidden,
+  onOpenCalendar,
 }: {
+  /** Calendars switched off in the calendar, left out of today's meetings here too. */
+  calendarHidden: string[];
+  onOpenCalendar: () => void;
   /** A task to bring into view: its project opens and its row is scrolled to and flashed. */
   focusTaskId?: number | null;
   onFocused?: () => void;
@@ -87,7 +95,7 @@ export function TasksView({
   onStartWorkspace: (task: Task) => void;
   onOpenWorkspace: (workspace: Workspace) => void;
 }) {
-  const [view, setView] = useState<View>({ kind: "today" });
+  const [view, setView] = useState<View>({ kind: "upcoming" });
   const focusProjectId = focusTaskId === null ? undefined : payload?.tasks.find((t) => t.id === focusTaskId)?.projectId;
 
   useEffect(() => {
@@ -104,6 +112,8 @@ export function TasksView({
   }, [focusTaskId, focusProjectId, onFocused]);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<number | null>(null);
+  const openTask = openId === null ? null : (payload?.tasks.find((t) => t.id === openId) ?? null);
   const [showDone, setShowDone] = useState(false);
   const [newProject, setNewProject] = useState<string | null>(null);
   const [addToId, setAddToId] = useState<number | null>(null);
@@ -128,9 +138,9 @@ export function TasksView({
   const currentProject = view.kind === "project" ? (projects.find((p) => p.id === view.id) ?? null) : null;
 
   const groups: { title: string | null; overdue?: boolean; tasks: Task[] }[] = (() => {
+    const late = dueNow.filter((t) => t.dueDate! < today).sort(byDue);
+    const now = dueNow.filter((t) => t.dueDate === today).sort(byDue);
     if (view.kind === "today") {
-      const late = dueNow.filter((t) => t.dueDate! < today).sort(byDue);
-      const now = dueNow.filter((t) => t.dueDate === today).sort(byDue);
       return [
         ...(late.length ? [{ title: "Overdue", overdue: true, tasks: late }] : []),
         { title: late.length ? "Today" : null, tasks: now },
@@ -139,7 +149,11 @@ export function TasksView({
     if (view.kind === "upcoming") {
       const later = open.filter((t) => t.dueDate !== null && t.dueDate > today).sort(byDue);
       const days = [...new Set(later.map((t) => t.dueDate!))];
-      return days.map((day) => ({ title: dayLabel(day, today), tasks: later.filter((t) => t.dueDate === day) }));
+      return [
+        ...(late.length ? [{ title: "Overdue", overdue: true, tasks: late }] : []),
+        ...(now.length ? [{ title: "Today", tasks: now }] : []),
+        ...days.map((day) => ({ title: dayLabel(day, today), tasks: later.filter((t) => t.dueDate === day) })),
+      ];
     }
     const mine = open.filter((t) => t.projectId === view.id);
     return [{ title: null, tasks: mine.sort(byDue) }];
@@ -173,21 +187,21 @@ export function TasksView({
     tasks: open.filter((t) => t.dueDate === day).sort(byDue),
   }));
   const overdueCount = dueNow.filter((t) => t.dueDate! < today).length;
-  const upcomingCount = open.filter((t) => t.dueDate !== null && t.dueDate > today).length;
+  const upcomingCount = open.filter((t) => t.dueDate !== null).length;
   const title = view.kind === "today" ? "Today" : view.kind === "upcoming" ? "Upcoming" : (currentProject?.name ?? "Project");
   const subtitle =
     view.kind === "today"
       ? `${new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}${shown ? ` · ${shown} task${shown === 1 ? "" : "s"}` : ""}`
       : view.kind === "upcoming"
         ? shown
-          ? `${shown} task${shown === 1 ? "" : "s"} scheduled ahead`
-          : "Nothing scheduled ahead"
+          ? `${shown} scheduled task${shown === 1 ? "" : "s"}`
+          : "Nothing scheduled"
         : `${shown} open${done.length ? ` · ${done.length} completed this week` : ""}`;
   const emptyState =
     view.kind === "today"
       ? { head: "All clear for today", hint: "Nothing is due. Add a task above, or check Upcoming." }
       : view.kind === "upcoming"
-        ? { head: "Nothing scheduled ahead", hint: "Tasks with a date after today show up here, grouped by day." }
+        ? { head: "Nothing scheduled", hint: "Every task with a date shows up here, grouped by day, starting with today." }
         : { head: `No open tasks in ${currentProject?.name ?? "this project"}`, hint: "Add one above. It lands here unless you name another #project." };
 
   const sortableProjects = projects.filter((p) => !p.isInbox);
@@ -235,8 +249,8 @@ export function TasksView({
   return (
     <div className="tasks">
       <aside className="tasks-side panel" aria-label="Task views">
+        {viewButton({ kind: "upcoming" }, "Upcoming", upcomingCount, "upcoming", <ClockIcon />, overdueCount > 0)}
         {viewButton({ kind: "today" }, "Today", dueNow.length, "today", <CalendarIcon />, overdueCount > 0)}
-        {viewButton({ kind: "upcoming" }, "Upcoming", upcomingCount, "upcoming", <ClockIcon />)}
         <div className="tasks-side-label">Projects</div>
         {projects
           .filter((p) => p.isInbox)
@@ -317,7 +331,7 @@ export function TasksView({
               title="Delete this project. Its open tasks move to the Inbox."
               onClick={() => {
                 void taskApi.removeProject(currentProject.id).catch((err: Error) => setError(err.message));
-                setView({ kind: "today" });
+                setView({ kind: "upcoming" });
               }}
             >
               <TrashIcon />
@@ -413,6 +427,24 @@ export function TasksView({
         )}
         {error && <div className="chat-error">{error}</div>}
 
+        {openTask && createPortal(
+          <TaskModal
+            task={openTask}
+            projects={projects}
+            today={today}
+            onClose={() => setOpenId(null)}
+            onSave={async (patch) => {
+              await taskApi.update(openTask.id, patch);
+              setOpenId(null);
+            }}
+            onComplete={() => {
+              void (openTask.completedAt === null ? taskApi.complete(openTask.id) : taskApi.reopen(openTask.id)).catch((e: Error) => setError(e.message));
+              setOpenId(null);
+            }}
+          />,
+          document.body,
+        )}
+
         {payload && shown === 0 && (
           <div className="tasks-empty">
             <span className="tasks-empty-icon">
@@ -444,6 +476,7 @@ export function TasksView({
                       workspaces={workspaces}
                       projects={projects}
                       onError={setError}
+                      onOpen={() => setOpenId(t.id)}
                       onStartWorkspace={() => onStartWorkspace(t)}
                       onOpenWorkspace={onOpenWorkspace}
                     />
@@ -473,6 +506,7 @@ export function TasksView({
                   workspaces={workspaces}
                   projects={projects}
                   onError={setError}
+                  onOpen={() => setOpenId(t.id)}
                   onStartWorkspace={() => {}}
                   onOpenWorkspace={onOpenWorkspace}
                 />
@@ -543,7 +577,7 @@ export function TasksView({
             onClick={() => {
               const id = projectMenu.project.id;
               setProjectMenu(null);
-              if (view.kind === "project" && view.id === id) setView({ kind: "today" });
+              if (view.kind === "project" && view.id === id) setView({ kind: "upcoming" });
               void taskApi.removeProject(id).catch((err: Error) => setError(err.message));
             }}
           >
@@ -568,6 +602,7 @@ export function TasksView({
         />
       )}
 
+      {view.kind === "upcoming" && <TodayMeetings today={today} hidden={calendarHidden} onOpenCalendar={onOpenCalendar} />}
       {view.kind !== "upcoming" && (
         <aside className="tasks-week panel" aria-label="Coming up">
           <h3>Coming up</h3>
@@ -594,6 +629,56 @@ export function TasksView({
   );
 }
 
+const MEETINGS_REFRESH_MS = 5 * 60_000;
+const clock = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+
+/** Today's meetings beside the task list, so tasks are planned around them. Nothing shows when the calendar is off. */
+function TodayMeetings({ today, hidden, onOpenCalendar }: { today: string; hidden: string[]; onOpenCalendar: () => void }) {
+  const [events, setEvents] = useState<CalendarEvent[] | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    let live = true;
+    const from = new Date(`${today}T00:00:00`).getTime();
+    const to = new Date(`${addDays(today, 1)}T00:00:00`).getTime();
+    const load = () => {
+      setNow(Date.now());
+      calendarApi
+        .events(from, to)
+        .then((reply) => live && setEvents(reply.events))
+        .catch(() => live && setEvents(null));
+    };
+    load();
+    const timer = window.setInterval(load, MEETINGS_REFRESH_MS);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [today]);
+
+  if (events === null) return null;
+  const shown = events.filter((e) => !hidden.includes(e.calendarId) && replyOf(e) !== "declined").sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start - b.start);
+  const next = shown.find((e) => !e.allDay && e.end > now);
+  return (
+    <aside className="tasks-week panel" aria-label="Today's meetings">
+      <h3>Today's meetings</h3>
+      <p>{shown.length === 0 ? "Nothing on the calendar." : next ? (next.start <= now ? `Now: ${next.title}` : `Next at ${clock(next.start)}`) : "No more meetings today."}</p>
+      {shown.map((e) => (
+        <button
+          key={e.key}
+          className={`tasks-week-item tasks-meeting${!e.allDay && e.end <= now ? " past" : ""}${e === next && e.start <= now ? " now" : ""}`}
+          title={e.location ? `${e.title} · ${e.location}` : e.title}
+          onClick={onOpenCalendar}
+        >
+          <time>{e.allDay ? "all day" : clock(e.start)}</time>
+          <i className="tasks-week-mark" style={{ background: e.color ?? "var(--accent)" }} />
+          <span>{e.title}</span>
+        </button>
+      ))}
+    </aside>
+  );
+}
+
 function TaskRow({
   task: t,
   today,
@@ -603,6 +688,7 @@ function TaskRow({
   workspaces,
   projects,
   onError,
+  onOpen,
   onStartWorkspace,
   onOpenWorkspace,
 }: {
@@ -616,6 +702,7 @@ function TaskRow({
   workspaces: Workspace[];
   projects: TaskProject[];
   onError: (message: string | null) => void;
+  onOpen: () => void;
   onStartWorkspace: () => void;
   onOpenWorkspace: (w: Workspace) => void;
 }) {
@@ -669,9 +756,9 @@ function TaskRow({
             />
           </span>
         ) : (
-          <span className="task-content" onDoubleClick={() => !done && setRenaming(true)}>
+          <button className="task-content task-open" title="Open this task" onClick={onOpen}>
             {t.content}
-          </span>
+          </button>
         )}
         {(when || t.recurrence || project || t.labels.length > 0 || t.links.length > 0 || !done) && (
           <span className="task-meta">

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { SessionDetail } from "../api.ts";
 import { REVEAL_ALL } from "../find.ts";
+import { ClaudeMark } from "./Icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 export type TurnRow = SessionDetail["turns"][number];
@@ -67,7 +68,10 @@ export function Turn({ turn }: { turn: TurnRow }) {
   return (
     <div className={`turn ${turn.role}`}>
       <div className="turn-head">
-        <span className="turn-who">{turn.role === "user" ? "You" : "Claude"}</span>
+        <span className="turn-who">
+          {turn.role !== "user" && <ClaudeMark />}
+          {turn.role === "user" ? "You" : "Claude"}
+        </span>
         {turn.ts && <time>{new Date(turn.ts).toLocaleString()}</time>}
       </div>
       {command && <CommandChip command={command} />}

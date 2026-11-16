@@ -26,7 +26,9 @@ export type NotifyEventKind =
   | "sessionError"
   | "prWatch"
   | "prReviewRequested"
-  | "taskDue";
+  | "taskDue"
+  | "calendarInvite"
+  | "calendarStarting";
 
 /**
  * One session's silence, keyed by its transcript id — or by the agent key while it
@@ -149,6 +151,8 @@ export type Settings = {
     workspaceAutoGoal: boolean;
     /** Local HH:MM from which the once-a-day "tasks for today" banner may fire. Empty turns it off. */
     taskDigestTime: string;
+    /** How many minutes before a meeting starts its banner fires. */
+    calendarReminderMinutes: number;
     /** The day the calendar's week and month views start on: 0 Sunday, 1 Monday, 6 Saturday. */
     calendarWeekStart: 0 | 1 | 6;
     /** The calendar view last used, so the page reopens on it. */
@@ -310,6 +314,8 @@ const DEFAULTS: Settings = {
       prWatch: true,
       prReviewRequested: true,
       taskDue: true,
+      calendarInvite: true,
+      calendarStarting: true,
     },
     channels: { native: true, browser: true, googleChat: false },
     googleChatWebhook: "",
@@ -333,6 +339,7 @@ const DEFAULTS: Settings = {
     sidebarCollapsed: false,
     workspaceAutoGoal: true,
     taskDigestTime: "09:00",
+    calendarReminderMinutes: 10,
     calendarWeekStart: 1,
     calendarView: "week",
     calendarHidden: [],

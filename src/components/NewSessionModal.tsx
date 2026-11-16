@@ -26,6 +26,7 @@ export function NewSessionModal({
    * visible, so a prefill you did not want is one click to leave.
    */
   initialCwd = null,
+  initialResearch = false,
   workspaceId = null,
   settings = null,
 }: {
@@ -33,11 +34,13 @@ export function NewSessionModal({
   onClose: () => void;
   onStarted: (key: string) => void;
   initialCwd?: string | null;
+  /** Open on a chat with no project, as the sidebar's Chats group starts one. */
+  initialResearch?: boolean;
   /** File the session in this workspace rather than wherever its folder would land it. */
   workspaceId?: number | null;
   settings?: Settings | null;
 }) {
-  const loc = useLocation({ initialCwd, projects });
+  const loc = useLocation({ initialCwd, initialResearch, projects });
   const { cwd, setCwd, setCustom, research, setResearch, repo, manage } = loc;
   const [model, setModel] = useState(settings?.ui.defaultModel || "default");
   const [title, setTitle] = useState("");

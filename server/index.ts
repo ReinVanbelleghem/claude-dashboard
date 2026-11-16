@@ -118,6 +118,8 @@ import {
 } from "./paths.ts";
 import { handlePrRoute } from "./prRoutes.ts";
 import { initPrWatch } from "./prWatch.ts";
+import { initCalendarWatch } from "./calendarWatch.ts";
+import { clearNotifications, inboxPayload, initInbox, markNotificationsRead } from "./inbox.ts";
 import { initExplain, onAgentItem as explainOnItem, onRoster as explainOnRoster } from "./prExplain.ts";
 import { initReview } from "./prReview.ts";
 import { reviewRepoLabel, reviewRoot } from "./prRepos.ts";
@@ -164,7 +166,7 @@ import { disableMacCalendar, enableMacCalendar, macCalendarStatus, refreshMacCal
 import type { EventDraft, EventPatch, EventRef } from "../shared/calendar.ts";
 import { CALENDAR_SAFE_TOOLS, calendarToolServer } from "./calendarTools.ts";
 import { addProposal, approveProposal, discardProposal, listProposals, updateProposal } from "./calendarProposals.ts";
-import { disconnectGoogle, finishGoogleConnect, googleAvailability, googleConnectUrl, googleOtherEvents, googleStatus, removeGoogleClient, setGoogleClient, setGoogleEventGuests, setGoogleGuests } from "./google.ts";
+import { disconnectGoogle, finishGoogleConnect, googleAvailability, googleConnectUrl, googleOtherEvents, googleStatus, removeGoogleClient, replyToGoogleEvent, setGoogleClient, setGoogleEventGuests, setGoogleGuests } from "./google.ts";
 import { createEvent, deleteEvent, listCalendars, listEvents, listPeople, updateEvent } from "./calendarSources.ts";
 import {
   attachSession,
@@ -205,6 +207,8 @@ const NOTIFY_KINDS: NotifyEventKind[] = [
   "prWatch",
   "prReviewRequested",
   "taskDue",
+  "calendarInvite",
+  "calendarStarting",
 ];
 import { sessionReceipt, usageSummary } from "./usage.ts";
 
@@ -296,12 +300,14 @@ async function broadcastServices(force = false): Promise<void> {
 }
 // The review pages keep records about some sessions (which PR, which findings);
 // they learn what happened the same way the browser does, from the event stream.
+initInbox(db, (payload) => broadcast("inbox", payload));
 initReview(db);
 initRuns(db, broadcast);
 initExplain(db, broadcast);
 initPrWatch(db, broadcast);
 initWorkspaces(db, (payload) => broadcast("workspaces", payload), { reviewRoot });
 initTasks(db, (payload) => broadcast("tasks", payload));
+initCalendarWatch();
 setInterval(() => {
   try {
     for (const r of dueReminders(new Date(), getSettings().ui.taskDigestTime?.trim() || null)) {
@@ -1183,6 +1189,20 @@ const server = Bun.serve<PtyData, never>({
         return json({ error: (e as Error).message }, 502);
       }
     }
+    if (p === "/api/google/reply" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { calendarId?: string; id?: string; reply?: string } | null;
+      const reply = body?.reply;
+      if (!body?.calendarId || !body.id || (reply !== "accepted" && reply !== "declined" && reply !== "tentative")) {
+        return json({ error: "calendarId, id and a reply of accepted, declined or tentative are required" }, 400);
+      }
+      try {
+        await replyToGoogleEvent(body.calendarId, body.id, reply);
+        broadcast("calendar", { at: Date.now() });
+        return json({ ok: true });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 502);
+      }
+    }
     if (p === "/api/google/calendar" && req.method === "GET") {
       const email = url.searchParams.get("email") ?? "";
       const from = Number(url.searchParams.get("from"));
@@ -1631,6 +1651,17 @@ const server = Bun.serve<PtyData, never>({
       const next = setSessionMute(b.id, kinds, b.label?.trim() || b.id);
       broadcast("settings", next);
       return json({ settings: next });
+    }
+
+    if (p === "/api/notifications" && req.method === "GET") return json(inboxPayload());
+    if (p === "/api/notifications/read" && req.method === "POST") {
+      const b = (await req.json().catch(() => ({}))) as { ids?: unknown };
+      const ids = Array.isArray(b.ids) ? b.ids.filter((x): x is number => Number.isInteger(x)) : null;
+      return json(markNotificationsRead(ids));
+    }
+    if (p === "/api/notifications/clear" && req.method === "POST") {
+      const b = (await req.json().catch(() => ({}))) as { id?: unknown };
+      return json(clearNotifications(Number.isInteger(b.id) ? (b.id as number) : null));
     }
 
     if (p === "/api/settings/test" && req.method === "POST") {

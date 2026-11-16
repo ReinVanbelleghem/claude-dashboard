@@ -361,7 +361,9 @@ export type NotifyEventKind =
   | "sessionError"
   | "prWatch"
   | "prReviewRequested"
-  | "taskDue";
+  | "taskDue"
+  | "calendarInvite"
+  | "calendarStarting";
 
 /** What one session has been silenced about, and what to call it in Settings. */
 export type SessionMute = { kinds: NotifyEventKind[]; label: string };
@@ -398,6 +400,7 @@ export type Settings = {
     footerPages?: string[];
     workspaceAutoGoal?: boolean;
     taskDigestTime?: string;
+    calendarReminderMinutes?: number;
     calendarWeekStart?: 0 | 1 | 6;
     calendarView?: "week" | "workweek" | "month";
     calendarHidden?: string[];
@@ -469,6 +472,31 @@ export type SettingsPatch = {
   };
   ui?: Partial<Settings["ui"]>;
   reviews?: Partial<Settings["reviews"]>;
+};
+
+/** One kept notification, as the bell's panel lists it. */
+export type InboxItem = {
+  id: number;
+  kind: NotifyEventKind;
+  label: string;
+  detail: string;
+  context: string;
+  /** The in-app route a click lands on. */
+  href: string;
+  at: number;
+  readAt: number | null;
+  /** How many times it fired while unread. */
+  count: number;
+};
+
+export type InboxPayload = { items: InboxItem[]; unread: number };
+
+export const inboxApi = {
+  list: () => get<InboxPayload>("/api/notifications"),
+  /** Marks the given notifications read, or all of them when none are named. */
+  read: (ids?: number[]) => post<InboxPayload>("/api/notifications/read", ids ? { ids } : {}),
+  /** Removes one notification, or all of them when none is named. */
+  clear: (id?: number) => post<InboxPayload>("/api/notifications/clear", id === undefined ? {} : { id }),
 };
 
 /** What the server sends when something wants your attention. */
@@ -1259,6 +1287,8 @@ export const calendarApi = {
     post<{ availability: Record<string, Availability> }>("/api/google/availability", { account, emails, start, end }),
   otherCalendar: (email: string, from: number, to: number) =>
     get<{ events: CalendarEvent[]; limited: boolean }>(`/api/google/calendar?email=${encodeURIComponent(email)}&from=${from}&to=${to}`),
+  /** Answer an invitation in a connected Google calendar. */
+  reply: (calendarId: string, id: string, reply: "accepted" | "declined" | "tentative") => post<{ ok: true }>("/api/google/reply", { calendarId, id, reply }),
   setGuests: (account: string, event: { calendarId: string; id: string; externalId: string | null }, guests: string[], rooms: string[]) =>
     post<{ ok: true }>("/api/google/guests", { account, ...(event.calendarId.startsWith("g:") ? { calendarId: event.calendarId, id: event.id } : { externalId: event.externalId }), guests, rooms }),
 };

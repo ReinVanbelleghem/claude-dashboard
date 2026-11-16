@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { CalendarEvent, Task, TaskProject } from "../../api.ts";
-import { TaskMark, TaskProjectTag } from "./TaskBits.tsx";
+import { TaskMark, taskTint, taskTitle } from "./TaskBits.tsx";
 import { useEventHover } from "./EventHoverCard.tsx";
 import { addDays } from "../../../shared/taskDates.ts";
+import { replyOf } from "../../../shared/calendar.ts";
 import {
   MINUTE_MS,
   SNAP_MINUTES,
@@ -74,6 +75,12 @@ type Bar =
   | { kind: "event"; key: string; first: number; last: number; event: CalendarEvent; ghost: boolean }
   | { kind: "task"; key: string; first: number; last: number; task: Task; overdue: boolean; ghost: boolean };
 
+const NOW_LABEL_CLEARANCE_PX = 12;
+const TASK_PILL_PX = 24;
+const replyClass = (event: CalendarEvent) => {
+  const reply = replyOf(event);
+  return reply && reply !== "accepted" ? reply : "";
+};
 const tint = (color: string | null): CSSProperties => ({ "--ev": color ?? "var(--accent)" }) as CSSProperties;
 
 export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, onOpenTask, onCreate, onMoveEvent, onMoveTask }: TimeGridProps) {
@@ -244,7 +251,7 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
           : { event: e, start: e.start, end: e.end, ghost: false },
       );
     const timedTasks = tasks
-      .filter((t) => t.completedAt === null && t.dueDate !== null && t.dueTime !== null)
+      .filter((t) => t.dueDate !== null && t.dueTime !== null)
       .map((t) =>
         dragged && dragged.kind === "task" && dragged.task.id === t.id
           ? { task: t, start: dragged.start, ghost: true }
@@ -283,8 +290,8 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
       out.push({ kind: "event", key: event.key, first: clampIndex(first), last: clampIndex(last), event, ghost: delta !== 0 });
     }
     for (const task of tasks) {
-      if (task.completedAt !== null || task.dueDate === null || task.dueTime !== null) continue;
-      const overdue = task.dueDate < today;
+      if (task.dueDate === null || task.dueTime !== null) continue;
+      const overdue = task.completedAt === null && task.dueDate < today;
       const delta = dragged?.kind === "taskbar" && dragged.task.id === task.id ? dragged.delta : 0;
       const day = addDays(overdue ? today : task.dueDate, delta);
       if (day < days[0] || day > days[lastIndex]) continue;
@@ -296,6 +303,7 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
 
   const columns = { "--cols": days.length, "--hour": `${hourPx}px` } as CSSProperties;
   const nowTop = (minutesOfDay(now) / 60) * hourPx;
+  const showsNow = days.includes(today);
 
   return (
     <div className={`cal-scroll ${drag?.moved ? "dragging" : ""}`} ref={scrollRef} style={columns} onScroll={hover.hide}>
@@ -329,15 +337,14 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
                 if (bar.kind === "task") {
                   return (
                     <div
-                      className={`cal-bar task ${bar.overdue ? "overdue" : ""} ${bar.ghost ? "ghost" : ""}`}
+                      className={`cal-bar task ${bar.overdue ? "overdue" : ""} ${bar.task.completedAt === null ? "" : "done"} ${bar.ghost ? "ghost" : ""}`}
                       key={bar.key}
-                      style={place}
-                      title={bar.task.content}
+                      style={{ ...place, ...taskTint(projects, bar.task) }}
+                      title={taskTitle(projects, bar.task)}
                       onPointerDown={(e) => begin(e, { kind: "taskbar", task: bar.task, origin: days[bar.first], delta: 0, moved: false })}
                     >
                       <TaskMark task={bar.task} />
                       <span>{bar.task.content}</span>
-                      <TaskProjectTag projects={projects} task={bar.task} />
                     </div>
                   );
                 }
@@ -346,7 +353,7 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
                   : undefined;
                 return (
                   <div
-                    className={`cal-bar ${bar.ghost ? "ghost" : ""} ${bar.event.editable ? "" : "locked"} ${bar.event.other ? "other" : ""} ${bar.event.draft ? "draft" : ""}`}
+                    className={`cal-bar ${bar.ghost ? "ghost" : ""} ${bar.event.editable ? "" : "locked"} ${bar.event.other ? "other" : ""} ${bar.event.draft ? "draft" : ""} ${replyClass(bar.event)}`}
                     key={bar.key}
                     style={{ ...place, ...tint(bar.event.color) }}
                     {...hover.bind(bar.event)}
@@ -366,9 +373,10 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
         <div className="cal-hours">
           {HOURS.map((h) => (
             <span key={h} style={{ top: h * hourPx }}>
-              {h === 0 ? "" : `${String(h).padStart(2, "0")}:00`}
+              {h === 0 || (showsNow && Math.abs(h * hourPx - nowTop) < NOW_LABEL_CLEARANCE_PX) ? "" : `${String(h).padStart(2, "0")}:00`}
             </span>
           ))}
+          {showsNow && <span className="now" style={{ top: nowTop }}>{fmtTime(now)}</span>}
         </div>
         {days.map((day, index) => (
           <div
@@ -402,21 +410,22 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
               if (block.kind === "task") {
                 return (
                   <div
-                    className={`cal-ev task ${block.ghost ? "ghost" : ""}`}
+                    className={`cal-ev task ${block.task.completedAt === null ? "" : "done"} ${block.ghost ? "ghost" : ""}`}
                     key={block.key}
-                    style={box}
-                    title={block.task.content}
+                    style={{ ...box, height: Math.min(Math.max(((block.to - block.from) / 60) * hourPx - 2, 16), TASK_PILL_PX), ...taskTint(projects, block.task) }}
+                    title={taskTitle(projects, block.task)}
                     onPointerDown={(e) => begin(e, { kind: "task", task: block.task, grab: grabOf(e, block.start), start: block.start, moved: false })}
                   >
-                    <b><TaskMark task={block.task} />{block.task.content}</b>
-                    <TaskProjectTag projects={projects} task={block.task} />
+                    <TaskMark task={block.task} />
+                    <b>{block.task.content}</b>
+                    <time>{fmtTime(block.start)}</time>
                   </div>
                 );
               }
               const { event } = block;
               return (
                 <div
-                  className={`cal-ev ${short ? "short" : ""} ${block.ghost ? "ghost" : ""} ${event.editable ? "" : "locked"} ${event.other ? "other" : ""} ${event.draft ? "draft" : ""}`}
+                  className={`cal-ev ${short ? "short" : ""} ${block.ghost ? "ghost" : ""} ${event.editable ? "" : "locked"} ${event.other ? "other" : ""} ${event.draft ? "draft" : ""} ${replyClass(event)}`}
                   key={block.key}
                   style={{ ...box, ...tint(event.color) }}
                   {...hover.bind(event)}

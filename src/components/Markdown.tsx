@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { highlight } from "./highlight.tsx";
 import { CheckIcon, CopyIcon } from "./Icons.tsx";
+import { linkInfo } from "../../shared/taskLinks.ts";
+import { ServiceMark } from "./tasks/ServiceMark.tsx";
 
 /**
  * A small, dependency-free Markdown renderer for transcript text.
@@ -131,16 +133,19 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
     else if (g.imgSrc !== undefined) out.push(<Image key={key} src={g.imgSrc} alt={g.imgAlt} />);
     else if (g.linkHref !== undefined)
       out.push(
-        <a key={key} href={safeHref(g.linkHref)} target="_blank" rel="noreferrer">
-          {g.linkText}
-        </a>,
+        g.linkText === g.linkHref ? (
+          <LinkChip key={key} url={g.linkHref} />
+        ) : (
+          <a key={key} href={safeHref(g.linkHref)} target="_blank" rel="noreferrer">
+            {g.linkText}
+          </a>
+        ),
       );
-    else if (g.bareUrl !== undefined)
-      out.push(
-        <a key={key} href={safeHref(g.bareUrl)} target="_blank" rel="noreferrer">
-          {g.bareUrl}
-        </a>,
-      );
+    else if (g.bareUrl !== undefined) {
+      const url = g.bareUrl.replace(TRAILING_PUNCTUATION, "");
+      out.push(<LinkChip key={key} url={url} />);
+      if (url.length < g.bareUrl.length) out.push(g.bareUrl.slice(url.length));
+    }
     last = at + token.length;
   }
   if (last < text.length) out.push(text.slice(last));
@@ -162,6 +167,34 @@ function Image({ src, alt, width, height, title }: { src?: string; alt?: string;
   const href = imageSrc(src ?? "");
   if (!href) return alt ? <span>{alt}</span> : null;
   return <img className="md-img" src={href} alt={alt ?? ""} title={title} width={width} height={height} loading="lazy" />;
+}
+
+const TRAILING_PUNCTUATION = /[.,;:!?]+$/;
+const NOTION_ID = /-?[0-9a-f]{32}$/i;
+const MAX_CHIP_LABEL = 64;
+
+/** The page name a Notion address carries in its last segment, when it has one. */
+function notionTitle(url: string): string | null {
+  try {
+    const slug = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() ?? "");
+    const words = slug.replace(NOTION_ID, "").replace(/-/g, " ").trim();
+    return words.length > 2 ? words : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A pasted address shown as the mark of its service and a short name, the way a task shows its links. */
+function LinkChip({ url }: { url: string }) {
+  const info = linkInfo(url);
+  const named = (info.service === "notion" ? notionTitle(url) : null) ?? info.label;
+  const label = named.length > MAX_CHIP_LABEL ? `${named.slice(0, MAX_CHIP_LABEL - 1)}…` : named;
+  return (
+    <a className={`md-link-chip svc-${info.service}`} href={safeHref(url)} target="_blank" rel="noreferrer" title={`${info.kind}\n${url}`}>
+      <ServiceMark service={info.service} />
+      {label}
+    </a>
+  );
 }
 
 /** Only http(s) links are followed; anything else renders as plain text href-less. */

@@ -1,8 +1,9 @@
 import { useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { CalendarEvent, Task, TaskProject } from "../../api.ts";
-import { TaskMark, TaskProjectTag } from "./TaskBits.tsx";
+import { TaskMark, taskTint, taskTitle } from "./TaskBits.tsx";
 import { useEventHover } from "./EventHoverCard.tsx";
 import { addDays } from "../../../shared/taskDates.ts";
+import { replyOf } from "../../../shared/calendar.ts";
 import { dayOfMonth, dayStart, diffDays, eventDays, fmtTime, isBar, shiftDays, weekdayShort } from "./dates.ts";
 
 const MAX_SHOWN = 4;
@@ -30,6 +31,10 @@ type Item =
 
 type Drag = { item: Item; origin: string; over: string };
 
+const replyClass = (event: CalendarEvent) => {
+  const reply = replyOf(event);
+  return reply && reply !== "accepted" ? reply : "";
+};
 const tint = (color: string | null): CSSProperties => ({ "--ev": color ?? "var(--accent)" }) as CSSProperties;
 
 export function MonthGrid({ days, anchor, today, events, tasks, projects, onOpenEvent, onOpenTask, onCreate, onMoveEvent, onMoveTask, onShowDay }: MonthGridProps) {
@@ -48,8 +53,8 @@ export function MonthGrid({ days, anchor, today, events, tasks, projects, onOpen
       }
     }
     for (const task of tasks) {
-      if (task.completedAt !== null || task.dueDate === null) continue;
-      const overdue = task.dueDate < today;
+      if (task.dueDate === null) continue;
+      const overdue = task.completedAt === null && task.dueDate < today;
       map.get(overdue && task.dueTime === null ? today : task.dueDate)?.push({ kind: "task", key: `task-${task.id}`, task, overdue });
     }
     return map;
@@ -130,21 +135,21 @@ export function MonthGrid({ days, anchor, today, events, tasks, projects, onOpen
                 if (item.kind === "task") {
                   return (
                     <div
-                      className={`cal-chip task ${item.overdue ? "overdue" : ""} ${lifted}`}
+                      className={`cal-chip task ${item.overdue ? "overdue" : ""} ${item.task.completedAt === null ? "" : "done"} ${lifted}`}
                       key={item.key}
-                      title={item.task.content}
+                      style={taskTint(projects, item.task)}
+                      title={taskTitle(projects, item.task)}
                       onClick={(e) => e.stopPropagation()}
                       onPointerDown={(e) => begin(e, item, day)}
                     >
                       <TaskMark task={item.task} />
                       <span>{item.task.content}</span>
-                      <TaskProjectTag projects={projects} task={item.task} />
                     </div>
                   );
                 }
                 return (
                   <div
-                    className={`cal-chip ${item.bar ? "bar" : ""} ${item.event.other ? "other" : ""} ${item.event.draft ? "draft" : ""} ${lifted}`}
+                    className={`cal-chip ${item.bar ? "bar" : ""} ${item.event.other ? "other" : ""} ${item.event.draft ? "draft" : ""} ${replyClass(item.event)} ${lifted}`}
                     key={item.key}
                     style={tint(item.event.color)}
                     {...hover.bind(item.event)}

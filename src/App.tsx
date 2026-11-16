@@ -22,6 +22,8 @@ import {
   templateApi,
   workspaceApi,
   type WorkspacesPayload,
+  inboxApi,
+  type InboxPayload,
 } from "./api.ts";
 import {
   applyAppearance,
@@ -49,6 +51,7 @@ import {
   TerminalIcon,
   WorktreeIcon,
 } from "./components/Icons.tsx";
+import { NotificationBell, NotificationCenter } from "./components/NotificationCenter.tsx";
 import { PrPage, routePr, type PrRoute } from "./components/pr/PrPage.tsx";
 import { ReviewsView } from "./components/pr/ReviewsView.tsx";
 import { usePrWatches } from "./components/pr/prState.ts";
@@ -124,6 +127,7 @@ function routeSessionId(): string | null {
 }
 
 const routePrNow = () => routePr(window.location.hash);
+const TAB_ROUTES: Record<string, Tab> = { "#/tasks": "tasks", "#/calendar": "calendar" };
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("live");
@@ -200,6 +204,7 @@ export default function App() {
   const [restorable, setRestorable] = useState<Restorable[]>([]);
   const [projects, setProjects] = useState<Overview["projects"]>([]);
   const [showNew, setShowNew] = useState(false);
+  const [newChat, setNewChat] = useState(false);
   /**
    * Directory the new-session dialog should open on, set when something else picked
    * it for you — opening a worktree that already holds the branch you wanted, say.
@@ -217,6 +222,11 @@ export default function App() {
   const clearFocusTask = useCallback(() => setFocusTaskId(null), []);
   const [showFolders, setShowFolders] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
+  const [inbox, setInbox] = useState<InboxPayload>({ items: [], unread: 0 });
+  const [showInbox, setShowInbox] = useState(false);
+  useEffect(() => {
+    inboxApi.list().then(setInbox).catch(() => {});
+  }, []);
   const [showFind, setShowFind] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   const prWatches = usePrWatches();
@@ -258,8 +268,9 @@ export default function App() {
   // button both flow through here, so there is one source of truth.
   useEffect(() => {
     const onHash = () => {
-      if (window.location.hash === "#/tasks") {
-        setTab("tasks");
+      const routed = TAB_ROUTES[window.location.hash];
+      if (routed) {
+        setTab(routed);
         window.location.hash = "";
         return;
       }
@@ -268,6 +279,7 @@ export default function App() {
       if (id) setOpenId(null);
       setPrRoute(routePrNow());
     };
+    if (TAB_ROUTES[window.location.hash]) onHash();
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -391,6 +403,7 @@ export default function App() {
     es.addEventListener("workspaces", (e) => setWorkspaces(JSON.parse((e as MessageEvent).data)));
     es.addEventListener("tasks", (e) => setTasks(JSON.parse((e as MessageEvent).data)));
     es.addEventListener("calendar", () => setCalendarChanged((n) => n + 1));
+    es.addEventListener("inbox", (e) => setInbox(JSON.parse((e as MessageEvent).data)));
     // The daemon owns the decision to notify; the tab only raises the banner.
     es.addEventListener("notify", (e) => {
       const p = JSON.parse((e as MessageEvent).data) as NotifyPayload;
@@ -803,6 +816,12 @@ export default function App() {
         onOpen={openSession}
         onNewWorkspace={(folder) => setNewWorkspace({ folder: folder ?? null })}
         onNewSession={startSessionIn}
+        onNewChat={() => {
+          setNewIn(null);
+          setNewInWorkspace(null);
+          setNewChat(true);
+          setShowNew(true);
+        }}
       />
       <RailSessions sessions={sidebarSessions} payload={workspaces} activeId={pageId ?? openId} onOpen={openSession} />
     </Sidebar>
@@ -839,6 +858,7 @@ export default function App() {
         <span>Search…</span>
         <kbd>⌘K</kbd>
       </button>
+      <NotificationBell unread={inbox.unread} open={showInbox} onToggle={() => setShowInbox((v) => !v)} />
       <button
         className="icon-btn square mode-toggle"
         title={`Switch to ${appearance.theme === "dark" ? "light" : "dark"} mode — full theme and icon options live in Settings → Appearance`}
@@ -994,6 +1014,8 @@ export default function App() {
       {!onFullPage && tab === "tasks" && (
         <TasksView
           payload={tasks}
+          calendarHidden={settings?.ui.calendarHidden ?? []}
+          onOpenCalendar={() => goTo("calendar")}
           focusTaskId={focusTaskId}
           onFocused={clearFocusTask}
           workspaces={workspaces?.workspaces ?? []}
@@ -1103,6 +1125,18 @@ export default function App() {
       {/* Suppressed while an overlay owns the screen: its own control is there. */}
       {!openId && !showNew && !showFolders && !showPalette && <PageScrollJump />}
 
+      {showInbox && (
+        <NotificationCenter
+          inbox={inbox}
+          onInbox={setInbox}
+          onClose={() => setShowInbox(false)}
+          onOpenSettings={() => {
+            localStorage.setItem("settings-section", "notifications");
+            setShowInbox(false);
+            goTo("settings");
+          }}
+        />
+      )}
       {showPalette && (
         <Palette
           agents={agents}
@@ -1166,14 +1200,17 @@ export default function App() {
         <NewSessionModal
           projects={projects}
           initialCwd={newIn}
+          initialResearch={newChat}
           workspaceId={newInWorkspace}
           settings={settings}
           onClose={() => {
+            setNewChat(false);
             setShowNew(false);
             setNewIn(null);
             setNewInWorkspace(null);
           }}
           onStarted={(key) => {
+            setNewChat(false);
             setShowNew(false);
             setNewIn(null);
             setNewInWorkspace(null);

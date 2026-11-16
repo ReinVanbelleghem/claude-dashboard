@@ -43,7 +43,7 @@ export type CheckoutChoice = "here" | "new" | (string & {});
  * "where": the saved shortlist, the chosen directory, what git says about it, and which
  * checkout of it to use.
  */
-export function useLocation(opts: { initialCwd: string | null; projects: { path: string }[] }) {
+export function useLocation(opts: { initialCwd: string | null; initialResearch?: boolean; projects: { path: string }[] }) {
   const { initialCwd, projects } = opts;
   const [favourites, setFavourites] = useState<Favourite[] | null>(null);
   const [cwd, setCwd] = useState(initialCwd ?? "");
@@ -53,7 +53,7 @@ export function useLocation(opts: { initialCwd: string | null; projects: { path:
    * skills. For a general question, the nearest checkout is not context but noise —
    * it gives the model a codebase to answer from that nobody asked about.
    */
-  const [research, setResearch] = useState(false);
+  const [research, setResearch] = useState(opts.initialResearch === true);
   const [wtSel, setWtSel] = useState<CheckoutChoice>("here");
   /** The branch a new worktree would hold: existing or freshly cut. */
   const [wtBranch, setWtBranch] = useState<BranchChoice | null>(null);

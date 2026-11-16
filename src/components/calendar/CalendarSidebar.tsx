@@ -1,14 +1,15 @@
-import { useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { useSortable, type Sortable } from "../../useSortable.ts";
-import type { CalendarInfo, CalendarPerson, OtherCalendar } from "../../api.ts";
+import type { CalendarInfo, CalendarPerson, OtherCalendar, TaskProject } from "../../api.ts";
+import { TASKS_DONE_KEY, projectColor, taskProjectKey } from "./TaskBits.tsx";
 import { CheckIcon, PinIcon, SearchIcon, XIcon } from "../Icons.tsx";
 
 const MAX_RESULTS = 7;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function Box({ color, on }: { color: string; on: boolean }) {
+function Box({ color, on, round = false }: { color: string; on: boolean; round?: boolean }) {
   return (
-    <i className={`cal-box ${on ? "on" : ""}`} style={{ "--ev": color } as CSSProperties}>
+    <i className={`cal-box ${on ? "on" : ""} ${round ? "round" : ""}`} style={{ "--ev": color } as CSSProperties}>
       {on && <CheckIcon />}
     </i>
   );
@@ -22,6 +23,7 @@ function Box({ color, on }: { color: string; on: boolean }) {
 export function CalendarSidebar({
   calendars,
   hidden,
+  projects,
   onToggleCalendar,
   canCompare,
   hasClient,
@@ -40,7 +42,9 @@ export function CalendarSidebar({
   /** The pinned list in its new order: people first, then rooms. */
   onReorderPinned: (next: OtherCalendar[]) => void;
   calendars: CalendarInfo[];
+  /** Ids switched off: calendars, task projects and finished tasks share the list. */
   hidden: string[];
+  projects: TaskProject[];
   onToggleCalendar: (id: string) => void;
   /** A Google account is connected, so other calendars can be fetched. */
   canCompare: boolean;
@@ -100,6 +104,24 @@ export function CalendarSidebar({
     setQuery("");
   };
 
+  const options = useMemo(
+    () => [...results.map((p) => ({ email: p.email, name: p.name, room: p.room, label: p.name })), ...(typedEmail ? [{ email: typedEmail, name: typedEmail, room: false, label: `Show ${typedEmail}` }] : [])],
+    [results, typedEmail],
+  );
+  const [cursor, setCursor] = useState(0);
+  useEffect(() => setCursor(0), [text]);
+  const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") setQuery("");
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setCursor((c) => (options.length ? (c + step + options.length) % options.length : 0));
+    } else if (e.key === "Enter") {
+      const picked = options[Math.min(cursor, options.length - 1)];
+      if (picked) show(picked);
+    }
+  };
+
   const row = (other: OtherCalendar, sort: Sortable | null, index = -1) => {
     const isPinned = sort !== null;
     return (
@@ -130,6 +152,22 @@ export function CalendarSidebar({
         ))}
       </div>
 
+      <h3>Tasks</h3>
+      {projects.map((p) => (
+        <div className="cal-side-row" key={p.id}>
+          <button className="cal-side-main" onClick={() => onToggleCalendar(taskProjectKey(p.id))}>
+            <Box color={projectColor(p)} on={!hidden.includes(taskProjectKey(p.id))} round />
+            <span>{p.name}</span>
+          </button>
+        </div>
+      ))}
+      <div className="cal-side-row cal-side-done">
+        <button className="cal-side-main" onClick={() => onToggleCalendar(TASKS_DONE_KEY)}>
+          <Box color="var(--text-muted)" on={!hidden.includes(TASKS_DONE_KEY)} round />
+          <span>Show completed</span>
+        </button>
+      </div>
+
       <h3>Other calendars</h3>
       {!canCompare && hasClient && <p className="cal-side-note">Connect a Google account in the ⋯ menu to lay colleagues' and rooms' calendars beside yours.</p>}
       {!canCompare && !hasClient && (
@@ -142,27 +180,17 @@ export function CalendarSidebar({
         <>
           <label className="cal-side-search">
             <SearchIcon />
-            <input value={query} placeholder="Search people and rooms" onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => {
-              if (e.key === "Escape") setQuery("");
-              if (e.key !== "Enter") return;
-              if (results[0]) show(results[0]);
-              else if (typedEmail) show({ email: typedEmail, name: typedEmail, room: false });
-            }} />
+            <input value={query} placeholder="Search people and rooms" role="combobox" aria-expanded={text !== ""} aria-controls="cal-side-results" onChange={(e) => setQuery(e.target.value)} onKeyDown={onSearchKey} />
             {query && <button aria-label="Clear search" onClick={() => setQuery("")}><XIcon /></button>}
           </label>
           {text !== "" && (
-            <div className="cal-side-results">
-              {results.map((p) => (
-                <button key={p.email} title={p.email} onClick={() => show(p)}>
-                  <span>{p.name}</span>
-                  {p.room && <em>room</em>}
+            <div className="cal-side-results" id="cal-side-results" role="listbox">
+              {options.map((o, i) => (
+                <button key={o.email} role="option" aria-selected={i === cursor} className={i === cursor ? "on" : ""} title={o.email} onMouseEnter={() => setCursor(i)} onClick={() => show(o)}>
+                  <span>{o.label}</span>
+                  {o.room && <em>room</em>}
                 </button>
               ))}
-              {typedEmail && (
-                <button onClick={() => show({ email: typedEmail, name: typedEmail, room: false })}>
-                  <span>Show {typedEmail}</span>
-                </button>
-              )}
               {results.length === 0 && !typedEmail && <p className="cal-side-note">Nobody by that name on your events. Type a full email address to look someone up.</p>}
             </div>
           )}

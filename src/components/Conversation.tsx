@@ -17,7 +17,7 @@ import {
   type TaskInfo,
   type TimelineItem,
 } from "../api.ts";
-import { ClipIcon, TerminalIcon } from "./Icons.tsx";
+import { ClaudeMark, ClipIcon, TerminalIcon } from "./Icons.tsx";
 import { onCompose } from "./compose.ts";
 import { loadAttachments, loadDraft, saveAttachments, saveDraft } from "./drafts.ts";
 import {
@@ -997,7 +997,10 @@ export function LiveConversation({
         {streaming && tab === null && (
           <div className="turn assistant streaming">
             <div className="turn-head">
-              <span className="turn-who">Claude</span>
+              <span className="turn-who">
+                <ClaudeMark />
+                Claude
+              </span>
             </div>
             <Markdown text={streaming} />
             <span className="stream-cursor" aria-hidden="true" />
@@ -1461,7 +1464,10 @@ function Item({
       return (
         <div className="turn assistant">
           <div className="turn-head">
-            <span className="turn-who">Claude</span>
+            <span className="turn-who">
+                <ClaudeMark />
+                Claude
+              </span>
             <time>{new Date(item.ts).toLocaleTimeString()}</time>
           </div>
           <Markdown text={item.text} />
@@ -1515,7 +1521,10 @@ function Item({
           {answer && (
             <div className="turn assistant">
               <div className="turn-head">
-                <span className="turn-who">Claude</span>
+                <span className="turn-who">
+                <ClaudeMark />
+                Claude
+              </span>
                 <time>{new Date(item.ts).toLocaleTimeString()}</time>
               </div>
               {answer.text && <Markdown text={answer.text} />}

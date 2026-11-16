@@ -23,6 +23,7 @@ import {
 import { addDays, localDay } from "../../../shared/taskDates.ts";
 import { CheckIcon, ChevronIcon, ClaudeMark, MoreIcon, PanelLeftIcon, PlusIcon, RefreshIcon } from "../Icons.tsx";
 import { CalendarSidebar } from "./CalendarSidebar.tsx";
+import { tasksShown } from "./TaskBits.tsx";
 import { GoogleSetup } from "./GoogleSetup.tsx";
 import { PlanDialog } from "./PlanDialog.tsx";
 import { planPrompt } from "./planPrompt.ts";
@@ -485,7 +486,7 @@ export function CalendarView({
     days,
     today,
     events: shownEvents,
-    tasks,
+    tasks: tasksShown(tasks, hidden),
     projects,
     onOpenEvent: (event: CalendarEvent) => setTarget({ mode: "view", event }),
     onOpenTask: setOpenTask,
@@ -646,10 +647,11 @@ export function CalendarView({
         ref={layoutRef}
         style={layoutTop === null ? undefined : ({ "--cal-top": `${layoutTop}px` } as CSSProperties)}
       >
-      {sidebar && (
+      <div className="cal-side-slot" aria-hidden={!sidebar}>
         <CalendarSidebar
           calendars={orderedCalendars}
           hidden={hidden}
+          projects={projects}
           onToggleCalendar={toggleCalendar}
           onMoveCalendar={(a, b) => saveUi({ calendarOrder: moved(orderedCalendars.map((c) => c.id), a, b) })}
           onReorderPinned={(next) => saveUi({ calendarOthers: next })}
@@ -664,7 +666,7 @@ export function CalendarView({
           onToggle={toggleOther}
           onPin={pinOther}
         />
-      )}
+      </div>
       <div className="panel cal-frame">
         {view === "month" ? (
           <MonthGrid
@@ -713,6 +715,10 @@ export function CalendarView({
           onCreate={create}
           onUpdate={update}
           onDelete={remove}
+          onReply={async (calendarId, id, reply) => {
+            await calendarApi.reply(calendarId, id, reply);
+            void load();
+          }}
         />
       )}
       {openTask && (
@@ -727,7 +733,7 @@ export function CalendarView({
             setOpenTask(null);
           }}
           onComplete={() => {
-            void taskApi.complete(openTask.id);
+            void (openTask.completedAt === null ? taskApi.complete(openTask.id) : taskApi.reopen(openTask.id));
             setOpenTask(null);
           }}
         />

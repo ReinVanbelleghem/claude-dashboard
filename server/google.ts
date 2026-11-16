@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Attendee, Availability, CalendarEvent, CalendarInfo, EventDraft, GoogleStatus, Person } from "../shared/calendar.ts";
+import type { Attendee, Availability, CalendarEvent, CalendarInfo, EventDraft, GoogleStatus, Person, Reply } from "../shared/calendar.ts";
 import { addDays, localDay } from "../shared/taskDates.ts";
 import { DATA_DIR, PORT } from "./paths.ts";
 
@@ -210,6 +210,7 @@ type GoogleEvent = {
   start?: GoogleMoment;
   end?: GoogleMoment;
   attendees?: GoogleAttendee[];
+  organizer?: { email?: string; displayName?: string; self?: boolean };
 };
 type GoogleCalendar = { id: string; summary?: string; summaryOverride?: string; backgroundColor?: string; accessRole?: string; primary?: boolean };
 
@@ -295,6 +296,7 @@ function toCalendarEvent(e: GoogleEvent, at: Placement): CalendarEvent | null {
     recurring: e.recurringEventId !== undefined,
     seriesId: e.recurringEventId ?? null,
     editable: at.editable,
+    organizer: e.organizer && !e.organizer.self ? (e.organizer.displayName ?? e.organizer.email ?? null) : null,
     attendees: (e.attendees ?? []).map((a) => ({
       name: a.displayName ?? a.email ?? "",
       email: a.email ?? null,
@@ -379,6 +381,19 @@ export async function setGoogleEventGuests(calendarId: string, id: string, guest
   await api(at.account, `${eventPath(at.calendar, id)}?sendUpdates=all`, { method: "PATCH", body: { attendees } });
 }
 
+const GOOGLE_REPLY: Record<Reply, string> = { accepted: "accepted", declined: "declined", tentative: "tentative", pending: "needsAction" };
+
+/** Answer an invitation as the connected account. Google tells the organiser. */
+export async function replyToGoogleEvent(calendarId: string, id: string, reply: Reply): Promise<void> {
+  const at = parseGoogleCalendarId(calendarId);
+  if (!at) throw new Error("that is not a Google calendar");
+  const event = await api<GoogleEvent>(at.account, eventPath(at.calendar, id));
+  const isMe = (a: GoogleAttendee) => a.self === true || a.email?.toLowerCase() === at.account.toLowerCase();
+  if (!(event.attendees ?? []).some(isMe)) throw new Error("You are not a guest of this event, so there is no invitation to answer.");
+  const attendees = (event.attendees ?? []).map((a) => (isMe(a) ? { ...a, responseStatus: GOOGLE_REPLY[reply] } : a));
+  await api(at.account, `${eventPath(at.calendar, id)}?sendUpdates=all`, { method: "PATCH", body: { attendees } });
+}
+
 const attendeesOf = (guests: string[], rooms: string[]): GoogleAttendee[] => [
   ...guests.map((email) => ({ email })),
   ...rooms.map((email) => ({ email, resource: true })),
@@ -438,7 +453,8 @@ function accountFor(email: string): string {
 function otherEvent(email: string, e: GoogleEvent): CalendarEvent | null {
   if (e.attendees?.find((a) => a.email?.toLowerCase() === email.toLowerCase())?.responseStatus === "declined") return null;
   const event = toCalendarEvent(e, { key: `other:${email}`, calendarId: `other:${email}`, calendar: email, account: "", color: null, editable: false, me: null });
-  return event ? { ...event, url: e.htmlLink ?? null, other: true } : null;
+  const theirs = event?.attendees.find((a) => a.email?.toLowerCase() === email.toLowerCase());
+  return event ? { ...event, url: e.htmlLink ?? null, other: true, reply: theirs?.status ?? null } : null;
 }
 
 const busyBlock = (email: string, start: number, end: number): CalendarEvent => ({
