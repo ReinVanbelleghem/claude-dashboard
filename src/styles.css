@@ -7248,11 +7248,17 @@ a.task-chip.task-link:focus-visible { outline: 2px solid var(--accent); outline-
 .cal-drafts b { color: var(--text-primary); font-weight: 600; }
 .cal-kind { align-self: flex-start; flex-wrap: wrap; }
 .cal-status-switches { display: flex; flex-direction: column; gap: 8px; }
-.cal-ev.status.outOfOffice, .cal-bar.status.outOfOffice, .cal-chip.status.outOfOffice,
-.cal-ev.status.focusTime, .cal-bar.status.focusTime, .cal-chip.status.focusTime {
-  background-image: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in oklab, var(--ev, var(--accent)) 16%, transparent) 6px 12px);
+.cal-status-mark {
+  --mark: color-mix(in oklab, var(--ev, var(--accent)) 45%, var(--text-primary));
+  flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--mark); color: var(--surface-1);
 }
-.cal-bar.status.workingLocation, .cal-chip.status.workingLocation { opacity: 0.8; font-style: italic; }
+.cal-status-mark .icon { width: 11px; height: 11px; stroke-width: 2.4; }
+.cal-status-mark.workingLocation { background: none; color: var(--mark); }
+.cal-status-mark.workingLocation .icon { width: 14px; height: 14px; stroke-width: 2.1; }
+b > .cal-status-mark { margin-right: 5px; vertical-align: -3px; }
+.cal-bar.status.workingLocation, .cal-chip.status.workingLocation { background: none; border-left-color: transparent; padding-left: 4px; }
+.cal-bar.status.workingLocation:hover, .cal-chip.status.workingLocation:hover { background: var(--surface-2); }
 .cal-ev.draft, .cal-bar.draft, .cal-chip.draft {
   border: 1.5px dashed var(--ev); border-left-width: 3px; border-left-style: solid;
   background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--ev) 14%, var(--surface-1)) 0 8px, color-mix(in oklab, var(--ev) 24%, var(--surface-1)) 8px 16px);

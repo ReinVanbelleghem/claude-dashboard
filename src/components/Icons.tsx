@@ -507,6 +507,26 @@ export function CalendarIcon() {
   );
 }
 
+export function CalendarOffIcon() {
+  return (
+    <I>
+      <rect x="3" y="4.5" width="18" height="16" rx="2" />
+      <path d="M8 2.5v4" />
+      <path d="M16 2.5v4" />
+      <path d="m9.5 11 5 5" />
+      <path d="m14.5 11-5 5" />
+    </I>
+  );
+}
+
+export function HeadphonesIcon() {
+  return (
+    <I>
+      <path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3" />
+    </I>
+  );
+}
+
 export function InboxIcon() {
   return (
     <I>

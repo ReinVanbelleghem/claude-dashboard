@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { CalendarEvent, Task, TaskProject } from "../../api.ts";
 import { TaskMark, taskTint, taskTitle } from "./TaskBits.tsx";
+import { StatusMark } from "./StatusMark.tsx";
 import { useEventHover } from "./EventHoverCard.tsx";
 import { addDays } from "../../../shared/taskDates.ts";
 import { replyOf } from "../../../shared/calendar.ts";
@@ -361,6 +362,7 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
                     onPointerDown={pointerDown}
                     onClick={bar.event.editable ? undefined : () => onOpenEvent(bar.event)}
                   >
+                    <StatusMark status={bar.event.status} />
                     <span>{bar.event.title}</span>
                   </div>
                 );
@@ -437,7 +439,10 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
                   }
                   onClick={event.editable ? undefined : () => onOpenEvent(event)}
                 >
-                  <b>{event.title}</b>
+                  <b>
+                    <StatusMark status={event.status} />
+                    {event.title}
+                  </b>
                   <span>{fmtTime(block.start)} – {fmtTime(block.end)}{event.location ? ` · ${event.location}` : ""}</span>
                   {event.editable && (
                     <div

@@ -1,6 +1,7 @@
 import { useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { CalendarEvent, Task, TaskProject } from "../../api.ts";
 import { TaskMark, taskTint, taskTitle } from "./TaskBits.tsx";
+import { StatusMark } from "./StatusMark.tsx";
 import { useEventHover } from "./EventHoverCard.tsx";
 import { addDays } from "../../../shared/taskDates.ts";
 import { replyOf } from "../../../shared/calendar.ts";
@@ -156,7 +157,8 @@ export function MonthGrid({ days, anchor, today, events, tasks, projects, onOpen
                     onClick={(e) => e.stopPropagation()}
                     onPointerDown={(e) => begin(e, item, day)}
                   >
-                    {!item.bar && <i className="cal-dot" />}
+                    {!item.bar && !item.event.status && <i className="cal-dot" />}
+                    <StatusMark status={item.event.status} />
                     {!item.bar && <time>{fmtTime(item.event.start)}</time>}
                     <span>{item.event.title}</span>
                   </div>

@@ -1,3 +1,4 @@
+import { StatusMark } from "./StatusMark.tsx";
 import { useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import type { CalendarEvent } from "../../api.ts";
@@ -28,7 +29,10 @@ function EventHoverCard({ event, anchor }: Hover) {
 
   return createPortal(
     <div className="cal-hover" ref={ref} role="tooltip" style={style}>
-      <b>{event.title}</b>
+      <b>
+        <StatusMark status={event.status} />
+        {event.title}
+      </b>
       <span>{whenText(event)}</span>
       <span className="cal-hover-cal">
         <i className="cal-dot" />
