@@ -8069,6 +8069,9 @@ html::-webkit-scrollbar { width: 11px; }
 .ws-row:has(.ws-resume):hover .ws-row-text,
 .ws-row:has(.ws-resume):focus-within .ws-row-text { padding-right: 24px; }
 .ws-row > .ws-resume .icon { width: 12px; height: 12px; }
+.ws-row:has(.ws-resume):hover .ws-row-ext,
+.ws-row:has(.ws-resume):focus-within .ws-row-ext { visibility: hidden; }
+@media (hover: none) { .ws-row:has(.ws-resume) .ws-row-ext { visibility: hidden; } }
 .session-main > [hidden] { display: none; }
 .session-main > .transcript-panel:not(:only-child) { flex: 1 1 0; max-height: none; }
 .session-main { gap: 0; }
