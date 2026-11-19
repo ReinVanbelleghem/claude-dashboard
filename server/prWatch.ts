@@ -179,7 +179,7 @@ async function pollOne(entry: PrWatchEntry, row: Row | null, me: string): Promis
     head_sha: pr.headRefOid,
     review_decision: pr.reviewDecision,
     ci_state: ciState,
-    mergeable: pr.mergeable,
+    mergeable: pr.mergeable === "UNKNOWN" ? (row?.mergeable ?? pr.mergeable) : pr.mergeable,
     state: pr.state,
     last_review_id: String(lastReview),
     last_comment_id: String(lastComment),

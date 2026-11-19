@@ -211,6 +211,7 @@ export type TimelineItem = (
       ts: number;
       text: string;
       queued?: boolean;
+      uuid?: string;
       /**
        * Attached images. The bytes went to the model and to disk, not into the
        * timeline; `url` points at the stored copy, and is absent when the daemon
@@ -333,6 +334,7 @@ export type AgentDetail = AgentSummary & {
 
 /** Percent used of a plan window, and when it rolls over (epoch ms). */
 export type PlanLimit = { pct: number; resetsAt: number | null };
+export type SessionPrRun = { id: string; pr: { owner: string; repo: string; number: number }; title: string; actionName: string };
 export type AgentMeter = {
   context: { tokens: number; max: number; pct: number } | null;
   fiveHour: PlanLimit | null;
@@ -378,7 +380,7 @@ export type Settings = {
   notifications: {
     enabled: boolean;
     events: Record<NotifyEventKind, boolean>;
-    channels: { native: boolean; browser: boolean; googleChat: boolean };
+    channels: { native: boolean; browser: boolean; inApp: boolean; googleChat: boolean };
     googleChatWebhook: string;
     delaySeconds: number;
     cooldownSeconds: number;
@@ -436,6 +438,7 @@ export type Settings = {
     worktreeExclude?: boolean;
     disabledModels?: string[];
     defaultModel?: string;
+    defaultPermissionMode?: string;
     customModels?: { value: string; label: string }[];
     /** Repositories (by shared `.git`) shown first on the Worktrees page. */
     pinnedRepos?: string[];
@@ -524,6 +527,13 @@ export type NotifyPayload = {
   /** The in-app route a click should land on: a session, or a PR page. */
   href?: string;
   at: number;
+  /** What it is about, without the kind's headline in front. */
+  label?: string;
+  /** Its row in the notification centre, marked read when the toast is followed. */
+  inboxId?: number;
+  /** Which of the two in-page channels are switched on; absent from an older daemon, which means both. */
+  banner?: boolean;
+  toast?: boolean;
 };
 
 export type McpStatus = "connected" | "needs-auth" | "failed" | "pending" | "disabled";
@@ -591,7 +601,7 @@ export const settingsApi = {
   test: () =>
     post<{
       ok: boolean;
-      channels: { native: boolean; browser: boolean; googleChat: boolean };
+      channels: { native: boolean; browser: boolean; inApp: boolean; googleChat: boolean };
       notifier: string | null;
     }>("/api/settings/test"),
   /** Tells the daemon which session is on screen, so it stays quiet about it. */
@@ -711,6 +721,25 @@ export type Commit = {
   insertions: number;
   deletions: number;
   files: number;
+};
+
+export type GraphCommit = {
+  hash: string;
+  parents: string[];
+  author: string;
+  /** Author time, seconds since the epoch. */
+  at: number;
+  subject: string;
+  refs: { branches: string[]; remotes: string[]; tags: string[]; head: boolean };
+};
+
+export type GitGraph = {
+  ok: boolean;
+  commits: GraphCommit[];
+  head: string | null;
+  branch: string | null;
+  worktrees: { path: string; branch: string | null; head: string | null }[];
+  error: string | null;
 };
 
 export type DiffScope = "uncommitted" | "branch";
@@ -916,6 +945,8 @@ export const gitApi = {
     post<{ ok: boolean; plan: ProvisionPlan }>("/api/git/provision-rules", { cwd, rules }),
   log: (cwd: string, limit = 50) =>
     get<{ commits: Commit[]; range: string }>(`/api/git/log?${q({ cwd, limit })}`),
+  graph: (cwd: string, opts: { limit?: number; all?: boolean } = {}) =>
+    get<GitGraph>(`/api/git/graph?${q({ cwd, limit: opts.limit ?? 300, all: opts.all === false ? 0 : 1 })}`),
   branchFiles: (cwd: string) => get<{ files: ChangedFile[] }>(`/api/git/branch-files?${q({ cwd })}`),
   commit: (cwd: string, sha: string, ignoreWhitespace = false) =>
     get<{ ok: boolean; commit: Commit | null; patch: string; error: string | null }>(
@@ -1056,6 +1087,7 @@ export const prApi = {
   /** A plain comment in the PR conversation, outside any review. */
   comment: (pr: PrRef, body: string) => post<{ url: string }>(`${prPath(pr)}/comment`, { body }),
   commits: (pr: PrRef) => get<{ commits: PrCommit[] }>(`${prPath(pr)}/commits`),
+  graph: (pr: PrRef) => get<GitGraph>(`${prPath(pr)}/graph`),
   /** The diff one commit introduced. `source` says whether it came from the local clone or GitHub. */
   commit: (pr: PrRef, sha: string, context = 3) =>
     get<{ ok: boolean; patch: string; source: "clone" | "github" | null; error: string | null }>(`${prPath(pr)}/commit?${q({ sha, context })}`),
@@ -1399,6 +1431,8 @@ export const api = {
       `/api/sessions?limit=${limit}&offset=${offset}&scope=${scope}${q ? `&q=${encodeURIComponent(q)}` : ""}`,
     ),
   session: (id: string) => get<SessionDetail>(`/api/sessions/${encodeURIComponent(id)}`),
+  sessionPrRun: (id: string, agentKey: string | null) =>
+    get<{ run: SessionPrRun | null }>(`/api/sessions/${encodeURIComponent(id)}/pr-run${agentKey ? `?key=${encodeURIComponent(agentKey)}` : ""}`),
   /**
    * Hand a pasted file to the daemon and get back the path it now lives at.
    *

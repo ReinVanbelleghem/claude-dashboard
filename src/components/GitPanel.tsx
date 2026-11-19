@@ -1,12 +1,11 @@
-import { memo, useCallback, useEffect, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { buildTree, type TreeNode } from "./fileTree.ts";
 import {
   commentApi,
-  fmtAgo,
   gitApi,
   settingsApi,
   type SettingsPatch,
   type ChangedFile,
-  type Commit,
   type DiffScope,
   type RepoStatus,
   type ReviewComment,
@@ -14,12 +13,16 @@ import {
 } from "../api.ts";
 import { Select } from "./Select.tsx";
 import { composeWhenOpen, requestCompose } from "./compose.ts";
-import { DiffView, langOf } from "./DiffView.tsx";
+import { DiffView, langOf, parsePatch } from "./DiffView.tsx";
 import { FileEditor } from "./FileEditor.tsx";
 import { FilePicker } from "./FilePicker.tsx";
 import type { CommentHandlers } from "./ReviewComments.tsx";
-import { EditorIcon, GitIcon, PencilIcon, WorktreeIcon } from "./Icons.tsx";
+import { EditorIcon, GitIcon, PanelLeftIcon, PencilIcon, RefreshIcon, WorktreeIcon } from "./Icons.tsx";
 import { cachedStatus, watchStatus, type GitRepo } from "./useGitRepo.ts";
+
+const TREE_INDENT = 9;
+const STATUS_NAME: Record<string, string> = { M: "Modified", A: "New file", D: "Deleted", R: "Renamed", C: "Copied", "?": "Untracked" };
+const FILE_LIST_KEY = "git-file-list";
 
 /** Branch state in one line, for headers and cards. */
 export function GitBadge({ cwd, compact = false }: { cwd: string; compact?: boolean }) {
@@ -112,10 +115,6 @@ export const GitPanel = memo(function GitPanel({
   const [patch, setPatch] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [branchList, setBranchList] = useState<ChangedFile[] | null>(null);
-  const [commits, setCommits] = useState<Commit[] | null>(null);
-  const [openSha, setOpenSha] = useState<string | null>(null);
-  const [commitPatch, setCommitPatch] = useState<string | null>(null);
-  const [tab, setTab] = useState<"changes" | "history">("changes");
   /** Only ever the comments for this repo *and* this branch — see `reload` below. */
   const [comments, setComments] = useState<ReviewComment[]>([]);
   const [showResolved, setShowResolved] = useState(false);
@@ -135,6 +134,32 @@ export const GitPanel = memo(function GitPanel({
   const [edits, setEdits] = useState(0);
   /** Open the picker / edit a file the diff never mentioned. */
   const [picking, setPicking] = useState(false);
+  const [folded, setFolded] = useState<Set<string>>(new Set());
+  const kindsRef = useRef(new Map<string, string>());
+  const seenKinds = useMemo(() => {
+    for (const parsed of parsePatch(patch ?? "")) {
+      if (parsed.note === "new file") kindsRef.current.set(parsed.path, "A");
+      else if (parsed.note === "deleted") kindsRef.current.set(parsed.path, "D");
+      else if (parsed.from && parsed.from !== parsed.path) kindsRef.current.set(parsed.path, "R");
+    }
+    return new Map(kindsRef.current);
+  }, [patch]);
+  const [listOpen, setListOpen] = useState(() => {
+    try {
+      return localStorage.getItem(FILE_LIST_KEY) !== "closed";
+    } catch {
+      return true;
+    }
+  });
+  const toggleList = () => {
+    const next = !listOpen;
+    setListOpen(next);
+    try {
+      localStorage.setItem(FILE_LIST_KEY, next ? "open" : "closed");
+    } catch {
+      return;
+    }
+  };
   const [editPath, setEditPath] = useState<string | null>(null);
 
   const mode = settings?.ui.diffMode ?? "unified";
@@ -150,8 +175,6 @@ export const GitPanel = memo(function GitPanel({
     setFile(null);
     setPatch(null);
     setBranchList(null);
-    setCommits(null);
-    setOpenSha(null);
     setSent(null);
     setEditPath(null);
   }, [repo.moved, cwd]);
@@ -173,30 +196,28 @@ export const GitPanel = memo(function GitPanel({
     gitApi.branchFiles(cwd).then((r) => setBranchList(r.files)).catch(() => setBranchList([]));
   }, [scope, cwd, status?.isRepo, status?.head, edits]);
 
+
+  const scopeChosen = useRef(false);
+  const startOnBranch = !!status?.isRepo && status.files.length === 0 && status.aheadOfBase > 0;
   useEffect(() => {
-    if (tab !== "history" || !status?.isRepo) return;
-    gitApi.log(cwd, 30).then((r) => setCommits(r.commits)).catch(() => setCommits([]));
-  }, [tab, cwd, status?.isRepo, status?.head]);
+    if (!status?.isRepo || scopeChosen.current) return;
+    scopeChosen.current = true;
+    if (startOnBranch) setScope("branch");
+  }, [status?.isRepo, startOnBranch]);
+
+  const worktreeStamp = (status?.files ?? []).map((f) => `${f.path}:${f.status}:${f.insertions}:${f.deletions}`).join("|");
 
   // Diffs are fetched on demand: the whole-scope patch, or one file's.
   useEffect(() => {
-    if (!status?.isRepo) return;
+    if (!cwd || status?.isRepo === false) return;
     setLoading(true);
     gitApi
       .diff({ cwd, scope, path: file ?? undefined, ignoreWhitespace: ignoreWs })
       .then((r) => setPatch(r.patch))
       .catch(() => setPatch(""))
       .finally(() => setLoading(false));
-  }, [cwd, scope, file, ignoreWs, status?.isRepo, status?.head, status?.counts.unstaged, edits]);
+  }, [cwd, scope, file, ignoreWs, status?.isRepo, status?.head, worktreeStamp, edits]);
 
-  useEffect(() => {
-    if (!openSha) return;
-    setCommitPatch(null);
-    gitApi
-      .commit(cwd, openSha, ignoreWs)
-      .then((r) => setCommitPatch(r.patch))
-      .catch(() => setCommitPatch(""));
-  }, [openSha, cwd, ignoreWs]);
 
   /**
    * Comments are read for one repo and one branch.
@@ -264,6 +285,30 @@ export const GitPanel = memo(function GitPanel({
       if (otherRows) void loadOther();
     },
   };
+
+  const handlersRef = useRef(handlers);
+  handlersRef.current = handlers;
+  const steadyHandlers = useMemo<CommentHandlers>(
+    () => ({
+      add: (input) => handlersRef.current.add(input),
+      update: (id, change) => handlersRef.current.update(id, change),
+      remove: (id) => handlersRef.current.remove(id),
+    }),
+    [],
+  );
+  const review = useMemo(() => ({ comments, handlers: steadyHandlers, showResolved }), [comments, steadyHandlers, showResolved]);
+  const discardFile = useCallback((path: string, from: string | null) => void discard(from ? [path, from] : [path]), [discard]);
+  const refresh = repo.refresh;
+  const editing = useMemo(
+    () => ({
+      cwd,
+      onSaved: () => {
+        setEdits((n) => n + 1);
+        refresh();
+      },
+    }),
+    [cwd, refresh],
+  );
 
   const openComments = comments.filter((c) => c.status === "open");
   const resolvedCount = comments.length - openComments.length;
@@ -350,6 +395,10 @@ export const GitPanel = memo(function GitPanel({
    * Both paths of a rename move together. Staging only the new one would leave the
    * deletion of the old one behind, which commits the file twice over.
    */
+  const allTree = buildTree(files);
+  const stagedTree = buildTree(stagedFiles);
+  const pendingTree = buildTree(pendingFiles);
+
   const pathsOf = (f: ChangedFile) => (f.from ? [f.path, f.from] : [f.path]);
 
   /**
@@ -357,20 +406,25 @@ export const GitPanel = memo(function GitPanel({
    * discarding it are attached to the file's header in the diff instead — those act
    * on the contents, which is what you are looking at over there.
    */
-  const fileRow = (f: ChangedFile, group: "staged" | "pending" | null) => (
+  const kindOf = (f: ChangedFile) => (f.status === "M" ? (seenKinds.get(f.path) ?? "M") : f.status);
+
+  const fileRow = (f: ChangedFile, group: "staged" | "pending" | null, depth = 0) => (
     <div className="git-file-row" key={`${group ?? "all"}:${f.path}`}>
       <button
         className={`git-file ${file === f.path ? "active" : ""}`}
+        style={{ paddingLeft: 8 + depth * TREE_INDENT }}
         onClick={() => setFile(f.path)}
         title={f.from ? `${f.from} → ${f.path}` : f.path}
       >
-        <span className={`git-status s-${f.untracked ? "new" : f.status.toLowerCase()}`}>
-          {f.untracked ? "?" : f.status}
+        <span className="git-file-name">
+          <b>{f.path.slice(f.path.lastIndexOf("/") + 1)}</b>
         </span>
-        <span className="git-file-name">{f.path}</span>
         <span className="git-file-stat">
           {f.insertions > 0 && <span className="tok-add">+{f.insertions}</span>}
           {f.deletions > 0 && <span className="tok-del">−{f.deletions}</span>}
+        </span>
+        <span className={`git-status s-${f.untracked ? "new" : kindOf(f).toLowerCase()}`} title={STATUS_NAME[f.untracked ? "?" : kindOf(f)]}>
+          {f.untracked ? "U" : kindOf(f)}
         </span>
       </button>
       {group && (
@@ -394,6 +448,38 @@ export const GitPanel = memo(function GitPanel({
    * tree, so the two are reported separately: what you can see here, and what
    * exists elsewhere in this repo.
    */
+  const fileTree = (node: TreeNode<ChangedFile>, group: "staged" | "pending" | null, depth = 0): ReactNode => (
+    <>
+      {node.folders.map((folder) => {
+        const key = `${group ?? "all"}:${folder.path}`;
+        const shut = folded.has(key);
+        return (
+          <Fragment key={key}>
+            <button
+              className="git-folder"
+              style={{ paddingLeft: 8 + depth * TREE_INDENT }}
+              aria-expanded={!shut}
+              title={folder.path}
+              onClick={() =>
+                setFolded((prev) => {
+                  const next = new Set(prev);
+                  if (shut) next.delete(key);
+                  else next.add(key);
+                  return next;
+                })
+              }
+            >
+              <span className={`diff-caret ${shut ? "" : "open"}`} aria-hidden="true" />
+              <span className="git-folder-name">{folder.name}</span>
+            </button>
+            {!shut && fileTree(folder, group, depth + 1)}
+          </Fragment>
+        );
+      })}
+      {node.files.map((f) => fileRow(f, group, depth))}
+    </>
+  );
+
   const shown = new Set(file ? [file] : files.map((f) => f.path));
   const inView = openComments.filter((c) => shown.has(c.path));
   /**
@@ -410,6 +496,16 @@ export const GitPanel = memo(function GitPanel({
    */
   const stranded = openComments.filter((c) => !shown.has(c.path));
 
+  const showing = scope;
+  const show = (next: DiffScope) => {
+    setScope(next);
+    setFile(null);
+  };
+  const reread = () => {
+    setEdits((n) => n + 1);
+    repo.refresh();
+  };
+
   return (
     <div className="panel git-panel">
       {picking && (
@@ -423,61 +519,24 @@ export const GitPanel = memo(function GitPanel({
         />
       )}
 
-      <div className="panel-head">
-        {/* Read-only here: the branch is switched from the controls in the sidebar,
-            so this line says where you are without being a second way to move. */}
-        <h2 className="git-branch">
-          <GitIcon />
-          {status.detached ? `detached ${status.head?.slice(0, 7)}` : status.branch}
-        </h2>
-        <div className="seg">
-          <button className={tab === "changes" ? "active" : ""} onClick={() => setTab("changes")}>
-            Changes
+      <div className="git-bar">
+        <button className="icon-btn square" onClick={toggleList} title={listOpen ? "Hide the file list" : "Show the file list"} aria-label={listOpen ? "Hide the file list" : "Show the file list"} aria-expanded={listOpen}>
+          <PanelLeftIcon />
+        </button>
+        <div className="seg" role="tablist" aria-label="What to show">
+          <button role="tab" aria-selected={showing === "uncommitted"} className={showing === "uncommitted" ? "active" : ""} onClick={() => show("uncommitted")}>
+            Uncommitted
+            {(status.counts.staged + status.counts.unstaged + status.counts.untracked) > 0 && <em>{(status.counts.staged + status.counts.unstaged + status.counts.untracked)}</em>}
           </button>
-          <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>
-            History
+          <button role="tab" aria-selected={showing === "branch"} className={showing === "branch" ? "active" : ""} onClick={() => show("branch")}>
+            Whole branch
+            {branchList && branchList.length > 0 && <em>{branchList.length}</em>}
           </button>
         </div>
-      </div>
-
-      <p className="hint git-meta">
-        {status.name}
-        {status.base && !status.onBase && ` · ${status.aheadOfBase} commit${status.aheadOfBase === 1 ? "" : "s"} over ${status.base}`}
-        {status.onBase && status.base && ` · on the base branch (${status.base})`}
-      </p>
-
-      {tab === "changes" ? (
-        <>
-          <div className="git-controls">
-            <div className="seg">
-              <button className={scope === "uncommitted" ? "active" : ""} onClick={() => { setScope("uncommitted"); setFile(null); }}>
-                Uncommitted
-                {status.counts.staged + status.counts.unstaged + status.counts.untracked > 0 &&
-                  ` (${status.counts.staged + status.counts.unstaged + status.counts.untracked})`}
-              </button>
-              <button className={scope === "branch" ? "active" : ""} onClick={() => { setScope("branch"); setFile(null); }}>
-                Whole branch{branchList ? ` (${branchList.length})` : ""}
-              </button>
-            </div>
-            <span style={{ flex: 1 }} />
-            {(cwd || root) && (
-              <a
-                className="icon-btn"
-                href={`vscode://file${cwd || root}`}
-                title={`Open ${cwd || root} in VS Code`}
-              >
-                <EditorIcon /> Open in VS Code
-              </a>
-            )}
-            {/* The diff can only offer files something has already changed. This is
-                the way to the rest of the repository. */}
-            <button
-              className="icon-btn"
-              onClick={() => setPicking(true)}
-              title="Open any file in this repository for editing"
-            >
-              <PencilIcon /> Open a file
-            </button>
+        <span className="git-bar-meta">
+          {status.base && !status.onBase && `${status.aheadOfBase} commit${status.aheadOfBase === 1 ? "" : "s"} over ${status.base}`}
+          {status.onBase && status.base && `On the base branch (${status.base})`}
+        </span>
             <div className="seg">
               <button className={mode === "unified" ? "active" : ""} onClick={() => saveUi({ diffMode: "unified" })}>
                 Unified
@@ -486,31 +545,37 @@ export const GitPanel = memo(function GitPanel({
                 Split
               </button>
             </div>
-            <label className="check" title="Hide whitespace-only changes">
-              <input
-                type="checkbox"
-                checked={ignoreWs}
-                onChange={(e) => saveUi({ diffIgnoreWhitespace: e.target.checked })}
-              />
-              Ignore whitespace
-            </label>
-          </div>
+        <span className="git-bar-tools">
+          <button className="icon-btn square" onClick={() => setPicking(true)} title="Open any file in this repository for editing" aria-label="Open a file">
+            <PencilIcon />
+          </button>
+          {(cwd || root) && (
+            <a className="icon-btn square" href={`vscode://file${cwd || root}`} title={`Open ${cwd || root} in VS Code`} aria-label="Open in VS Code">
+              <EditorIcon />
+            </a>
+          )}
+          <button className="icon-btn square" onClick={reread} title="Re-read the repository. It also refreshes by itself every few seconds." aria-label="Refresh">
+            <RefreshIcon />
+          </button>
+        </span>
+      </div>
 
+      <>
           {scope === "branch" && status.onBase && (
             <div className="hint" style={{ marginBottom: 10 }}>
               You are on {status.base ?? "the base branch"}, so there is nothing this branch adds.
             </div>
           )}
 
-          <div className="git-split">
-            <div className="git-side">
+          <div className={`git-split${listOpen ? "" : " no-side"}`}>
+            <div className={`git-side${listOpen ? "" : " shut"}`}>
               <div className="git-files">
-                <button className={`git-file ${file === null ? "active" : ""}`} onClick={() => setFile(null)}>
-                  <span className="git-file-name">All files</span>
-                  <span className="git-file-stat">{files.length}</span>
+                <button className={`git-all ${file === null ? "active" : ""}`} onClick={() => setFile(null)}>
+                  <span>All files</span>
+                  <em>{files.length}</em>
                 </button>
 
-                {!staging && files.map((f) => fileRow(f, null))}
+                {!staging && fileTree(allTree, null)}
 
                 {staging && stagedFiles.length > 0 && (
                   <div className="git-group">
@@ -520,7 +585,7 @@ export const GitPanel = memo(function GitPanel({
                     </button>
                   </div>
                 )}
-                {staging && stagedFiles.map((f) => fileRow(f, "staged"))}
+                {staging && fileTree(stagedTree, "staged")}
 
                 {staging && pendingFiles.length > 0 && (
                   <div className="git-group">
@@ -530,7 +595,7 @@ export const GitPanel = memo(function GitPanel({
                     </button>
                   </div>
                 )}
-                {staging && pendingFiles.map((f) => fileRow(f, "pending"))}
+                {staging && fileTree(pendingTree, "pending")}
 
                 {files.length === 0 && <div className="hint" style={{ padding: "8px 4px" }}>Nothing changed.</div>}
               </div>
@@ -758,22 +823,12 @@ export const GitPanel = memo(function GitPanel({
                   fileHref={editorHref}
                   // Only the working tree has anything to discard; a branch-scope
                   // patch is commits, which this panel does not rewrite.
-                  onDiscard={
-                    scope === "uncommitted"
-                      ? (path, from) => void discard(from ? [path, from] : [path])
-                      : undefined
-                  }
+                  onDiscard={scope === "uncommitted" ? discardFile : undefined}
                   /* Both scopes edit the same thing — the file on disk — so a fix
                      made while reading the branch diff lands as an uncommitted
                      change, and both lists show it on the next read. */
-                  edit={{
-                    cwd,
-                    onSaved: () => {
-                      setEdits((n) => n + 1);
-                      repo.refresh();
-                    },
-                  }}
-                  review={repoRoot ? { comments, handlers, showResolved } : undefined}
+                  edit={editing}
+                  review={repoRoot ? review : undefined}
                   emptyLabel={
                     scope === "uncommitted" ? "Working tree is clean." : "This branch adds no changes."
                   }
@@ -781,47 +836,7 @@ export const GitPanel = memo(function GitPanel({
               )}
             </div>
           </div>
-        </>
-      ) : (
-        <div className="git-history">
-          <p className="hint">
-            {status.base && !status.onBase
-              ? `Commits on ${status.branch} that ${status.base} does not have.`
-              : `Recent commits on ${status.branch}.`}
-          </p>
-          {commits === null ? (
-            <div className="empty">Reading log…</div>
-          ) : commits.length === 0 ? (
-            <div className="empty">No commits to show.</div>
-          ) : (
-            commits.map((c) => (
-              <div className={`commit ${openSha === c.sha ? "open" : ""}`} key={c.sha}>
-                <button
-                  className="commit-head"
-                  onClick={() => setOpenSha(openSha === c.sha ? null : c.sha)}
-                >
-                  <span className="commit-sha">{c.short}</span>
-                  <span className="commit-subject">{c.subject}</span>
-                  <span className="commit-meta">
-                    {c.author} · {fmtAgo(c.ts)} · {c.files} file{c.files === 1 ? "" : "s"}
-                    {c.insertions > 0 && <span className="tok-add"> +{c.insertions}</span>}
-                    {c.deletions > 0 && <span className="tok-del"> −{c.deletions}</span>}
-                  </span>
-                </button>
-                {openSha === c.sha && (
-                  <div className="commit-body">
-                    {commitPatch === null ? (
-                      <div className="empty">Reading commit…</div>
-                    ) : (
-                      <DiffView patch={commitPatch} mode={mode} fileHref={editorHref} emptyLabel="Empty commit." />
-                    )}
-                  </div>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-      )}
+      </>
     </div>
   );
 });

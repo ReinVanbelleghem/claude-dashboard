@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { calendarApi, type Attendee, type Availability, type CalendarEvent, type CalendarInfo, type CalendarPerson, type EventDraft, type EventPatch, type EventRef, type Task, type TaskProject } from "../../api.ts";
 import { PeoplePicker } from "./PeoplePicker.tsx";
-import { canReply, replyOf, type Reply } from "../../../shared/calendar.ts";
+import { EVENT_KIND_LABEL, canReply, replyOf, workingLocationLabel, type EventKind, type EventStatus, type Reply, type WorkingLocation } from "../../../shared/calendar.ts";
 import type { TaskPatch } from "../../../shared/tasks.ts";
 import type { Priority } from "../../../shared/taskDates.ts";
 import { TASK_COLORS, type TaskColor } from "../../../shared/tasks.ts";
-import { CalendarIcon, CheckIcon, ClockIcon, DocIcon, ExternalIcon, HelpIcon, PencilIcon, PinIcon, RepeatIcon, TagIcon, TasksIcon, TrashIcon, UsersIcon, VideoIcon, XIcon } from "../Icons.tsx";
+import { BuildingIcon, CalendarIcon, CheckIcon, ClockIcon, DocIcon, ExternalIcon, HelpIcon, PencilIcon, PinIcon, RepeatIcon, TagIcon, TasksIcon, TrashIcon, UsersIcon, VideoIcon, XIcon } from "../Icons.tsx";
 import { Select } from "../Select.tsx";
+import { DatePicker } from "../DatePicker.tsx";
 import { Markdown } from "../Markdown.tsx";
 import { ServiceMark } from "../tasks/ServiceMark.tsx";
 import { extractUrls, linkInfo } from "../../../shared/taskLinks.ts";
@@ -22,7 +23,23 @@ export type CalendarTarget =
 export type TaskDraft = { content: string; description: string; projectId: number | undefined; dueDate: string; dueTime: string | null };
 
 type Span = "this" | "future";
-type Kind = "event" | "task";
+type Kind = "event" | "task" | EventKind;
+
+const STATUS_KINDS: EventKind[] = ["outOfOffice", "focusTime", "workingLocation"];
+const isStatusKind = (kind: Kind): kind is EventKind => kind !== "event" && kind !== "task";
+const PLACES: { type: WorkingLocation["type"]; label: string }[] = [
+  { type: "home", label: "Home" },
+  { type: "office", label: "Office" },
+  { type: "custom", label: "Somewhere else" },
+];
+
+function statusFacts(status: EventStatus): string[] {
+  if (status.kind === "workingLocation") return [`Working from: ${workingLocationLabel(status.location)}`];
+  return [
+    status.autoDecline ? "Google declines meetings that fall inside it" : "Meetings are not declined for you",
+    ...(status.kind === "focusTime" && status.doNotDisturb ? ["Google Chat is muted while it runs"] : []),
+  ];
+}
 
 const GOOGLE_NAME = /google|gmail/i;
 
@@ -225,6 +242,7 @@ function EventDetails({
           <h3>{event.title}</h3>
           <p>
             {whenText(event)}
+            {event.status && <span className="cal-tag">{EVENT_KIND_LABEL[event.status.kind]}</span>}
             {event.recurring && <span className="cal-tag"><RepeatIcon /> Repeats</span>}
           </p>
         </div>
@@ -241,6 +259,13 @@ function EventDetails({
             <CalendarIcon />
             <span>{event.calendar}{event.account !== event.calendar && <em>{event.account}</em>}</span>
           </div>
+          {event.status &&
+            statusFacts(event.status).map((fact) => (
+              <div className="cal-row" key={fact}>
+                {event.status!.kind === "workingLocation" ? <BuildingIcon /> : <ClockIcon />}
+                <span>{fact}</span>
+              </div>
+            ))}
           {event.location && (
             <div className="cal-row">
               <PinIcon />
@@ -394,7 +419,20 @@ function EventForm({
   const [showWhere, setShowWhere] = useState(Boolean(existing?.location));
   const [showNotes, setShowNotes] = useState(initialNotes !== "");
   const [span, setSpan] = useState<Span>("this");
-  const [kind, setKind] = useState<Kind>("event");
+  const [kind, setKind] = useState<Kind>(existing?.status?.kind ?? "event");
+  const [autoDecline, setAutoDecline] = useState(existing?.status?.autoDecline ?? false);
+  const [doNotDisturb, setDoNotDisturb] = useState(existing?.status?.doNotDisturb ?? false);
+  const [place, setPlace] = useState<WorkingLocation["type"]>(existing?.status?.location?.type ?? "home");
+  const [placeLabel, setPlaceLabel] = useState(existing?.status?.location?.label ?? "");
+  const mainGoogle = writable.filter((c) => c.google && c.isDefault);
+  const statusKind = isStatusKind(kind) ? kind : null;
+  const status: EventStatus | null =
+    statusKind === "workingLocation"
+      ? { kind: statusKind, location: { type: place, label: place === "home" ? undefined : placeLabel.trim() || undefined } }
+      : statusKind
+        ? { kind: statusKind, autoDecline, ...(statusKind === "focusTime" ? { doNotDisturb } : {}) }
+        : null;
+  const statusTitle = status ? (status.kind === "workingLocation" ? workingLocationLabel(status.location) : EVENT_KIND_LABEL[status.kind]) : "";
   const [projectId, setProjectId] = useState(() => String(projects.find((p) => p.isInbox)?.id ?? projects[0]?.id ?? ""));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -412,7 +450,7 @@ function EventForm({
   const inGoogle = picked?.google ?? null;
   const viaMacCopy = !inGoogle && picked !== undefined && googleAccounts.length > 0 && isGoogleCalendar(picked.title, picked.account, googleAccounts);
   const account = inGoogle ?? (viaMacCopy ? (googleAccounts[0] ?? "") : "");
-  const canInvite = !asTask && account !== "" && (!existing || inGoogle !== null || existing.externalId !== null);
+  const canInvite = !asTask && !statusKind && account !== "" && (!existing || inGoogle !== null || existing.externalId !== null);
   const usesGoogle = canInvite && (guests.length > 0 || rooms.length > 0 || meet);
   const guestsChanged = existing !== null && (guests.join() !== invited(false).join() || rooms.join() !== invited(true).join());
   const startMs = allDay ? dayStart(startDay) : new Date(`${startDay}T${startTime}`).getTime();
@@ -433,6 +471,11 @@ function EventForm({
   useEffect(() => {
     if (!calendarId && writable.length) setCalendarId(writable.find((c) => c.isDefault)?.id ?? writable[0].id);
   }, [calendarId, writable]);
+
+  const pickKind = (next: Kind) => {
+    setKind(next);
+    if (isStatusKind(next) && !mainGoogle.some((c) => c.id === calendarId) && mainGoogle[0]) setCalendarId(mainGoogle[0].id);
+  };
 
   const moveStartDay = (day: string) => {
     if (!day) return;
@@ -473,7 +516,10 @@ function EventForm({
     const end = allDay ? dayStart(endDay) : new Date(`${endDay}T${endTime}`).getTime();
     if (Number.isNaN(start) || Number.isNaN(end)) return setError("Pick a start and an end.");
     if (end < start || (!allDay && end === start)) return setError("The end has to be after the start.");
-    const draft: EventDraft = { title: title.trim() || "New event", start, end, allDay, location: location.trim(), notes: notes.trim(), calendarId: calendarId || undefined };
+    if (status?.kind === "workingLocation" && existing && allDay && end !== start) return setError("A working location covers one day. Add another one for the next day.");
+    const draft: EventDraft = status
+      ? { title: title.trim() || statusTitle, start, end, allDay, notes: notes.trim(), calendarId: calendarId || undefined, status }
+      : { title: title.trim() || "New event", start, end, allDay, location: location.trim(), notes: notes.trim(), calendarId: calendarId || undefined };
     setBusy(true);
     setError(null);
     const saveGuests = existing && guestsChanged ? calendarApi.setGuests(account, existing, guests, rooms) : Promise.resolve();
@@ -495,18 +541,21 @@ function EventForm({
       }}
     >
       <div className="cal-modal-head">
-        <h3>{existing ? "Edit event" : asTask ? "New task" : "New event"}</h3>
-        {!existing && (
-          <div className="seg" role="tablist" aria-label="What to add">
-            <button type="button" role="tab" aria-selected={kind === "event"} className={kind === "event" ? "active" : ""} onClick={() => setKind("event")}>Event</button>
-            <button type="button" role="tab" aria-selected={kind === "task"} className={kind === "task" ? "active" : ""} onClick={() => setKind("task")}>Task</button>
-          </div>
-        )}
+        <h3>{existing ? `Edit ${statusKind ? EVENT_KIND_LABEL[statusKind].toLowerCase() : "event"}` : asTask ? "New task" : statusKind ? EVENT_KIND_LABEL[statusKind] : "New event"}</h3>
         <button type="button" className="icon-btn square" aria-label="Close" onClick={onClose}><XIcon /></button>
       </div>
+      {!existing && (
+        <div className="seg cal-kind" role="tablist" aria-label="What to add">
+          {(["event", "task", ...(mainGoogle.length ? STATUS_KINDS : [])] as Kind[]).map((k) => (
+            <button type="button" role="tab" key={k} aria-selected={kind === k} className={kind === k ? "active" : ""} onClick={() => pickKind(k)}>
+              {k === "event" ? "Event" : k === "task" ? "Task" : EVENT_KIND_LABEL[k]}
+            </button>
+          ))}
+        </div>
+      )}
       <label className="field">
         <span>{asTask ? "Task" : "Title"}</span>
-        <input className="search" autoFocus value={title} placeholder={asTask ? "What needs doing?" : "New event"} onChange={(e) => setTitle(e.target.value)} />
+        <input className="search" autoFocus value={title} placeholder={asTask ? "What needs doing?" : statusKind ? statusTitle : "New event"} onChange={(e) => setTitle(e.target.value)} />
       </label>
       <div className="cal-field-head">
         <span>{asTask ? "Due" : "When"}</span>
@@ -516,7 +565,7 @@ function EventForm({
         </label>
       </div>
       <div className="cal-when-row">
-        <input className="search" type="date" aria-label={asTask ? "Due day" : "Start day"} value={startDay} onChange={(e) => moveStartDay(e.target.value)} />
+        <DatePicker ariaLabel={asTask ? "Due day" : "Start day"} value={startDay} onChange={moveStartDay} />
         {!allDay && <input className="search" type="time" aria-label="Start time" step={900} value={startTime} onChange={(e) => moveStartTime(e.target.value)} />}
         {!asTask && !allDay && (
           <>
@@ -527,7 +576,7 @@ function EventForm({
         {!asTask && (allDay || endDay !== startDay) && (
           <>
             {allDay && <i>–</i>}
-            <input className="search" type="date" aria-label="End day" value={endDay} min={startDay} onChange={(e) => e.target.value && setEndDay(e.target.value)} />
+            <DatePicker ariaLabel="End day" value={endDay} min={startDay} onChange={setEndDay} />
           </>
         )}
       </div>
@@ -541,6 +590,49 @@ function EventForm({
             options={projects.map((p) => ({ value: String(p.id), label: p.name, dot: TASK_COLORS[(p.color ?? "grey") as TaskColor] ?? TASK_COLORS.grey }))}
           />
         </div>
+      ) : statusKind ? (
+        <>
+          {statusKind === "workingLocation" ? (
+            <>
+              <div className="field">
+                <span>Working from</span>
+                <div className="seg" role="radiogroup" aria-label="Working from">
+                  {PLACES.map((p) => (
+                    <button type="button" role="radio" key={p.type} aria-checked={place === p.type} className={place === p.type ? "active" : ""} onClick={() => setPlace(p.type)}>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {place !== "home" && (
+                <label className="field">
+                  <span>{place === "office" ? "Office name" : "Where"}</span>
+                  <input className="search" value={placeLabel} placeholder={place === "office" ? "Office" : "Somewhere else"} onChange={(e) => setPlaceLabel(e.target.value)} />
+                </label>
+              )}
+            </>
+          ) : (
+            <div className="cal-status-switches">
+              <label className="switch">
+                <input type="checkbox" checked={autoDecline} onChange={(e) => setAutoDecline(e.target.checked)} />
+                <span>Automatically decline meetings</span>
+              </label>
+              {statusKind === "focusTime" && (
+                <label className="switch">
+                  <input type="checkbox" checked={doNotDisturb} onChange={(e) => setDoNotDisturb(e.target.checked)} />
+                  <span>Mute Google Chat</span>
+                </label>
+              )}
+            </div>
+          )}
+          {!existing && mainGoogle.length > 1 && (
+            <div className="field">
+              <span>Account</span>
+              <Select ariaLabel="Account" value={calendarId} onChange={setCalendarId} options={mainGoogle.map((c) => ({ value: c.id, label: c.account, dot: c.color ?? "var(--accent)" }))} />
+            </div>
+          )}
+          {!existing && <p className="hint">Goes on {mainGoogle.find((c) => c.id === calendarId)?.account ?? "your"} main Google calendar, where colleagues see it.</p>}
+        </>
       ) : (
         <>
           <div className="field">
@@ -582,15 +674,15 @@ function EventForm({
           )}
         </>
       )}
-      {showNotes && (
+      {showNotes && statusKind !== "workingLocation" && (
         <label className="field">
           <span>Notes</span>
           <textarea className="search" rows={3} autoFocus={!initialNotes} value={notes} onChange={(e) => setNotes(e.target.value)} />
         </label>
       )}
-      {((!showWhere && !asTask) || !showNotes) && (
+      {((!showWhere && !asTask && !statusKind) || (!showNotes && statusKind !== "workingLocation")) && (
         <div className="cal-add-links">
-          {!showWhere && !asTask && <button type="button" className="link-btn inline" onClick={() => setShowWhere(true)}>+ Location</button>}
+          {!showWhere && !asTask && !statusKind && <button type="button" className="link-btn inline" onClick={() => setShowWhere(true)}>+ Location</button>}
           {!showNotes && <button type="button" className="link-btn inline" onClick={() => setShowNotes(true)}>+ Notes</button>}
         </div>
       )}
@@ -599,7 +691,7 @@ function EventForm({
       {error && <p className="cal-error">{error}</p>}
       <div className="modal-actions">
         <button type="button" className="icon-btn" onClick={onClose}>Cancel</button>
-        <button type="submit" className="icon-btn primary" disabled={busy}>{existing ? "Save" : asTask ? "Add task" : "Add event"}</button>
+        <button type="submit" className="icon-btn primary" disabled={busy}>{existing ? "Save" : asTask ? "Add task" : statusKind ? "Save" : "Add event"}</button>
       </div>
     </form>
   );
@@ -782,10 +874,10 @@ function TaskForm({
       </div>
       <input className="search cal-task-title" aria-label="Task" placeholder="Task name" autoFocus value={content} onChange={(e) => setContent(e.target.value)} />
       <div className="cal-task-fields">
-        <label className="field">
+        <div className="field">
           <span>Due</span>
-          <input className="search" type="date" value={dueDate} onChange={(e) => e.target.value && setDueDate(e.target.value)} />
-        </label>
+          <DatePicker ariaLabel="Due" value={dueDate} onChange={setDueDate} />
+        </div>
         <div className="field">
           <span>Time</span>
           {timed ? (

@@ -10,6 +10,14 @@
 
 export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
 
+export const PERMISSION_MODES: PermissionMode[] = ["auto", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
+
+export const FALLBACK_PERMISSION_MODE: PermissionMode = "auto";
+
+export function permissionModeOr(value: unknown, fallback: PermissionMode = FALLBACK_PERMISSION_MODE): PermissionMode {
+  return PERMISSION_MODES.includes(value as PermissionMode) ? (value as PermissionMode) : fallback;
+}
+
 export type Schedule = {
   enabled: boolean;
   kind: "weekly" | "interval" | "cron";

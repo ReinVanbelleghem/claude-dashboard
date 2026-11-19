@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { agentApi, modelApi, type PermissionMode, type Settings } from "../api.ts";
 import { MODES, MODE_HELP, MODE_LABEL, STARTER_MODELS } from "./Conversation.tsx";
-import { renderTitle } from "../../shared/templates.ts";
+import { permissionModeOr, renderTitle } from "../../shared/templates.ts";
 import { FolderIcon, SearchIcon } from "./Icons.tsx";
 import { LocationFields, useLocation } from "./LocationPicker.tsx";
 import { Select } from "./Select.tsx";
@@ -44,7 +44,7 @@ export function NewSessionModal({
   const { cwd, setCwd, setCustom, research, setResearch, repo, manage } = loc;
   const [model, setModel] = useState(settings?.ui.defaultModel || "default");
   const [title, setTitle] = useState("");
-  const [mode, setMode] = useState<PermissionMode>("auto");
+  const [mode, setMode] = useState<PermissionMode>(permissionModeOr(settings?.ui.defaultPermissionMode));
   /** A template chosen at the top: its prompt rides along on start. */
   const [fromTemplate, setFromTemplate] = useState<string | null>(null);
   const templatePrompt = () => settings?.templates.find((t) => t.id === fromTemplate)?.prompt.trim() || undefined;

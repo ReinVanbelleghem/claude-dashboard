@@ -5,6 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { ptyUrl, terminalApi } from "../api.ts";
 import { terminalIdOf, type WorkspaceTerminal } from "../../shared/terminals.ts";
+import { EditableTitle } from "./EditableTitle.tsx";
 import { TerminalIcon, TrashIcon } from "./Icons.tsx";
 import { CONTROL_PREFIX, TERMINAL_FONT, TERMINAL_THEME } from "./services/TerminalSheet.tsx";
 
@@ -51,7 +52,11 @@ export function TerminalPane({ session }: { session: string }) {
     };
   }, [session]);
 
-  return <div className="term-host" ref={hostRef} />;
+  return (
+    <div className="term-host">
+      <div className="term-fit" ref={hostRef} />
+    </div>
+  );
 }
 
 /** Looks a terminal up by the key sessions are opened with; null while loading, false once it is known to be gone. */
@@ -86,7 +91,7 @@ export function TerminalPanel({
   const terminal = useTerminal(id);
   return (
     <>
-      <div className="drawer-head term-head" onPointerDown={onHeadPointerDown}>
+      <div className="drawer-head term-head kind-terminal" onPointerDown={onHeadPointerDown}>
         {headStart}
         <h3>
           <TerminalIcon /> {terminal ? terminal.title : "Terminal"}
@@ -116,6 +121,7 @@ export function TerminalPanel({
 /** A terminal on a page of its own, filling the window the way a session's conversation does. */
 export function TerminalPage({ id, onBack, onOpenWorkspace }: { id: string; onBack: () => void; onOpenWorkspace?: (workspaceId: number) => void }) {
   const terminal = useTerminal(id);
+  const [renamed, setRenamed] = useState<string | null>(null);
   return (
     <div className="page session-chat">
       <div className="page-head">
@@ -123,7 +129,16 @@ export function TerminalPage({ id, onBack, onOpenWorkspace }: { id: string; onBa
           ← Back
         </button>
         <div>
-          <h1>{terminal ? terminal.title : "Terminal"}</h1>
+          <EditableTitle
+            as="h1"
+            value={terminal ? (renamed ?? terminal.title) : null}
+            placeholder="Terminal"
+            onRename={async (title) => {
+              if (!terminal) return;
+              await terminalApi.rename(terminal.id, title);
+              setRenamed(title);
+            }}
+          />
           <p className="page-sub">{terminal ? terminal.folder.replace(/^\/Users\/[^/]+/, "~") : ""}</p>
         </div>
         <span style={{ flex: 1 }} />

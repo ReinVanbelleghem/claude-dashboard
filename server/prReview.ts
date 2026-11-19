@@ -57,6 +57,19 @@ async function viewedPaths(pr: PrRef): Promise<Set<string>> {
   }
 }
 
+const mergeBases = new Map<string, string>();
+const MERGE_BASES_KEPT = 500;
+
+async function mergeBase(pr: PrRef, base: string, head: string): Promise<string> {
+  const key = `${repoPath(pr)}:${base}...${head}`;
+  const known = mergeBases.get(key);
+  if (known) return known;
+  const compare = await rest.get<{ merge_base_commit: { sha: string } }>(`${repoPath(pr)}/compare/${base}...${head}?per_page=1`);
+  if (mergeBases.size >= MERGE_BASES_KEPT) mergeBases.delete(mergeBases.keys().next().value!);
+  mergeBases.set(key, compare.merge_base_commit.sha);
+  return compare.merge_base_commit.sha;
+}
+
 export async function listFiles(pr: PrRef): Promise<FilesResponse> {
   const [detail, files, viewed, viewer] = await Promise.all([
     rest.get<{ head: { sha: string }; base: { sha: string } }>(`${repoPath(pr)}/pulls/${pr.number}`),
@@ -68,12 +81,10 @@ export async function listFiles(pr: PrRef): Promise<FilesResponse> {
    * The diff GitHub shows is against the merge base, not the base branch's tip — the
    * same three-dot diff `git diff base...head` means — so that is the base we report.
    */
-  const compare = await rest.get<{ merge_base_commit: { sha: string } }>(
-    `${repoPath(pr)}/compare/${detail.base.sha}...${detail.head.sha}?per_page=1`,
-  );
+  const baseSha = await mergeBase(pr, detail.base.sha, detail.head.sha);
   return {
     headSha: detail.head.sha,
-    baseSha: compare.merge_base_commit.sha,
+    baseSha,
     viewer,
     files: files.map((f) => ({
       path: f.filename,

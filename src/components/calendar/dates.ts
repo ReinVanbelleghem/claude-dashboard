@@ -97,10 +97,11 @@ export function whenText(e: Pick<CalendarEvent, "start" | "end" | "allDay">): st
 
 export type Placed<T> = T & { column: number; columns: number };
 
-const MIN_LAYOUT_MINUTES = 25;
-
-/** Side-by-side columns for items that overlap in time, the way a calendar stacks clashing meetings. */
-export function layoutColumns<T extends { from: number; to: number }>(items: T[]): Placed<T>[] {
+/**
+ * Side-by-side columns for items that overlap in time, the way a calendar stacks clashing meetings.
+ * An item counts as at least `minMinutes` long: the room its smallest drawn box takes up.
+ */
+export function layoutColumns<T extends { from: number; to: number }>(items: T[], minMinutes = 25): Placed<T>[] {
   const sorted = [...items].sort((a, b) => a.from - b.from || b.to - a.to);
   const placed: Placed<T>[] = [];
   let cluster: Placed<T>[] = [];
@@ -113,7 +114,7 @@ export function layoutColumns<T extends { from: number; to: number }>(items: T[]
     columnEnds = [];
   };
   for (const item of sorted) {
-    const to = Math.max(item.to, item.from + MIN_LAYOUT_MINUTES);
+    const to = Math.max(item.to, item.from + minMinutes);
     if (item.from >= clusterEnd && cluster.length) flush();
     let column = columnEnds.findIndex((end) => end <= item.from);
     if (column === -1) column = columnEnds.length;

@@ -6,6 +6,7 @@
  */
 
 export type TileRect = { x: number; y: number; w: number; h: number };
+export type LayerSize = { w: number; h: number };
 export type TileState = {
   id: string;
   rect: TileRect;
@@ -28,8 +29,8 @@ export const TILE_MIN_HEIGHT = 260;
 const CASCADE_STEP = 32;
 const CASCADE_SLOTS = 8;
 
-/** Room kept free at the bottom of the viewport, so a snapped tile does not sit flush on the window's edge. */
-const BOTTOM_CLEARANCE = 12;
+/** The extra room snapped tiles used to leave at the bottom, kept only to recognise tiles saved against it. */
+const LEGACY_BOTTOM_CLEARANCE = 12;
 
 /** The mime type a session card's native drag carries its id in. */
 export const SESSION_DRAG_MIME = "application/x-claude-session";
@@ -74,19 +75,18 @@ const cssPx = (name: string): number => {
  */
 export const layerInset = (): number => cssPx("--sidebar-w");
 
-/** And from the top: the top bar's height, so a tile snapped up stops under it. */
-export const layerTop = (): number => cssPx("--topbar-h");
+/** And from the top: the top bar and the desktop bar under it, so a tile snapped up stops below both. */
+export const layerTop = (): number => cssPx("--topbar-h") + cssPx("--desk-bar-h");
 
 /** A pointer position in the tile layer's own coordinates. */
 export const layerPoint = (clientX: number, clientY: number) => ({ x: clientX - layerInset(), y: clientY - layerTop() });
 
-/** The vertical span actually free for a tile — the viewport height, minus
- * the clearance at the bottom. Shared by `rectForZone` and the screen-edge
- * magnetism below so a manually dragged tile's bottom stops at the same line
- * a zone-snapped one's does. */
+/** The vertical span actually free for a tile — the viewport height. Shared
+ * by `rectForZone` and the screen-edge magnetism below so a manually dragged
+ * tile's bottom stops at the same line a zone-snapped one's does. */
 function usableHeight(): number {
   const { h: vh } = viewport();
-  return Math.max(TILE_MIN_HEIGHT, vh - BOTTOM_CLEARANCE);
+  return Math.max(TILE_MIN_HEIGHT, vh);
 }
 
 /**
@@ -106,29 +106,28 @@ export function clampRect(rect: TileRect): TileRect {
 }
 
 /**
- * Carries a rect across a change in the layer's width — the sidebar opening
- * or closing, or the window being resized. A tile sitting against the right
- * edge keeps its gap to it (and a tile spanning both edges keeps both), so a
- * docked tile stays docked; a tile that was fully visible and would now
- * overhang is pulled back inside. Anything else is only clamped.
+ * Carries a rect across a change in the layer's size — the sidebar opening
+ * or closing, or the window being resized. Every edge scales with the layer, so
+ * every tile takes the same share of the new space it had of the old one:
+ * tiles sitting side by side or stacked stay that way, with no hole opening
+ * between them and none growing at the other's expense. The edge gap is held
+ * fixed and the result is left unrounded, so closing and reopening the sidebar
+ * lands each tile exactly where it started.
  */
-export function refitRect(rect: TileRect, previousWidth: number, nextWidth: number): TileRect {
-  const rightGap = previousWidth - (rect.x + rect.w);
-  const dockedRight = rightGap <= SNAP_EDGE_GAP * 2;
-  const dockedLeft = rect.x <= SNAP_EDGE_GAP * 2;
-  if (dockedRight && dockedLeft) {
-    return clampRect({ ...rect, w: nextWidth - rect.x - SNAP_EDGE_GAP });
-  }
-  if (dockedRight) {
-    const w = Math.min(rect.w, Math.max(nextWidth - 2 * SNAP_EDGE_GAP, TILE_MIN_WIDTH));
-    return clampRect({ ...rect, x: nextWidth - SNAP_EDGE_GAP - w, w });
-  }
-  const wasInside = rect.x >= 0 && rightGap >= 0;
-  if (wasInside && rect.x + rect.w > nextWidth) {
-    const w = Math.min(rect.w, Math.max(nextWidth - SNAP_EDGE_GAP, TILE_MIN_WIDTH));
-    return clampRect({ ...rect, x: Math.max(0, nextWidth - w), w });
-  }
-  return clampRect(rect);
+export function refitRect(rect: TileRect, previous: LayerSize, next: LayerSize): TileRect {
+  const [x, w] = refitSpan(rect.x, rect.w, previous.w, next.w);
+  const [y, h] = refitSpan(rect.y, rect.h, previous.h, next.h);
+  return clampRect({ x, y, w, h });
+}
+
+function refitSpan(start: number, length: number, previous: number, next: number): [number, number] {
+  const previousSpan = previous - 2 * SNAP_EDGE_GAP;
+  const nextSpan = next - 2 * SNAP_EDGE_GAP;
+  if (previous === next || previousSpan <= 0 || nextSpan <= 0) return [start, length];
+  const scale = nextSpan / previousSpan;
+  const from = SNAP_EDGE_GAP + (start - SNAP_EDGE_GAP) * scale;
+  const to = SNAP_EDGE_GAP + (start + length - SNAP_EDGE_GAP) * scale;
+  return [from, to - from];
 }
 
 /** A fresh tile's starting spot: cascaded so opening several in a row doesn't stack them exactly on top of each other. */
@@ -159,12 +158,96 @@ export function readTiles(): TileState[] {
   }
 }
 
-export function writeTiles(tiles: TileState[]) {
+/** One arrangement of tiles. A session can sit on several, placed differently on each. */
+export type Desktop = { id: string; name: string; tiles: TileState[] };
+export type DesktopsState = { desktops: Desktop[]; active: string; width?: number; height?: number };
+
+const DESKTOPS_KEY = "dashboard-desktops";
+
+export const newDesktopId = (): string => `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+/** "Desktop", then "Desktop 2", "Desktop 3": the first number no open desktop is using. */
+export function nextDesktopName(desktops: Desktop[]): string {
+  const taken = new Set(desktops.map((d) => d.name));
+  if (!taken.has("Desktop")) return "Desktop";
+  let n = 2;
+  while (taken.has(`Desktop ${n}`)) n++;
+  return `Desktop ${n}`;
+}
+
+const validTiles = (raw: unknown): TileState[] =>
+  Array.isArray(raw)
+    ? raw
+        .filter((t): t is TileState => !!t && typeof t.id === "string" && typeof t.z === "number" && t.rect)
+        .map((t) => ({ ...t, rect: clampRect(t.rect) }))
+        .map(extendFromLegacyFloor)
+    : [];
+
+function extendFromLegacyFloor(tile: TileState): TileState {
+  const legacyFloor = Math.max(TILE_MIN_HEIGHT, viewport().h - LEGACY_BOTTOM_CLEARANCE) - SNAP_EDGE_GAP;
+  if (Math.abs(tile.rect.y + tile.rect.h - legacyFloor) > 1) return tile;
+  return { ...tile, rect: { ...tile.rect, h: usableHeight() - SNAP_EDGE_GAP - tile.rect.y } };
+}
+
+/** Tiles saved before the desktop bar existed reached further down; pull their bottom edge back into view. */
+function fitBelowBar(tiles: TileState[]): TileState[] {
+  const floor = usableHeight() - SNAP_EDGE_GAP;
+  return tiles.map((t) => {
+    if (t.rect.y + t.rect.h <= floor) return t;
+    return { ...t, rect: { ...t.rect, h: Math.max(TILE_MIN_HEIGHT, floor - t.rect.y) } };
+  });
+}
+
+/** Every desktop and which one is showing. The single layout from before desktops existed becomes the first one. */
+export function readDesktops(): DesktopsState {
   try {
-    localStorage.setItem(TILES_KEY, JSON.stringify(tiles));
+    const parsed = JSON.parse(localStorage.getItem(DESKTOPS_KEY) ?? "null");
+    const desktops: Desktop[] = Array.isArray(parsed?.desktops)
+      ? parsed.desktops
+          .filter((d: Desktop) => !!d && typeof d.id === "string" && typeof d.name === "string")
+          .map((d: Desktop) => ({ id: d.id, name: d.name, tiles: validTiles(d.tiles) }))
+      : [];
+    if (desktops.length > 0) {
+      const width = typeof parsed.width === "number" && parsed.width > 0 ? parsed.width : undefined;
+      const height = typeof parsed.height === "number" && parsed.height > 0 ? parsed.height : undefined;
+      return { desktops, active: desktops.some((d) => d.id === parsed.active) ? parsed.active : desktops[0].id, width, height };
+    }
   } catch {
-    // Storage full or unavailable — tiles just won't survive a reload.
+    return firstDesktop();
   }
+  return firstDesktop();
+}
+
+function firstDesktop(): DesktopsState {
+  const id = newDesktopId();
+  return { desktops: [{ id, name: "Desktop", tiles: fitBelowBar(readTiles().map(extendFromLegacyFloor)) }], active: id };
+}
+
+export function refitDesktops(state: DesktopsState, size: LayerSize): DesktopsState {
+  if (size.w <= 0 || size.h <= 0) return state;
+  if (state.width === size.w && state.height === size.h) return state;
+  const sized = { ...state, width: size.w, height: size.h };
+  if (!state.width) return sized;
+  const from = { w: state.width, h: state.height ?? size.h };
+  const desktops = state.desktops.map((d) => ({ ...d, tiles: d.tiles.map((t) => ({ ...t, rect: refitRect(t.rect, from, size) })) }));
+  return { ...sized, desktops };
+}
+
+export function writeDesktops(state: DesktopsState) {
+  try {
+    localStorage.setItem(DESKTOPS_KEY, JSON.stringify(state));
+  } catch {
+    return;
+  }
+}
+
+/** Puts a session on a desktop, or brings it back up if it is already there. */
+export function showTile(prev: TileState[], ids: string[], rect: TileRect | null, allocZ: () => number, geometry: DropGeometry): TileState[] {
+  const existing = prev.find((t) => ids.includes(t.id));
+  if (existing) {
+    return prev.map((t) => (t.id === existing.id ? { ...t, minimized: false, hiddenByShortcut: false, hiddenByTab: false, z: allocZ() } : t));
+  }
+  return [...prev, { id: ids[0], rect: rect ?? geometry.defaultRect(prev.length), z: allocZ() }];
 }
 
 export type ResizeDir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
@@ -187,6 +270,79 @@ export function resizeRect(start: TileRect, dir: ResizeDir, dx: number, dy: numb
   h = Math.min(h, vh);
   if (dir.includes("n")) y = Math.max(0, y);
   return { x, y, w, h };
+}
+
+type Side = "n" | "s" | "e" | "w";
+export type SeamLink = { id: string; side: Side; rect: TileRect };
+
+const SEAM_REACH = 12;
+const SEAM_ALIGNED = 1;
+
+const edgeAt = (rect: TileRect, side: Side): number =>
+  side === "w" ? rect.x : side === "e" ? rect.x + rect.w : side === "n" ? rect.y : rect.y + rect.h;
+
+const OPPOSITE: Record<Side, Side> = { n: "s", s: "n", e: "w", w: "e" };
+
+function overlapsAcross(a: TileRect, b: TileRect, side: Side): boolean {
+  if (side === "e" || side === "w") return a.y < b.y + b.h && b.y < a.y + a.h;
+  return a.x < b.x + b.w && b.x < a.x + a.w;
+}
+
+export function seamLinks(rect: TileRect, dir: ResizeDir, others: { id: string; rect: TileRect }[]): SeamLink[] {
+  const links: SeamLink[] = [];
+  for (const side of ["n", "s", "e", "w"] as const) {
+    if (!dir.includes(side)) continue;
+    const line = edgeAt(rect, side);
+    const facing = others.filter(
+      (o) => Math.abs(edgeAt(o.rect, OPPOSITE[side]) - line) <= SEAM_REACH && overlapsAcross(rect, o.rect, side),
+    );
+    if (facing.length === 0) continue;
+    for (const o of facing) links.push({ id: o.id, side: OPPOSITE[side], rect: o.rect });
+    for (const o of others) {
+      if (facing.includes(o)) continue;
+      const sameSide = Math.abs(edgeAt(o.rect, side) - line) <= SEAM_ALIGNED;
+      const acrossSeam = Math.abs(edgeAt(o.rect, OPPOSITE[side]) - line) <= SEAM_REACH;
+      const touchesSeam = facing.some((f) => overlapsAcross(o.rect, f.rect, side));
+      if (sameSide && touchesSeam) links.push({ id: o.id, side, rect: o.rect });
+      else if (acrossSeam && facing.some((f) => Math.abs(edgeAt(f.rect, OPPOSITE[side]) - edgeAt(o.rect, OPPOSITE[side])) <= SEAM_ALIGNED))
+        links.push({ id: o.id, side: OPPOSITE[side], rect: o.rect });
+    }
+  }
+  return links;
+}
+
+function moveEdge(rect: TileRect, side: Side, by: number): TileRect {
+  if (side === "e") return { ...rect, w: rect.w + by };
+  if (side === "s") return { ...rect, h: rect.h + by };
+  if (side === "w") return { ...rect, x: rect.x + by, w: rect.w - by };
+  return { ...rect, y: rect.y + by, h: rect.h - by };
+}
+
+function edgeRoom(rect: TileRect, side: Side): [number, number] {
+  const spare = side === "e" || side === "w" ? rect.w - TILE_MIN_WIDTH : rect.h - TILE_MIN_HEIGHT;
+  return side === "e" || side === "s" ? [-spare, Infinity] : [-Infinity, spare];
+}
+
+export function resizeTogether(
+  start: TileRect,
+  dir: ResizeDir,
+  resized: TileRect,
+  links: SeamLink[],
+): { rect: TileRect; linked: { id: string; rect: TileRect }[] } {
+  let rect = start;
+  const moved = new Map<string, TileRect>(links.map((l) => [l.id, l.rect]));
+  for (const side of ["n", "s", "e", "w"] as const) {
+    if (!dir.includes(side)) continue;
+    const followers = links.filter((l) => l.side === side || l.side === OPPOSITE[side]);
+    let by = edgeAt(resized, side) - edgeAt(start, side);
+    for (const l of followers) {
+      const [low, high] = edgeRoom(l.rect, l.side);
+      by = Math.min(Math.max(by, low), high);
+    }
+    rect = moveEdge(rect, side, by);
+    for (const l of followers) moved.set(l.id, moveEdge(moved.get(l.id)!, l.side, by));
+  }
+  return { rect, linked: [...moved].map(([id, r]) => ({ id, rect: r })) };
 }
 
 /** How close a dragged edge has to land next to a neighbor's before it snaps

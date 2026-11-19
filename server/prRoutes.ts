@@ -5,6 +5,7 @@ import * as review from "./prReview.ts";
 import * as runs from "./prRuns.ts";
 import { getPr, listPeople, listPrs, prOverview, prTemplate, trackedRepos } from "./prs.ts";
 import * as watch from "./prWatch.ts";
+import { branchGraph } from "./prRepos.ts";
 
 /**
  * `/api/pr/...` — everything the review pages ask the daemon.
@@ -178,6 +179,20 @@ async function route(req: Request, url: URL, seg: string[]): Promise<Response> {
   }
 
   if (action === "commits" && method === "GET") return json({ commits: await review.listCommits(pr) });
+  if (action === "graph" && method === "GET") {
+    const detail = await getPr(pr.owner, pr.repo, pr.number);
+    try {
+      const commits = await branchGraph(pr.owner, pr.repo, detail.headSha, detail.baseSha);
+      for (const c of commits) {
+        if (c.hash === detail.headSha) c.refs = { branches: [detail.headRefName], remotes: [], tags: [], head: true };
+        else if (c.hash === detail.baseSha) c.refs = { branches: [detail.baseRefName], remotes: [], tags: [], head: false };
+        else c.refs = { branches: [], remotes: [], tags: [], head: false };
+      }
+      return json({ ok: true, commits, head: detail.headSha, branch: detail.headRefName, worktrees: [], error: null });
+    } catch (e) {
+      return json({ ok: false, commits: [], head: null, branch: null, worktrees: [], error: (e as Error).message });
+    }
+  }
 
   if (action === "commit" && method === "GET") {
     const sha = url.searchParams.get("sha") ?? "";

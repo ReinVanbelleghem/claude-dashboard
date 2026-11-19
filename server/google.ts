@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Attendee, Availability, CalendarEvent, CalendarInfo, EventDraft, GoogleStatus, Person, Reply } from "../shared/calendar.ts";
+import { EVENT_KIND_LABEL, workingLocationLabel, type Attendee, type Availability, type CalendarEvent, type CalendarInfo, type EventDraft, type EventStatus, type GoogleStatus, type Person, type Reply, type WorkingLocation } from "../shared/calendar.ts";
 import { addDays, localDay } from "../shared/taskDates.ts";
 import { DATA_DIR, PORT } from "./paths.ts";
 
@@ -211,7 +211,12 @@ type GoogleEvent = {
   end?: GoogleMoment;
   attendees?: GoogleAttendee[];
   organizer?: { email?: string; displayName?: string; self?: boolean };
+  eventType?: string;
+  outOfOfficeProperties?: { autoDeclineMode?: string };
+  focusTimeProperties?: { autoDeclineMode?: string; chatStatus?: string };
+  workingLocationProperties?: GoogleWorkingLocation;
 };
+type GoogleWorkingLocation = { type?: string; homeOffice?: unknown; officeLocation?: { label?: string }; customLocation?: { label?: string } };
 type GoogleCalendar = { id: string; summary?: string; summaryOverride?: string; backgroundColor?: string; accessRole?: string; primary?: boolean };
 
 const CALENDAR_LIST_TTL_MS = 5 * 60_000;
@@ -269,6 +274,52 @@ const REPLY: Record<string, Attendee["status"]> = { accepted: "accepted", declin
 
 const plainText = (html: string) => html.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").trim();
 
+const DECLINE_NONE = "declineNone";
+const DECLINE_ALL = "declineAllConflictingInvitations";
+const declines = (mode: string | undefined) => mode !== undefined && mode !== DECLINE_NONE;
+
+function locationOf(p: GoogleWorkingLocation | undefined): WorkingLocation {
+  if (p?.type === "officeLocation") return { type: "office", label: p.officeLocation?.label || undefined };
+  if (p?.type === "customLocation") return { type: "custom", label: p.customLocation?.label || undefined };
+  return { type: "home" };
+}
+
+function statusOf(e: GoogleEvent): EventStatus | undefined {
+  if (e.eventType === "outOfOffice") return { kind: "outOfOffice", autoDecline: declines(e.outOfOfficeProperties?.autoDeclineMode) };
+  if (e.eventType === "focusTime")
+    return { kind: "focusTime", autoDecline: declines(e.focusTimeProperties?.autoDeclineMode), doNotDisturb: e.focusTimeProperties?.chatStatus === "doNotDisturb" };
+  if (e.eventType === "workingLocation") return { kind: "workingLocation", location: locationOf(e.workingLocationProperties) };
+  return undefined;
+}
+
+const titleOf = (status: EventStatus): string => (status.kind === "workingLocation" ? workingLocationLabel(status.location) : EVENT_KIND_LABEL[status.kind]);
+
+function googleLocation(location: WorkingLocation | undefined): GoogleWorkingLocation {
+  if (location?.type === "office") return { type: "officeLocation", officeLocation: { label: location.label || undefined } };
+  if (location?.type === "custom") return { type: "customLocation", customLocation: { label: location.label || "Somewhere else" } };
+  return { type: "homeOffice", homeOffice: {} };
+}
+
+function statusFields(status: EventStatus): Record<string, unknown> {
+  const autoDeclineMode = status.autoDecline ? DECLINE_ALL : DECLINE_NONE;
+  if (status.kind === "outOfOffice") return { eventType: "outOfOffice", transparency: "opaque", outOfOfficeProperties: { autoDeclineMode } };
+  if (status.kind === "focusTime")
+    return { eventType: "focusTime", transparency: "opaque", focusTimeProperties: { autoDeclineMode, chatStatus: status.doNotDisturb ? "doNotDisturb" : "available" } };
+  return { eventType: "workingLocation", transparency: "transparent", visibility: "public", workingLocationProperties: googleLocation(status.location) };
+}
+
+const midnight = (ms: number) => new Date(`${localDay(new Date(ms))}T00:00:00`).getTime();
+
+function statusMoments(status: EventStatus, start: number, end: number, allDay: boolean): { start: GoogleMoment; end: GoogleMoment }[] {
+  if (!allDay) return [momentsOf(start, end, false)];
+  if (status.kind !== "workingLocation") return [momentsOf(midnight(start), midnight(addDayMs(end)), false)];
+  const days: { start: GoogleMoment; end: GoogleMoment }[] = [];
+  for (let day = localDay(new Date(start)); day <= localDay(new Date(end)); day = addDays(day, 1)) days.push({ start: { date: day }, end: { date: addDays(day, 1) } });
+  return days;
+}
+
+const addDayMs = (ms: number) => new Date(`${addDays(localDay(new Date(ms)), 1)}T00:00:00`).getTime();
+
 type Placement = { key: string; calendarId: string; calendar: string; account: string; color: string | null; editable: boolean; me: string | null };
 
 function toCalendarEvent(e: GoogleEvent, at: Placement): CalendarEvent | null {
@@ -277,7 +328,9 @@ function toCalendarEvent(e: GoogleEvent, at: Placement): CalendarEvent | null {
   const start = new Date(e.start.dateTime ?? `${e.start.date}T00:00:00`).getTime();
   const end = allDay ? new Date(`${e.end.date}T00:00:00`).getTime() - 1000 : new Date(e.end.dateTime ?? "").getTime();
   if (Number.isNaN(start) || Number.isNaN(end)) return null;
+  const status = statusOf(e);
   return {
+    ...(status ? { status } : {}),
     key: `${at.key}:${e.id}`,
     id: e.id,
     externalId: e.iCalUID ?? null,
@@ -286,7 +339,7 @@ function toCalendarEvent(e: GoogleEvent, at: Placement): CalendarEvent | null {
     calendar: at.calendar,
     account: at.account,
     color: at.color,
-    title: e.summary ?? "Busy",
+    title: e.summary || (status ? titleOf(status) : "Busy"),
     start,
     end,
     allDay,
@@ -339,10 +392,11 @@ export async function googleEvents(account: string, from: number, to: number): P
   return { events: perCalendar.flat(), errors };
 }
 
-const momentsOf = (start: number, end: number, allDay: boolean) =>
-  allDay
+function momentsOf(start: number, end: number, allDay: boolean): { start: GoogleMoment; end: GoogleMoment } {
+  return allDay
     ? { start: { date: localDay(new Date(start)) }, end: { date: addDays(localDay(new Date(end)), 1) } }
     : { start: { dateTime: new Date(start).toISOString() }, end: { dateTime: new Date(end).toISOString() } };
+}
 
 const eventPath = (calendar: string, id: string) => `/calendars/${encodeURIComponent(calendar)}/events/${encodeURIComponent(id)}`;
 
@@ -351,14 +405,22 @@ export async function updateGoogleEvent(calendarId: string, id: string, fields: 
   const at = parseGoogleCalendarId(calendarId);
   if (!at) throw new Error("that is not a Google calendar");
   const body: Record<string, unknown> = {};
+  const status = fields.status;
   if (fields.title !== undefined) body.summary = fields.title;
-  if (fields.location !== undefined) body.location = fields.location;
-  if (fields.notes !== undefined) body.description = fields.notes;
+  if (fields.location !== undefined && !status) body.location = fields.location;
+  if (fields.notes !== undefined && status?.kind !== "workingLocation") body.description = fields.notes;
+  if (status) {
+    const { eventType: _eventType, ...properties } = statusFields(status);
+    Object.assign(body, properties);
+  }
   if (fields.start !== undefined || fields.end !== undefined || fields.allDay !== undefined) {
     const start = fields.start ?? current?.start;
     const end = fields.end ?? current?.end;
     if (start === undefined || end === undefined) throw new Error("a start and an end are both needed to move an event");
-    Object.assign(body, momentsOf(start, end, fields.allDay ?? current?.allDay ?? false));
+    const allDay = fields.allDay ?? current?.allDay ?? false;
+    if (status?.kind === "workingLocation" && allDay && localDay(new Date(start)) !== localDay(new Date(end)))
+      throw new Error("A working location covers one day. Add another one for the next day.");
+    Object.assign(body, status ? statusMoments(status, start, end, allDay)[0] : momentsOf(start, end, allDay));
   }
   await api(at.account, `${eventPath(at.calendar, id)}?sendUpdates=all`, { method: "PATCH", body });
 }
@@ -403,6 +465,7 @@ const attendeesOf = (guests: string[], rooms: string[]): GoogleAttendee[] => [
 export async function createGoogleEvent(draft: EventDraft): Promise<void> {
   const at = parseGoogleCalendarId(draft.calendarId) ?? (draft.google ? { account: draft.google.account, calendar: "primary" } : null);
   if (!at) throw new Error("No Google calendar was chosen for this event.");
+  if (draft.status) return createStatusEvent(at.account, draft, draft.status);
   const invite = draft.google;
   const body = {
     summary: draft.title,
@@ -415,6 +478,16 @@ export async function createGoogleEvent(draft: EventDraft): Promise<void> {
       : {}),
   };
   await api(at.account, `/calendars/${encodeURIComponent(at.calendar)}/events?sendUpdates=all&conferenceDataVersion=1`, { method: "POST", body });
+}
+
+async function createStatusEvent(account: string, draft: EventDraft, status: EventStatus): Promise<void> {
+  const base = {
+    summary: draft.title || titleOf(status),
+    ...(status.kind === "workingLocation" || !draft.notes ? {} : { description: draft.notes }),
+    ...statusFields(status),
+  };
+  for (const moments of statusMoments(status, draft.start, draft.end, draft.allDay))
+    await api(account, "/calendars/primary/events", { method: "POST", body: { ...base, ...moments } });
 }
 
 /** Replace who is invited to an event the Mac knows by its iCalendar id, keeping the replies of everyone who stays. */

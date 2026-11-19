@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { modelApi, type CalendarInfo, type OtherCalendar, type PermissionMode, type Settings } from "../../api.ts";
 import { MODES, MODE_HELP, MODE_LABEL, STARTER_MODELS } from "../Conversation.tsx";
 import { Select } from "../Select.tsx";
+import { permissionModeOr } from "../../../shared/templates.ts";
 import { BuildingIcon, ClaudeMark, XIcon } from "../Icons.tsx";
 
 /**
@@ -41,7 +42,7 @@ export function PlanDialog({
   const [model, setModel] = useState(settings?.ui.calendarPlanModel || settings?.ui.defaultModel || "default");
   const [mode, setMode] = useState<PermissionMode>(() => {
     const saved = settings?.ui.calendarPlanMode as PermissionMode | undefined;
-    return saved && MODES.includes(saved) ? saved : "auto";
+    return permissionModeOr(saved, permissionModeOr(settings?.ui.defaultPermissionMode));
   });
   const [models, setModels] = useState<{ value: string; label: string; hint?: string }[]>(STARTER_MODELS);
   const disabledModels = settings?.ui.disabledModels ?? [];

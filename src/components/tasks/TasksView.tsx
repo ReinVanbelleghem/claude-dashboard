@@ -9,6 +9,7 @@ import { TitleEditInput } from "../EditableTitle.tsx";
 import { FolderPicker } from "../FolderPicker.tsx";
 import { useSortable, type Sortable } from "../../useSortable.ts";
 import { Popover } from "../Popover.tsx";
+import { DatePicker } from "../DatePicker.tsx";
 import { ServiceMark } from "./ServiceMark.tsx";
 import { TaskModal } from "../calendar/EventModal.tsx";
 import { workspaceTitle } from "../../../shared/workspaces.ts";
@@ -73,6 +74,15 @@ function dayLabel(day: string, today: string): string {
  * One line adds a task, read the way it is typed ("review PR friday 9:00 p1
  * #backend"), with what was understood shown under the field before it is saved.
  */
+const DRAFT_KEY = "tasks-add-draft";
+const readDraft = () => {
+  try {
+    return localStorage.getItem(DRAFT_KEY) ?? "";
+  } catch {
+    return "";
+  }
+};
+
 export function TasksView({
   payload,
   workspaces,
@@ -110,7 +120,16 @@ export function TasksView({
     }, FOCUS_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [focusTaskId, focusProjectId, onFocused]);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraftState] = useState(readDraft);
+  const setDraft = (next: string) => {
+    setDraftState(next);
+    try {
+      if (next) localStorage.setItem(DRAFT_KEY, next);
+      else localStorage.removeItem(DRAFT_KEY);
+    } catch {
+      return;
+    }
+  };
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const openTask = openId === null ? null : (payload?.tasks.find((t) => t.id === openId) ?? null);
@@ -1144,7 +1163,7 @@ function LinkFields({ task: t, onError }: { task: Task; onError: (message: strin
  * server's answer and dropped the second digit, so 13 could not be typed. The
  * field keeps what you type and saves when typing pauses or the field is left.
  */
-function SettledInput({ type, value, onSettle }: { type: "date" | "time"; value: string; onSettle: (value: string) => void }) {
+function SettledInput({ type, value, onSettle }: { type: "time"; value: string; onSettle: (value: string) => void }) {
   const [draft, setDraft] = useState(value);
   const saved = useRef(value);
   const timer = useRef<number | null>(null);
@@ -1239,10 +1258,10 @@ function DueFields({ task: t, today, onClose }: { task: Task; today: string; onC
         </button>
       ))}
       <hr />
-      <label className="due-picker-field">
+      <div className="due-picker-field">
         <span>Date</span>
-        <SettledInput type="date" value={t.dueDate ?? ""} onSettle={(v) => v && save({ dueDate: v }, false)} />
-      </label>
+        <DatePicker ariaLabel="Date" value={t.dueDate ?? ""} onChange={(v) => save({ dueDate: v }, false)} />
+      </div>
       <label className="due-picker-field">
         <span>Time</span>
         <SettledInput type="time" value={t.dueTime ?? ""} onSettle={(v) => save({ dueTime: v || null }, false)} />

@@ -296,6 +296,18 @@ const toRun = (r: RunRow): PrRun => ({
   finishedAt: r.finished_at,
 });
 
+export function runOfSession(ids: string[]): { id: string; pr: PrRef; title: string; actionName: string } | null {
+  const names = ids.filter(Boolean);
+  if (names.length === 0) return null;
+  const marks = names.map(() => "?").join(", ");
+  const row = db
+    .query<RunRow, string[]>(
+      `SELECT * FROM pr_runs WHERE agent_key IN (${marks}) OR session_id IN (${marks}) ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(...names, ...names);
+  return row ? { id: row.id, pr: { owner: row.owner, repo: row.repo, number: row.number }, title: row.title, actionName: row.action_name } : null;
+}
+
 const rowById = (id: string) => db.query<RunRow, [string]>("SELECT * FROM pr_runs WHERE id = ?").get(id);
 
 export function getRun(id: string): PrRun | null {

@@ -3,6 +3,8 @@ import { prApi, type DiffSide, type DraftComment, type PrRef, type ReviewFile, t
 import { langOf, pair, parsePatch, type FilePatch, type Line } from "../DiffView.tsx";
 import { highlight } from "../highlight.tsx";
 import { CommentEditor, LineComments, ThreadItem, ThreadMarker, type LineAnnotations, type ReviewHandlers } from "./PrComments.tsx";
+import { CommentIcon, PlusIcon, TrashIcon } from "../Icons.tsx";
+import { ChangeBar } from "../DiffView.tsx";
 
 /**
  * One changed file of a PR: the same hunk rendering as the git panel's DiffView,
@@ -184,12 +186,29 @@ export function PrFileCard({ pr, file, index, baseSha, headSha, collapsed, mode,
           <span className={`diff-caret ${collapsed ? "" : "open"}`} aria-hidden="true" />
           <span className="diff-path">
             {file.previousFilename && <span className="diff-from">{file.previousFilename} → </span>}
-            {file.path}
+            {file.path.includes("/") && <span className="diff-dir">{file.path.slice(0, file.path.lastIndexOf("/") + 1)}</span>}
+            {file.path.slice(file.path.lastIndexOf("/") + 1)}
           </span>
+          {file.status === "added" ? (
+            <span className="diff-note added">
+              <PlusIcon /> New
+            </span>
+          ) : file.status === "removed" ? (
+            <span className="diff-note removed">
+              <TrashIcon /> Deleted
+            </span>
+          ) : file.status === "renamed" ? (
+            <span className="diff-note moved">Renamed</span>
+          ) : null}
           <span className="diff-stat">
-            {commentCount > 0 && <span className="diff-comments">{commentCount} 💬</span>}
+            {commentCount > 0 && (
+              <span className="diff-comments">
+                <CommentIcon /> {commentCount}
+              </span>
+            )}
             {file.additions > 0 && <span className="tok-add">+{file.additions}</span>}
             {file.deletions > 0 && <span className="tok-del">−{file.deletions}</span>}
+            <ChangeBar additions={file.additions} deletions={file.deletions} />
           </span>
         </button>
         <div className="diff-actions pr-file-actions">

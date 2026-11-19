@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, sep } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -321,6 +321,23 @@ export async function createWorkspace(opts: { goal: string; folder: string }): P
   const id = insert(p, opts.goal, true);
   changed();
   return toWorkspace(rowOf(id)!);
+}
+
+/** The workspace a new session started in this folder would be filed in, made if there is none yet. */
+export async function workspaceForFolder(folder: string): Promise<number | null> {
+  const cwd = norm(folder);
+  if (!cwd || !existsSync(cwd) || isChatFolder(cwd) || inReviewRoot(cwd)) return null;
+  const open = rows().filter((w) => w.status !== "archived" && holds(w.folder, cwd));
+  open.sort(
+    (a, b) =>
+      Number(b.status === "active") - Number(a.status === "active") ||
+      b.folder.length - a.folder.length ||
+      b.last_activity_at - a.last_activity_at,
+  );
+  if (open[0]) return open[0].id;
+  const id = insert(await projectOf(cwd), "");
+  changed();
+  return id;
 }
 
 export function updateWorkspace(id: number, patch: { goal?: string }): Workspace | null {

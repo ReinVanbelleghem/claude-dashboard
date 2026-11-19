@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useMemo,
   useRef,
   useState,
@@ -7,10 +8,12 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { agentApi, terminalApi, workspaceApi, type Workspace, type WorkspacesPayload } from "../../api.ts";
+import { agentApi, terminalApi, workspaceApi, type Artifact, type Workspace, type WorkspacesPayload } from "../../api.ts";
+import { artifactKey } from "../../../shared/artifacts.ts";
 import { terminalIdOf } from "../../../shared/terminals.ts";
 import { namedByBranch, workspaceTitle } from "../../../shared/workspaces.ts";
 import {
+  ArtifactIcon,
   ChevronIcon,
   ClaudeMark,
   CommentIcon,
@@ -99,6 +102,8 @@ function SortableGroup<T>({
   );
 }
 
+const INLINE_ARTIFACTS = 2;
+
 export function StatusDot({ kind }: { kind: StatusKind }) {
   return (
     <span className={`ws-st ws-st-${kind}`} title={STATUS_LABEL[kind]} role="img" aria-label={STATUS_LABEL[kind]}>
@@ -127,6 +132,8 @@ export function WorkspaceTree({
   activeId,
   minimized,
   workspaceTasks,
+  workspaceArtifacts,
+  sessionArtifacts,
   onOpen,
   onNewWorkspace,
   onNewSession,
@@ -143,6 +150,10 @@ export function WorkspaceTree({
   minimized: Set<string>;
   /** Workspace id to the text of each open task it holds. */
   workspaceTasks: Map<number, string[]>;
+  /** The pages each workspace's sessions wrote, listed under it. */
+  workspaceArtifacts: Map<number, Artifact[]>;
+  /** The pages each session wrote, for sessions that sit outside a workspace. */
+  sessionArtifacts: Map<string, Artifact[]>;
   onOpen: (id: string, opts?: OpenOpts) => void;
   /** The New workspace dialog, optionally on one project's folder. */
   onNewWorkspace: (folder?: string) => void;
@@ -188,6 +199,7 @@ export function WorkspaceTree({
       return [
         ...items,
         "sep",
+        { label: "Rename", icon: <PencilIcon />, run: () => setRenaming({ kind: "session", key: s.id }) },
         { label: "End terminal", icon: <TrashIcon />, danger: true, run: () => void terminalApi.close(terminalIdOf(s.id)).catch(() => {}) },
       ];
     }
@@ -261,8 +273,11 @@ export function WorkspaceTree({
     { label: "Delete…", icon: <TrashIcon />, danger: true, run: () => setDeleting(w) },
   ];
 
-  const row = (s: SidebarSession, home: Card | null, project: Project | null) => {
+  const row = (s: SidebarSession, home: Card | null, project: Project | null, flat: Card | null = null) => {
     const editing = renaming?.kind === "session" && renaming.key === s.id;
+    const rowItems = (): MenuItem[] =>
+      flat?.ws ? [...sessionItems(s, home, project), "sep", { heading: "Workspace" }, ...cardItems(flat)] : sessionItems(s, home, project);
+    const rowTitle = flat ? flat.title : s.title;
     const put = s.ids.some((id) => minimized.has(id));
     const sortable = !only && !!home?.ws && home.rows.length > 1;
     const drop = dropAt?.id === s.id ? (dropAt.after ? " drop-after" : " drop-before") : "";
@@ -301,7 +316,7 @@ export function WorkspaceTree({
         }}
         role="button"
         tabIndex={0}
-        title={[s.title, s.model, s.external ? "started in a terminal" : null, s.cwd].filter(Boolean).join("\n")}
+        title={[flat?.title, s.title, s.model, s.external ? "started in a terminal" : null, s.cwd].filter(Boolean).join("\n")}
         onClick={(e) => {
           if (editing) return;
           onOpen(s.id, { full: e.metaKey || e.ctrlKey, option: e.altKey });
@@ -310,10 +325,11 @@ export function WorkspaceTree({
         onKeyDown={(e) => {
           if (e.target === e.currentTarget && e.key === "Enter") onOpen(s.id, { option: e.altKey });
         }}
-        onContextMenu={(e) => openMenu(e, sessionItems(s, home, project))}
+        onContextMenu={(e) => openMenu(e, rowItems())}
       >
-        {s.terminal ? <span className="ws-term-dot" /> : <StatusDot kind={s.status} />}
-        {s.terminal ? <TerminalIcon /> : <ClaudeMark />}
+        <span className={`ws-mark ws-mark-${s.status}`} title={STATUS_LABEL[s.status]} role="img" aria-label={STATUS_LABEL[s.status]}>
+          {s.terminal ? <TerminalIcon /> : <ClaudeMark />}
+        </span>
         {s.resumable && (
           <button
             className="ws-hover-btn ws-resume"
@@ -335,12 +351,14 @@ export function WorkspaceTree({
                 onCancel={() => setRenaming(null)}
                 onCommit={(v) => {
                   setRenaming(null);
-                  if (v && v !== s.title && s.agentKey) void agentApi.rename(s.agentKey, v).catch(() => {});
+                  if (!v || v === s.title) return;
+                  if (s.terminal) void terminalApi.rename(terminalIdOf(s.id), v).catch(() => {});
+                  else if (s.agentKey) void agentApi.rename(s.agentKey, v).catch(() => {});
                 }}
               />
             </span>
           ) : (
-            <span className="ws-row-title">{s.title}</span>
+            <span className="ws-row-title">{rowTitle}</span>
           )}
           {s.why && <span className="ws-row-why">{s.why}</span>}
         </span>
@@ -358,14 +376,89 @@ export function WorkspaceTree({
         <button
           className="ws-hover-btn"
           title="Session actions"
-          aria-label={`Actions for ${s.title}`}
-          onClick={(e) => openMenu(e, sessionItems(s, home, project))}
+          aria-label={`Actions for ${rowTitle}`}
+          onClick={(e) => openMenu(e, rowItems())}
         >
           <MoreVerticalIcon />
         </button>
       </div>
     );
   };
+
+  const artifactItems = (a: Artifact): MenuItem[] => [
+    { label: "Open in drawer", icon: <DrawerOpenIcon />, run: () => onOpen(artifactKey(a.slug), { drawer: true }) },
+    { label: "Open in tile", icon: <TileWindowIcon />, run: () => onOpen(artifactKey(a.slug), { tile: true }) },
+    { label: "Open full page", icon: <FullPageIcon />, run: () => onOpen(artifactKey(a.slug), { full: true }) },
+  ];
+
+  const artifactsOf = (ws: Workspace | null, rows: SidebarSession[]): Artifact[] => {
+    const bySlug = new Map<string, Artifact>();
+    for (const a of ws ? (workspaceArtifacts.get(ws.id) ?? []) : []) bySlug.set(a.slug, a);
+    for (const s of rows) for (const id of s.ids) for (const a of sessionArtifacts.get(id) ?? []) bySlug.set(a.slug, a);
+    return [...bySlug.values()].sort((a, b) => (b.modifiedTs ?? 0) - (a.modifiedTs ?? 0));
+  };
+
+  const artifactGroup = (groupKey: string, list: Artifact[], bare: boolean) => {
+    if (list.length === 0 || only) return null;
+    const key = `art:${groupKey}`;
+    const inline = list.length <= INLINE_ARTIFACTS;
+    const open = inline || prefs.folds[key] === false;
+    return (
+      <div key={key} className={`ws-arts${bare ? " bare" : ""}${inline ? " inline" : ""}`}>
+        {!inline && (
+          <button className="ws-arts-head" aria-expanded={open} onClick={() => sidebarPrefs.fold(key, open)}>
+            <span className={`ws-arts-chev${open ? " open" : ""}`}>
+              <ChevronIcon />
+            </span>
+            <ArtifactIcon />
+            <span className="ws-arts-name">Artifacts</span>
+            <span className="ws-arts-count">{list.length}</span>
+          </button>
+        )}
+        {open &&
+          list.map((a) => {
+            const id = artifactKey(a.slug);
+            return (
+              <div
+                key={a.slug}
+                className={`ws-row ws-art${activeId === id ? " on" : ""}`}
+                role="button"
+                tabIndex={0}
+                draggable
+                title={`${a.title}\n${a.entry}`}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData(SESSION_DRAG_MIME, id);
+                  e.dataTransfer.effectAllowed = "copyMove";
+                }}
+                onClick={(e) => onOpen(id, { full: e.metaKey || e.ctrlKey, option: e.altKey })}
+                onAuxClick={(e) => e.button === 1 && onOpen(id, { full: true })}
+                onKeyDown={(e) => {
+                  if (e.target === e.currentTarget && e.key === "Enter") onOpen(id, { option: e.altKey });
+                }}
+                onContextMenu={(e) => openMenu(e, artifactItems(a))}
+              >
+                {inline && (
+                  <span className="ws-mark">
+                    <ArtifactIcon />
+                  </span>
+                )}
+                <span className="ws-row-text">
+                  <span className="ws-row-title">{a.title}</span>
+                </span>
+                <span className="ws-row-age">{a.modifiedTs ? ageShort(a.modifiedTs) : ""}</span>
+                <button className="ws-hover-btn" title="Artifact actions" aria-label={`Actions for ${a.title}`} onClick={(e) => openMenu(e, artifactItems(a))}>
+                  <MoreVerticalIcon />
+                </button>
+              </div>
+            );
+          })}
+      </div>
+    );
+  };
+
+  const isEmptyCard = (c: Card) =>
+    c.rows.length === 0 && artifactsOf(c.ws, []).length === 0 && !(renaming?.kind === "ws" && renaming.key === c.key);
+  const isEmptyProject = (p: Project) => p.cards.every(isEmptyCard);
 
   const sessionRows = (c: Card, p: Project, rows: SidebarSession[], className: string) => (
     <div key={c.key} className={className}>
@@ -383,8 +476,23 @@ export function WorkspaceTree({
     const toggle = () => !editing && c.rows.length > 0 && sidebarPrefs.fold(foldKey, !shut);
     if (c.bare && !editing) {
       return rows.length > 0 ? (
-        sessionRows(c, p, rows, "ws-rows bare")
+        <Fragment key={c.key}>
+          {sessionRows(c, p, rows, "ws-rows bare")}
+          {artifactGroup(c.key, artifactsOf(c.ws, c.rows), true)}
+        </Fragment>
       ) : null;
+    }
+    const arts = artifactsOf(c.ws, c.rows);
+    if (!editing && c.ws && c.rows.length === 1 && rows.length === 1 && arts.length === 0) {
+      return (
+        <div
+          key={c.key}
+          className={`ws-card flat${c.ws.id === activeWorkspaceId ? " open-page" : ""}${sort?.dragging ? " dragging" : ""}`}
+          style={sort?.style}
+        >
+          <div className="ws-rows bare">{row(rows[0]!, c, p, c)}</div>
+        </div>
+      );
     }
     return (
       <div
@@ -448,7 +556,6 @@ export function WorkspaceTree({
               {workspaceTasks.get(c.ws.id)!.length > 1 && workspaceTasks.get(c.ws.id)!.length}
             </span>
           ) : null}
-          {c.rows.length === 0 && <span className="ws-card-empty">empty</span>}
           {c.ws && (
             <>
               <button
@@ -467,13 +574,15 @@ export function WorkspaceTree({
                   </span>
                 )}
                 <button
-                  className={`ws-hover-btn${shut ? "" : " show"}`}
-                  title={`New session in ${c.title}`}
-                  aria-label={`New session in ${c.title}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onNewSession(c.ws!.folder, c.ws!.id);
-                  }}
+                  className="ws-hover-btn"
+                  title={`Start something in ${c.title}`}
+                  aria-label={`Start a session or terminal in ${c.title}`}
+                  onClick={(e) =>
+                    openMenu(e, [
+                      { label: "New session", icon: <PlusIcon />, run: () => onNewSession(c.ws!.folder, c.ws!.id) },
+                      { label: "New terminal", icon: <TerminalIcon />, run: () => onNewTerminal(c.ws!.folder, c.ws!.id) },
+                    ])
+                  }
                 >
                   <PlusIcon />
                 </button>
@@ -482,6 +591,7 @@ export function WorkspaceTree({
           )}
         </div>
         {rows.length > 0 && !shut && sessionRows(c, p, rows, "ws-rows")}
+        {!shut && artifactGroup(c.key, arts, false)}
       </div>
     );
   };
@@ -499,6 +609,11 @@ export function WorkspaceTree({
         icon: <PlusIcon />,
         run: () => (bare?.ws ? onNewSession(bare.ws.folder, bare.ws.id) : onNewSession(p.root)),
       },
+      {
+        label: "New terminal",
+        icon: <TerminalIcon />,
+        run: () => (bare?.ws ? onNewTerminal(bare.ws.folder, bare.ws.id) : onNewTerminal(p.root, null)),
+      },
       { label: "New workspace…", icon: <WorktreeIcon />, run: () => onNewWorkspace(p.root) },
     ];
     if (bare?.ws) {
@@ -511,7 +626,9 @@ export function WorkspaceTree({
       run: () => setDeletingProject(p),
     });
     const rest = [...p.paused, ...p.archived];
-    const named = p.cards.filter((c) => !c.bare);
+    const named = p.cards.filter((c) => !c.bare && !isEmptyCard(c));
+    const empties = p.cards.filter((c) => !c.bare && isEmptyCard(c));
+    const emptyKey = `empty:${p.key}`;
     return (
       <section key={p.key} className={`ws-project${sort?.dragging ? " dragging" : ""}`} style={sort?.style}>
         <div
@@ -541,9 +658,9 @@ export function WorkspaceTree({
               </span>
             )}
             <button
-              className={`ws-hover-btn${shut || p.cards.some((c) => !c.bare) ? "" : " show"}`}
+              className="ws-hover-btn"
               title={`Start something in ${p.name}`}
-              aria-label={`Start a session or workspace in ${p.name}`}
+              aria-label={`Start a session, terminal or workspace in ${p.name}`}
               onClick={(e) => openMenu(e, projectItems)}
             >
               <PlusIcon />
@@ -558,12 +675,24 @@ export function WorkspaceTree({
               itemSelector=":scope > .ws-card"
               disabled={only || named.length < 2}
               onMove={(from, to) => {
-                const ids = moved(named, from, to).flatMap((c) => (c.ws ? [c.ws.id] : []));
+                const ids = [...moved(named, from, to), ...empties].flatMap((c) => (c.ws ? [c.ws.id] : []));
                 void workspaceApi.reorder({ ids }).catch(() => {});
               }}
             >
               {(c, s) => cardView(c, p, s)}
             </SortableGroup>
+            {empties.length > 0 && !only && (
+              <>
+                <button
+                  className="ws-rest-btn"
+                  aria-expanded={prefs.folds[emptyKey] === false}
+                  onClick={() => sidebarPrefs.fold(emptyKey, prefs.folds[emptyKey] === false)}
+                >
+                  {empties.length} empty
+                </button>
+                {prefs.folds[emptyKey] === false && empties.map((c) => cardView(c, p))}
+              </>
+            )}
             {rest.length > 0 && !only && (
               <>
                 <button
@@ -597,6 +726,8 @@ export function WorkspaceTree({
     );
   };
 
+  const filledProjects = tree.projects.filter((p) => !isEmptyProject(p));
+  const emptyProjects = tree.projects.filter(isEmptyProject);
   const chats = only ? tree.chats.filter((s) => s.status === "needs") : tree.chats;
   const empty = tree.projects.length === 0 && tree.chats.length === 0;
 
@@ -643,11 +774,11 @@ export function WorkspaceTree({
           </div>
         )}
         <SortableGroup
-          items={tree.projects}
+          items={filledProjects}
           itemSelector=":scope > .ws-project"
-          disabled={only || tree.projects.length < 2}
+          disabled={only || filledProjects.length < 2}
           onMove={(from, to) => {
-            const projects = moved(tree.projects, from, to).map((p) => p.key);
+            const projects = [...moved(filledProjects, from, to), ...emptyProjects].map((p) => p.key);
             void workspaceApi.reorder({ projects }).catch(() => {});
           }}
         >
@@ -670,17 +801,35 @@ export function WorkspaceTree({
               <span className="ws-project-trail">
                 {chats.length > 0 && folded("chats") && <span className="ws-project-count">{chats.length}</span>}
                 <button
-                  className={`ws-hover-btn${chats.length > 0 && folded("chats") ? "" : " show"}`}
-                  title="New chat"
-                  aria-label="New chat"
-                  onClick={() => onNewChat()}
+                  className="ws-hover-btn"
+                  title="Start a chat or terminal"
+                  aria-label="Start a standalone chat or terminal"
+                  onClick={(e) =>
+                    openMenu(e, [
+                      { label: "New chat", icon: <PlusIcon />, run: () => onNewChat() },
+                      { label: "New terminal", icon: <TerminalIcon />, run: () => onNewTerminal("~", null) },
+                    ])
+                  }
                 >
                   <PlusIcon />
                 </button>
               </span>
             </div>
             {(!folded("chats") || only) && chats.length > 0 && <div className="ws-rows flat">{chats.map((s) => row(s, null, null))}</div>}
+            {!folded("chats") && artifactGroup("chats", artifactsOf(null, tree.chats), true)}
           </section>
+        )}
+        {emptyProjects.length > 0 && !only && (
+          <>
+            <button
+              className="ws-rest-btn ws-empty-projects"
+              aria-expanded={prefs.folds["empty-projects"] === false}
+              onClick={() => sidebarPrefs.fold("empty-projects", prefs.folds["empty-projects"] === false)}
+            >
+              {emptyProjects.length} empty {emptyProjects.length === 1 ? "project" : "projects"}
+            </button>
+            {prefs.folds["empty-projects"] === false && emptyProjects.map((p) => projectView(p))}
+          </>
         )}
       </div>
       {deletingProject && (

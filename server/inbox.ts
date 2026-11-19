@@ -83,15 +83,18 @@ const changed = () => emit(inboxPayload());
  * Keeps one notification. The same thing asking again while its last notice is
  * still unread refreshes that notice instead of stacking another under it.
  */
-export function recordNotification(n: { key: string; kind: NotifyEventKind; label: string; detail: string; context: string; href: string }, now = Date.now()) {
+export function recordNotification(n: { key: string; kind: NotifyEventKind; label: string; detail: string; context: string; href: string }, now = Date.now()): number {
   const open = db.query<{ id: number }, [string]>("SELECT id FROM notifications WHERE key = ? AND read_at IS NULL ORDER BY at DESC LIMIT 1").get(n.key);
+  let id = open?.id ?? 0;
   if (open) {
     db.query("UPDATE notifications SET label = ?, detail = ?, context = ?, href = ?, at = ?, count = count + 1 WHERE id = ?").run(n.label, n.detail, n.context, n.href, now, open.id);
   } else {
-    db.query("INSERT INTO notifications (key, kind, label, detail, context, href, at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(n.key, n.kind, n.label, n.detail, n.context, n.href, now);
+    const added = db.query("INSERT INTO notifications (key, kind, label, detail, context, href, at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(n.key, n.kind, n.label, n.detail, n.context, n.href, now);
+    id = Number(added.lastInsertRowid);
   }
   db.query("DELETE FROM notifications WHERE at < ? OR id NOT IN (SELECT id FROM notifications ORDER BY at DESC, id DESC LIMIT ?)").run(now - KEEP_MS, KEEP);
   changed();
+  return id;
 }
 
 /** Marks the given notifications read, or every one when no ids are named. */

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useRef, useState, type ReactNode } from "react";
 import { highlight } from "./highlight.tsx";
 import { CheckIcon, CopyIcon } from "./Icons.tsx";
 import { linkInfo } from "../../shared/taskLinks.ts";
@@ -525,7 +525,7 @@ export function handleMdCopy(e: React.ClipboardEvent<HTMLDivElement>) {
   e.clipboardData.setData("text/plain", md);
 }
 
-export function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const lines = stripComments(text).split("\n");
   const blocks: ReactNode[] = [];
   let i = 0;
@@ -674,4 +674,4 @@ export function Markdown({ text }: { text: string }) {
   }
 
   return <div className="md">{blocks}</div>;
-}
+});

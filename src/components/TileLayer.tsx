@@ -1,3 +1,4 @@
+import { isArtifactKey } from "../../shared/artifacts.ts";
 import { isTerminalKey } from "../../shared/terminals.ts";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -7,11 +8,14 @@ import {
   applyMoveMagnetism,
   clampRect,
   rectForZone,
-  refitRect,
   resizeRect,
+  resizeTogether,
+  seamLinks,
   snapZoneAt,
   type ResizeDir,
+  type SeamLink,
   type SnapZone,
+  type LayerSize,
   type TileRect,
   type TileState,
 } from "../tiles.ts";
@@ -84,9 +88,12 @@ const NINTHS: SnapZone[] = [
   "ninth-bottom-right",
 ];
 
+const desktopTabAt = (x: number, y: number): Element | null =>
+  document.elementsFromPoint(x, y).find((el) => el.hasAttribute("data-desktop")) ?? null;
+
 type Drag =
   | { mode: "move"; id: string; startX: number; startY: number; startRect: TileRect }
-  | { mode: "resize"; id: string; dir: ResizeDir; startX: number; startY: number; startRect: TileRect };
+  | { mode: "resize"; id: string; dir: ResizeDir; startX: number; startY: number; startRect: TileRect; links: SeamLink[] };
 
 /**
  * The floating-window layer: sessions open as OS-style tiles that live behind
@@ -111,8 +118,10 @@ export function TileLayer({
   onClose,
   onFocus,
   onRectChange,
+  onLayerSize,
   onOpenFull,
   onMinimize,
+  onCopyToDesktop,
 }: {
   tiles: TileState[];
   agentFor: (id: string) => AgentSummary | null;
@@ -122,16 +131,25 @@ export function TileLayer({
   onClose: (id: string) => void;
   onFocus: (id: string) => void;
   onRectChange: (id: string, rect: TileRect) => void;
+  /** The layer's width, on mount and whenever it changes: every desktop's tiles are refitted to it. */
+  onLayerSize: (size: LayerSize) => void;
   /** Green light: hand the session to the full page. */
   onOpenFull: (id: string) => void;
   /** Yellow light: put it away, keeping its place and size, until the session is opened as a tile again. */
   onMinimize: (id: string) => void;
+  /** A tile let go over another desktop's tab: put the same session there too, with the place it had here. */
+  onCopyToDesktop: (id: string, desktopId: string, rect: TileRect) => void;
 }) {
+  const onCopyRef = useRef(onCopyToDesktop);
+  onCopyRef.current = onCopyToDesktop;
+  const overTab = useRef<Element | null>(null);
   const drag = useRef<Drag | null>(null);
   const [snapZone, setSnapZone] = useState<SnapZone | null>(null);
   const snapZoneRef = useRef<SnapZone | null>(null);
   const onRectChangeRef = useRef(onRectChange);
   onRectChangeRef.current = onRectChange;
+  const onLayerSizeRef = useRef(onLayerSize);
+  onLayerSizeRef.current = onLayerSize;
   // Read fresh inside the one-time pointermove effect below, the same reason
   // onRectChangeRef exists: a `[]`-deps effect closes over whatever `tiles`
   // was at mount, and a resize needs this render's neighbor rects, not that
@@ -143,19 +161,9 @@ export function TileLayer({
   useEffect(() => {
     const el = layer.current;
     if (!el) return;
-    let previousWidth = el.clientWidth;
-    const observer = new ResizeObserver(() => {
-      const nextWidth = el.clientWidth;
-      if (nextWidth === previousWidth) return;
-      const from = previousWidth;
-      previousWidth = nextWidth;
-      for (const t of tilesRef.current) {
-        const rect = refitRect(t.rect, from, nextWidth);
-        if (rect.x !== t.rect.x || rect.y !== t.rect.y || rect.w !== t.rect.w || rect.h !== t.rect.h) {
-          onRectChangeRef.current(t.id, rect);
-        }
-      }
-    });
+    const report = () => onLayerSizeRef.current({ w: el.clientWidth, h: el.clientHeight });
+    report();
+    const observer = new ResizeObserver(report);
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
@@ -168,7 +176,13 @@ export function TileLayer({
       const dy = e.clientY - d.startY;
       if (d.mode === "move") {
         const dragged = clampRect({ ...d.startRect, x: d.startRect.x + dx, y: Math.max(0, d.startRect.y + dy) });
-        const zone = snapZoneAt(e.clientX, e.clientY);
+        const tab = desktopTabAt(e.clientX, e.clientY);
+        if (tab !== overTab.current) {
+          overTab.current?.classList.remove("drop");
+          tab?.classList.add("drop");
+          overTab.current = tab;
+        }
+        const zone = tab ? null : snapZoneAt(e.clientX, e.clientY);
         // Near a screen edge, the zone preview (about to replace the whole
         // rect on release) is the snap that matters — magnetizing against a
         // neighbor at the same time would fight it right where both are
@@ -187,15 +201,25 @@ export function TileLayer({
         // Snap against every other open tile, minimized ones excluded since
         // they have no on-screen edge to align with right now.
         const neighbors = tilesRef.current
-          .filter((t) => t.id !== d.id && !t.minimized)
+          .filter((t) => t.id !== d.id && !t.minimized && !d.links.some((l) => l.id === t.id))
           .map((t) => t.rect);
-        onRectChangeRef.current(d.id, applyEdgeMagnetism(resized, d.dir, neighbors));
+        const snapped = applyEdgeMagnetism(resized, d.dir, neighbors);
+        const together = resizeTogether(d.startRect, d.dir, snapped, d.links);
+        onRectChangeRef.current(d.id, d.links.length ? together.rect : snapped);
+        for (const l of together.linked) onRectChangeRef.current(l.id, l.rect);
       }
     }
     function onUp() {
       const d = drag.current;
       if (!d) return;
-      if (d.mode === "move" && snapZoneRef.current) {
+      const tab = overTab.current;
+      overTab.current = null;
+      tab?.classList.remove("drop");
+      const desktopId = tab?.getAttribute("data-desktop");
+      if (d.mode === "move" && desktopId) {
+        onRectChangeRef.current(d.id, d.startRect);
+        if (tab?.getAttribute("aria-selected") !== "true") onCopyRef.current(d.id, desktopId, d.startRect);
+      } else if (d.mode === "move" && snapZoneRef.current) {
         onRectChangeRef.current(d.id, rectForZone(snapZoneRef.current));
       }
       drag.current = null;
@@ -229,7 +253,9 @@ export function TileLayer({
       e.preventDefault();
       e.stopPropagation();
       onFocus(id);
-      drag.current = { mode: "resize", id, dir, startX: e.clientX, startY: e.clientY, startRect: rect };
+      const others = tiles.filter((t) => t.id !== id && !t.minimized).map((t) => ({ id: t.id, rect: t.rect }));
+      const links = e.altKey ? [] : seamLinks(rect, dir, others);
+      drag.current = { mode: "resize", id, dir, startX: e.clientX, startY: e.clientY, startRect: rect, links };
       document.body.style.cursor = `${dir}-resize`;
       document.body.style.userSelect = "none";
     };
@@ -296,9 +322,11 @@ function ZoneIcon({ zone }: { zone: SnapZone }) {
 function SnapMenu({
   style,
   onPick,
+  onOpenFull,
 }: {
   style: React.CSSProperties;
   onPick: (zone: SnapZone) => void;
+  onOpenFull: () => void;
 }) {
   return (
     <div className="tile-snap-menu" style={style} onPointerDown={(e) => e.stopPropagation()}>
@@ -334,6 +362,9 @@ function SnapMenu({
           </button>
         ))}
       </div>
+      <button className="tile-snap-menu-action" onClick={onOpenFull}>
+        Open as full page
+      </button>
     </div>
   );
 }
@@ -344,9 +375,10 @@ const HOVER_MENU_MS = 350;
  * Two lights, not the usual three: every session already gets a permanent
  * dock entry the moment it's live, so "close" and "minimize" collapsed into
  * the same action — closing a tile's window no more removes the session than
- * closing a real app's window quits it. Red does that; green hands the
- * session to the full page, or hovering it for a moment opens the arrange
- * menu — the same overload macOS itself gives its own green light.
+ * closing a real app's window quits it. Red does that; green fills the
+ * desktop with the tile, or hovering it for a moment opens the arrange
+ * menu, which also offers the full page — the same overload macOS itself
+ * gives its own green light.
  */
 function TileLights({
   onClose,
@@ -407,7 +439,7 @@ function TileLights({
         onMouseEnter={armHover}
         onMouseLeave={disarmHover}
       >
-        <button className="tile-light tile-light-green" title="Open full page (hover to arrange)" onClick={onOpenFull} />
+        <button className="tile-light tile-light-green" title="Fill the desktop (hover to arrange)" onClick={() => onSnap("maximize")} />
         {menuOpen &&
           menuPos &&
           createPortal(
@@ -416,6 +448,10 @@ function TileLights({
               onPick={(zone) => {
                 onSnap(zone);
                 setMenuOpen(false);
+              }}
+              onOpenFull={() => {
+                setMenuOpen(false);
+                onOpenFull();
               }}
             />,
             document.body,
@@ -468,7 +504,7 @@ function TileWindow({
       }}
       onPointerDownCapture={onFocus}
     >
-      <div className={`tile-body ${agent ? "tile-body-live" : ""}${isTerminalKey(sessionId) ? " tile-body-live tile-body-term" : ""}`} ref={body}>
+      <div className={`tile-body ${agent ? "tile-body-live" : ""}${isTerminalKey(sessionId) || isArtifactKey(sessionId) ? " tile-body-live tile-body-term" : ""}`} ref={body}>
         <SessionPanelContent
           id={sessionId}
           agent={agent}

@@ -18,7 +18,7 @@ import {
 
 type Tone = "urgent" | "error" | "calm";
 
-const KINDS: Record<NotifyEventKind, { label: string; icon: ReactNode; tone: Tone }> = {
+export const NOTIFY_KINDS: Record<NotifyEventKind, { label: string; icon: ReactNode; tone: Tone }> = {
   awaitingPermission: { label: "Permission needed", icon: <HelpIcon />, tone: "urgent" },
   needsInput: { label: "Needs you", icon: <CommentIcon />, tone: "urgent" },
   turnComplete: { label: "Done", icon: <CheckIcon />, tone: "calm" },
@@ -79,7 +79,10 @@ export function NotificationCenter({
   onInbox,
   onClose,
   onOpenSettings,
+  onFollow,
 }: {
+  /** Follows a notification's link; a session opens the way the click settings say. */
+  onFollow: (href: string, gesture: { metaKey: boolean; ctrlKey: boolean; altKey: boolean }) => void;
   inbox: InboxPayload;
   onInbox: (payload: InboxPayload) => void;
   onClose: () => void;
@@ -103,10 +106,10 @@ export function NotificationCenter({
   const groups = useMemo(() => byDay(shown, now), [shown, now]);
   const apply = (request: Promise<InboxPayload>) => void request.then(onInbox).catch(() => {});
 
-  const open = (item: InboxItem) => {
+  const open = (item: InboxItem, gesture: { metaKey: boolean; ctrlKey: boolean; altKey: boolean }) => {
     if (item.readAt === null) apply(inboxApi.read([item.id]));
-    if (item.href) window.location.hash = item.href;
     onClose();
+    if (item.href) onFollow(item.href, gesture);
   };
 
   return createPortal(
@@ -149,10 +152,10 @@ export function NotificationCenter({
             <section key={g.label}>
               <h4>{g.label}</h4>
               {g.items.map((item) => {
-                const kind = KINDS[item.kind] ?? KINDS.needsInput;
+                const kind = NOTIFY_KINDS[item.kind] ?? NOTIFY_KINDS.needsInput;
                 return (
                   <div className={`inbox-item ${item.readAt === null ? "unread" : ""}`} key={item.id}>
-                    <button className="inbox-open" onClick={() => open(item)}>
+                    <button className="inbox-open" onClick={(e) => open(item, e)}>
                       <span className={`inbox-icon ${kind.tone}`}>{kind.icon}</span>
                       <span className="inbox-text">
                         <span className="inbox-kind">

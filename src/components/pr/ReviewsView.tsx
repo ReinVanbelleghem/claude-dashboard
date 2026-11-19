@@ -6,6 +6,7 @@ import { useSortable } from "../../useSortable.ts";
 import { CiDot, DraftBadge, ReviewBadge, StateBadge } from "./PrBadges.tsx";
 import { ActivityChips, WatchToggle } from "./PrWatchBits.tsx";
 import { isTyping, prHash, relativeTime, useHiddenPrs } from "./prState.ts";
+import { recall, remember, warm } from "./prCache.ts";
 
 /**
  * The pull request list: saved views down the side, a filter bar, and one row per
@@ -130,6 +131,8 @@ export function ReviewsView({
   }, [active?.id, loading]);
 
   const open = useCallback((pr: PrSummary) => {
+    if (!recall(pr, "detail")) remember(pr, "detail", { ...pr, body: "" });
+    warm(pr, ["overview"]);
     window.location.hash = prHash(pr);
   }, []);
 

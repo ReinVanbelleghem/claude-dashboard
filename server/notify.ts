@@ -177,7 +177,7 @@ async function send(subject: NotifySubject, href: string, now: number) {
   const n = settings.notifications;
   const kind = KIND[subject.kind];
   const title = `${kind.icon} ${kind.headline} · ${subject.label}`;
-  recordNotification({ key: subject.key, kind: subject.kind, label: subject.label, detail: subject.detail, context: subject.context, href }, now);
+  const inboxId = recordNotification({ key: subject.key, kind: subject.kind, label: subject.label, detail: subject.detail, context: subject.context, href }, now);
   // Quiet hours silence the banner, not the record: it waits in the inbox.
   if (inQuietHours(settings, new Date(now))) return;
   const url = deepLink(href);
@@ -192,11 +192,15 @@ async function send(subject: NotifySubject, href: string, now: number) {
     url,
     href,
     at: now,
+    label: subject.label,
+    inboxId,
+    banner: n.channels.browser,
+    toast: n.channels.inApp,
   };
 
   console.log(`[claude-dashboard] notify: ${title} — ${subject.detail} (${subject.context})`);
 
-  if (n.channels.browser) emit("notify", payload);
+  if (n.channels.browser || n.channels.inApp) emit("notify", payload);
   // Detail is the subtitle, not the message: terminal-notifier bolds the subtitle,
   // and what the session wants matters more than where it lives.
   if (n.channels.native) native(title, subject.detail, subject.context, url, subject.key, kind.sound);
@@ -304,9 +308,12 @@ export async function sendTestNotification() {
     key: "test",
     url,
     at: Date.now(),
+    label: "Claude Sessions",
+    banner: n.channels.browser,
+    toast: n.channels.inApp,
   };
 
-  if (n.channels.browser) emit("notify", payload);
+  if (n.channels.browser || n.channels.inApp) emit("notify", payload);
   if (n.channels.native) native(payload.title, payload.body, payload.context, url, "test", KIND.needsInput.sound);
   if (n.channels.googleChat && n.googleChatWebhook) {
     await googleChat(`*${payload.title}*\n${payload.body}`);
@@ -317,6 +324,7 @@ export async function sendTestNotification() {
     channels: {
       native: n.channels.native,
       browser: n.channels.browser,
+      inApp: n.channels.inApp,
       googleChat: n.channels.googleChat && !!n.googleChatWebhook,
     },
     notifier: notifierPath === undefined ? Bun.which("terminal-notifier") : notifierPath,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { gitApi, type GitWriteResult, type RepoStatus } from "../api.ts";
 
 /**
@@ -14,6 +14,8 @@ import { gitApi, type GitWriteResult, type RepoStatus } from "../api.ts";
  * and both consumers are memoised components — a fresh object every render would
  * defeat that and re-render a large diff for every timeline event.
  */
+
+const AUTO_REFRESH_MS = 8_000;
 
 export type GitNotice = { ok: boolean; text: string; hint: string | null };
 
@@ -104,6 +106,27 @@ export function useGitRepo(cwd: string): GitRepo {
       .status(cwd, true)
       .then(setStatus)
       .catch(() => setStatus(null));
+  }, [cwd]);
+
+  const busyRef = useRef(false);
+  busyRef.current = busy !== null;
+  useEffect(() => {
+    if (!cwd) return;
+    const poll = () => {
+      if (document.hidden || busyRef.current) return;
+      gitApi
+        .status(cwd)
+        .then((next) => setStatus((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next)))
+        .catch(() => {});
+    };
+    const timer = window.setInterval(poll, AUTO_REFRESH_MS);
+    window.addEventListener("focus", poll);
+    document.addEventListener("visibilitychange", poll);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", poll);
+      document.removeEventListener("visibilitychange", poll);
+    };
   }, [cwd]);
 
   /**

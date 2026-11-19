@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { GitGraph } from "../GitGraph.tsx";
 import { prApi, settingsApi, type PrCommit, type PrRef, type Settings } from "../../api.ts";
 import { DiffView } from "../DiffView.tsx";
 import { isTyping, prHash, relativeTime } from "./prState.ts";
+import { recall, remember } from "./prCache.ts";
 
 /**
  * The PR's commits, oldest first, and the diff each one introduced — the view for
@@ -17,13 +19,31 @@ export function PrCommitsTab({ pr, sha, settings, onSettings }: { pr: PrRef; sha
   const key = `${pr.owner}/${pr.repo}/${pr.number}`;
 
   useEffect(() => {
-    setCommits(null);
+    setCommits(recall<PrCommit[]>(pr, "commits") ?? null);
     setError(null);
     prApi
       .commits(pr)
-      .then((r) => setCommits(r.commits))
+      .then((r) => setCommits(remember(pr, "commits", r.commits)))
       .catch((e: Error) => setError(e.message));
   }, [key]);
+
+  const [graphFailed, setGraphFailed] = useState(false);
+  const loadGraph = useCallback(
+    () =>
+      prApi.graph(pr).then((r) => {
+        if (!r.ok || r.commits.length === 0) setGraphFailed(true);
+        const commits = r.commits.map((c) =>
+          c.refs.head || c.refs.branches.length === 0 ? c : { ...c, refs: { ...c.refs, branches: [], remotes: c.refs.branches.map((name) => `base: ${name}`) } },
+        );
+        return { ...r, commits };
+      }, (e: Error) => {
+        setGraphFailed(true);
+        throw e;
+      }),
+    [key],
+  );
+  const inPr = useMemo(() => new Set((commits ?? []).map((c) => c.sha)), [commits]);
+  const notInPr = useCallback((hash: string) => !inPr.has(hash), [inPr]);
 
   const selected = commits?.find((c) => c.sha === sha || c.short === sha) ?? (sha ? null : (commits?.at(-1) ?? null));
 
@@ -52,8 +72,10 @@ export function PrCommitsTab({ pr, sha, settings, onSettings }: { pr: PrRef; sha
     <div className="pr-commits">
       <aside className="pr-commits-side">
         <div className="pr-side-label">
-          {commits.length} commit{commits.length === 1 ? "" : "s"} · oldest first
+          {commits.length} commit{commits.length === 1 ? "" : "s"}{graphFailed ? " · oldest first" : ""}
         </div>
+        {graphFailed ? (
+          <>
         {commits.map((c) => (
           <a key={c.sha} href={prHash(pr, `/commits/${c.short}`)} className={`pr-commit-row ${selected?.sha === c.sha ? "on" : ""}`} title={c.subject}>
             <div className="pr-commit-row-top">
@@ -71,6 +93,21 @@ export function PrCommitsTab({ pr, sha, settings, onSettings }: { pr: PrRef; sha
             </div>
           </a>
         ))}
+          </>
+        ) : (
+          <div className="pr-commit-graph">
+            <GitGraph
+              cwd=""
+              load={loadGraph}
+              selected={selected?.sha ?? null}
+              faded={notInPr}
+              onOpenCommit={(hash) => {
+                const hit = commits.find((c) => c.sha === hash);
+                if (hit) window.location.hash = prHash(pr, `/commits/${hit.short}`);
+              }}
+            />
+          </div>
+        )}
       </aside>
       <div className="pr-commit-main">
         {selected ? <CommitView key={selected.sha} pr={pr} commit={selected} settings={settings} onSettings={onSettings} /> : <div className="empty">Unknown commit.</div>}

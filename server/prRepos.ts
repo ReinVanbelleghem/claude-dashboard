@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./paths.ts";
 import { getSettings } from "./settings.ts";
+import { GRAPH_FORMAT, parseGraphLog, type GraphCommit } from "./git.ts";
 
 /**
  * Checkouts for review sessions.
@@ -136,6 +137,27 @@ export async function fileDiff(
   const lines = Math.min(Math.max(0, Math.floor(context)), 100_000);
   const paths = previous && previous !== path ? [previous, path] : [path];
   return git(dir, "diff", "--no-color", "--find-renames", `-U${lines}`, base, head, "--", ...paths);
+}
+
+const GRAPH_LIMIT = 300;
+
+/** The PR's commits and what landed on the base since it forked, for the lane graph. */
+export async function branchGraph(owner: string, repo: string, head: string, base: string): Promise<GraphCommit[]> {
+  const dir = await fetchShas(owner, repo, [head, base]);
+  const fork = (await git(dir, "merge-base", head, base).catch(() => "")).trim();
+  const out = await git(
+    dir,
+    "log",
+    "--no-color",
+    "--no-show-signature",
+    "--date-order",
+    `--format=${GRAPH_FORMAT}`,
+    `--max-count=${GRAPH_LIMIT}`,
+    head,
+    base,
+    ...(fork ? ["--not", `${fork}^@`] : []),
+  );
+  return parseGraphLog(out);
 }
 
 /** What one commit changed, as a unified patch from the local clone. */

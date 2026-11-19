@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReviewComment } from "../api.ts";
 import { CommentThread, NewComment, type CommentHandlers } from "./ReviewComments.tsx";
 import { highlight } from "./highlight.tsx";
-import { EditorIcon, PencilIcon, TrashIcon } from "./Icons.tsx";
+import { CommentIcon, EditorIcon, PencilIcon, PlusIcon, TrashIcon } from "./Icons.tsx";
 import { FileEditor } from "./FileEditor.tsx";
 import { REVEAL_ALL } from "../find.ts";
 
@@ -123,6 +123,21 @@ const countLines = (f: FilePatch) => f.hunks.reduce((n, h) => n + h.lines.length
 const AUTO_COLLAPSE_FILES = 5;
 /** A single file this large buries whatever follows it. */
 const AUTO_COLLAPSE_LINES = 300;
+const BAR_CELLS = 5;
+
+export function ChangeBar({ additions, deletions }: { additions: number; deletions: number }) {
+  const changed = additions + deletions;
+  if (changed === 0) return null;
+  const share = Math.round((additions / changed) * BAR_CELLS);
+  const greens = deletions > 0 ? Math.min(BAR_CELLS - 1, Math.max(additions > 0 ? 1 : 0, share)) : BAR_CELLS;
+  return (
+    <span className="diff-bar" aria-hidden="true">
+      {Array.from({ length: BAR_CELLS }, (_, i) => (
+        <i key={i} className={i < greens ? "add" : "del"} />
+      ))}
+    </span>
+  );
+}
 
 export function DiffView({
   patch,
@@ -184,6 +199,17 @@ export function DiffView({
     return () => window.removeEventListener(REVEAL_ALL, onReveal);
   }, []);
 
+  const toggle = useCallback(
+    (k: string) =>
+      setClosed((prev) => {
+        const next = new Set(prev);
+        if (next.has(k)) next.delete(k);
+        else next.add(k);
+        return next;
+      }),
+    [],
+  );
+
   if (files.length === 0) return <div className="empty">{emptyLabel}</div>;
 
 
@@ -217,21 +243,15 @@ export function DiffView({
         return (
           <FileDiff
             key={k}
+            fileKey={k}
             file={f}
             mode={mode}
             review={review}
-            href={fileHref?.(f.path) ?? null}
+            fileHref={fileHref}
             onDiscard={onDiscard}
             edit={edit}
             open={!closed.has(k)}
-            onToggle={() =>
-              setClosed((prev) => {
-                const next = new Set(prev);
-                if (next.has(k)) next.delete(k);
-                else next.add(k);
-                return next;
-              })
-            }
+            onToggle={toggle}
           />
         );
       })}
@@ -239,28 +259,30 @@ export function DiffView({
   );
 }
 
-function FileDiff({
+const FileDiff = memo(function FileDiff({
+  fileKey,
   file,
   mode,
   open,
-  onToggle,
+  onToggle: toggleFile,
   review,
-  href,
+  fileHref,
   onDiscard,
   edit,
 }: {
+  fileKey: string;
   file: FilePatch;
   mode: "unified" | "split";
   open: boolean;
-  onToggle: () => void;
+  onToggle: (key: string) => void;
   review?: ReviewProps;
-  /** Editor link for this file, when the caller knows where it lives on disk. */
-  href?: string | null;
+  fileHref?: (path: string) => string | null;
   onDiscard?: (path: string, from: string | null) => void;
   edit?: { cwd: string; onSaved: () => void };
 }) {
   const lang = langOf(file.path);
-  const lines = countLines(file);
+  const href = fileHref?.(file.path) ?? null;
+  const onToggle = () => toggleFile(fileKey);
   const [fileComment, setFileComment] = useState(false);
   /** Discarding destroys work that exists nowhere else, so it is asked twice. */
   const [asking, setAsking] = useState(false);
@@ -277,14 +299,31 @@ function FileDiff({
           <span className={`diff-caret ${open ? "open" : ""}`} aria-hidden="true" />
           <span className="diff-path">
             {file.from && file.from !== file.path && <span className="diff-from">{file.from} → </span>}
-            {file.path}
+            {file.path.includes("/") && <span className="diff-dir">{file.path.slice(0, file.path.lastIndexOf("/") + 1)}</span>}
+            {file.path.slice(file.path.lastIndexOf("/") + 1)}
           </span>
-          {file.note && <span className="chip muted">{file.note}</span>}
+          {file.note === "new file" ? (
+            <span className="diff-note added">
+              <PlusIcon /> New
+            </span>
+          ) : file.note === "deleted" ? (
+            <span className="diff-note removed">
+              <TrashIcon /> Deleted
+            </span>
+          ) : file.from && file.from !== file.path ? (
+            <span className="diff-note moved">Renamed</span>
+          ) : (
+            file.note && <span className="diff-note">{file.note}</span>
+          )}
           <span className="diff-stat">
-            {openCount > 0 && <span className="diff-comments">{openCount} 💬</span>}
-            {!open && lines > 0 && <span className="diff-folded">{lines} lines</span>}
+            {openCount > 0 && (
+              <span className="diff-comments">
+                <CommentIcon /> {openCount}
+              </span>
+            )}
             {file.insertions > 0 && <span className="tok-add">+{file.insertions}</span>}
             {file.deletions > 0 && <span className="tok-del">−{file.deletions}</span>}
+            <ChangeBar additions={file.insertions} deletions={file.deletions} />
           </span>
         </button>
         {/* Asking replaces the actions rather than sitting beside them, so a yes
@@ -309,6 +348,18 @@ function FileDiff({
           </div>
         ) : (
           <div className="diff-actions">
+            {review && (
+              <button
+                className={`diff-act ${fileComment ? "on" : ""}`}
+                onClick={() => {
+                  if (!open) onToggle();
+                  setFileComment(!fileComment);
+                }}
+                title={`Comment on ${file.path}`}
+              >
+                <CommentIcon />
+              </button>
+            )}
             {/* A deleted file has nothing to open — it isn't there any more. */}
             {edit && file.note !== "deleted" && (
               <button
@@ -358,14 +409,14 @@ function FileDiff({
         />
       )}
 
-      {open && !editing && review && (
+      {open && !editing && review && (fileComment || mine.some((c) => c.line === null && (review.showResolved || c.status === "open"))) && (
         <div className="file-review">
           {mine
             .filter((c) => c.line === null && (review.showResolved || c.status === "open"))
             .map((c) => (
               <CommentThread key={c.id} comment={c} handlers={review.handlers} />
             ))}
-          {fileComment ? (
+          {fileComment && (
             <NewComment
               placeholder={`Comment on ${file.path}`}
               onCancel={() => setFileComment(false)}
@@ -374,10 +425,6 @@ function FileDiff({
                 setFileComment(false);
               }}
             />
-          ) : (
-            <button className="link-btn inline" onClick={() => setFileComment(true)}>
-              + comment on this file
-            </button>
           )}
         </div>
       )}
@@ -397,7 +444,7 @@ function FileDiff({
       )}
     </div>
   );
-}
+});
 
 function UnifiedHunks({
   file,

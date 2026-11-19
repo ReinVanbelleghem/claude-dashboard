@@ -85,6 +85,11 @@ export type Commit = {
 const UNIT = "\x1f";
 const RECORD = "\x1e";
 
+/** The limit for a git call that sets none: a read, which should answer at once. */
+const READ_TIMEOUT_MS = 20_000;
+/** Writes that touch the working tree (a switch, a new worktree) can be slow on a large checkout. */
+const WRITE_TIMEOUT_MS = 120_000;
+
 async function run(
   cwd: string,
   args: string[],
@@ -102,21 +107,22 @@ async function run(
      * talks to a server — either can wedge. Killing the process frees the repo lock
      * this write holds; without it one stuck hook would block every later write.
      */
+    // Every call gets a limit: a read can wedge too (macOS holds open() on a
+    // protected folder while its privacy prompt is pending), and a request that
+    // never answers leaves the UI spinning forever.
+    const limitMs = opts.timeoutMs ?? READ_TIMEOUT_MS;
     let timedOut = false;
-    const timer = opts.timeoutMs
-      ? setTimeout(() => {
-          timedOut = true;
-          proc.kill();
-        }, opts.timeoutMs)
-      : null;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill();
+    }, limitMs);
     const [out, err] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
     ]);
     const code = await proc.exited;
-    if (timer) clearTimeout(timer);
-    if (timedOut)
-      return { ok: false, out, err: `git ${args[0]} timed out after ${Math.round((opts.timeoutMs ?? 0) / 1000)}s` };
+    clearTimeout(timer);
+    if (timedOut) return { ok: false, out, err: `git ${args[0]} timed out after ${Math.round(limitMs / 1000)}s` };
     return { ok: code === 0, out, err: err.trim() };
   } catch (e) {
     return { ok: false, out: "", err: e instanceof Error ? e.message : String(e) };
@@ -248,7 +254,7 @@ async function computeStatus(cwd: string): Promise<RepoStatus> {
   const root = await line(cwd, ["rev-parse", "--show-toplevel"]);
   if (!root) return NOT_A_REPO;
 
-  const [branchRaw, head, upstream, dirs] = await Promise.all([
+  const [branchRaw, head, upstream, dirs, files] = await Promise.all([
     line(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
     line(root, ["rev-parse", "--short", "HEAD"]),
     line(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]),
@@ -259,6 +265,7 @@ async function computeStatus(cwd: string): Promise<RepoStatus> {
      * how the worktree directory is laid out on disk.
      */
     line(root, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"]),
+    workingFiles(root),
   ]);
 
   const [gitDir, commonDirRaw] = (dirs ?? "").split("\n").map((s) => s.trim());
@@ -270,18 +277,18 @@ async function computeStatus(cwd: string): Promise<RepoStatus> {
   const detached = branchRaw === "HEAD" || branchRaw === null;
   const branch = detached ? null : branchRaw;
 
+  const [counts, base] = await Promise.all([
+    upstream ? line(root, ["rev-list", "--left-right", "--count", `${upstream}...HEAD`]) : null,
+    detectBase(root, branch),
+  ]);
   let ahead = 0;
   let behind = 0;
-  if (upstream) {
-    const counts = await line(root, ["rev-list", "--left-right", "--count", `${upstream}...HEAD`]);
-    if (counts) {
-      const [b, a] = counts.split(/\s+/).map(Number);
-      behind = b || 0;
-      ahead = a || 0;
-    }
+  if (counts) {
+    const [b, a] = counts.split(/\s+/).map(Number);
+    behind = b || 0;
+    ahead = a || 0;
   }
 
-  const base = await detectBase(root, branch);
   const onBase = !!base && !!branch && (base === branch || base === `origin/${branch}`);
 
   let aheadOfBase = 0;
@@ -289,8 +296,6 @@ async function computeStatus(cwd: string): Promise<RepoStatus> {
     const n = await line(root, ["rev-list", "--count", `${base}..HEAD`]);
     aheadOfBase = Number(n ?? 0) || 0;
   }
-
-  const files = await workingFiles(root);
 
   return {
     isRepo: true,
@@ -508,20 +513,29 @@ function clampContext(n: number | undefined): number {
 export async function branchFiles(cwd: string): Promise<ChangedFile[]> {
   const status = await repoStatus(cwd);
   if (!status.isRepo || !status.root || !status.base || status.onBase) return [];
-  const r = await run(status.root, [
-    "diff",
-    "--numstat",
-    "-z",
-    `${status.base}...HEAD`,
+  const range = `${status.base}...HEAD`;
+  const [r, named] = await Promise.all([
+    run(status.root, ["diff", "--numstat", "-z", range]),
+    run(status.root, ["diff", "--name-status", "-z", range]),
   ]);
   if (!r.ok) return [];
+  const kinds = new Map<string, { status: string; from: string | null }>();
+  const parts = named.ok ? named.out.split("\0") : [];
+  for (let i = 0; i < parts.length; i++) {
+    const code = parts[i]?.[0];
+    if (!code) continue;
+    const moved = code === "R" || code === "C";
+    const from = moved ? (parts[++i] ?? null) : null;
+    const path = parts[++i];
+    if (path) kinds.set(path, { status: code, from });
+  }
   return parseNumstatZ(r.out).map(([path, insertions, deletions]) => ({
     path,
-    status: "M",
+    status: kinds.get(path)?.status ?? "M",
     staged: false,
     unstaged: false,
     untracked: false,
-    from: null,
+    from: kinds.get(path)?.from ?? null,
     insertions,
     deletions,
   }));
@@ -580,6 +594,154 @@ export async function log(cwd: string, limit = 50): Promise<{ commits: Commit[];
     });
   }
   return { commits, range };
+}
+
+// ── commit graph ──────────────────────────────────────────────────────────────
+export type GraphRefs = {
+  /** Local branches, short names (`main`, `feat/x`). */
+  branches: string[];
+  /** Remote-tracking branches, `<remote>/<branch>`. `<remote>/HEAD` is left out. */
+  remotes: string[];
+  tags: string[];
+  /** True for the commit HEAD points at. */
+  head: boolean;
+};
+
+export type GraphCommit = {
+  hash: string;
+  parents: string[];
+  author: string;
+  /** Author time, seconds since the epoch. */
+  at: number;
+  subject: string;
+  refs: GraphRefs;
+};
+
+export type GraphResult = {
+  ok: boolean;
+  commits: GraphCommit[];
+  /** Commit HEAD resolves to, null on an unborn branch. Asked separately: with
+   *  --all and a limit, HEAD's own commit may not be among the rows. */
+  head: string | null;
+  /** Branch HEAD is on, null when detached. */
+  branch: string | null;
+  worktrees: { path: string; branch: string | null; head: string | null }[];
+  error: string | null;
+};
+
+/**
+ * `%D` with `--decorate=full`, e.g. `HEAD -> refs/heads/main, refs/remotes/origin/main,
+ * tag: refs/tags/v1`. Full names are what make a local branch called `origin/x`
+ * distinguishable from a remote one.
+ */
+export function parseDecorations(d: string): GraphRefs {
+  const refs: GraphRefs = { branches: [], remotes: [], tags: [], head: false };
+  for (const raw of d.split(", ")) {
+    let tok = raw.trim();
+    if (!tok) continue;
+    if (tok === "HEAD") {
+      refs.head = true;
+      continue;
+    }
+    if (tok.startsWith("HEAD -> ")) {
+      refs.head = true;
+      tok = tok.slice("HEAD -> ".length);
+    }
+    if (tok.startsWith("tag: ")) {
+      refs.tags.push(tok.slice("tag: ".length).replace(/^refs\/tags\//, ""));
+    } else if (tok.startsWith("refs/heads/")) {
+      refs.branches.push(tok.slice("refs/heads/".length));
+    } else if (tok.startsWith("refs/remotes/")) {
+      const name = tok.slice("refs/remotes/".length);
+      if (!name.endsWith("/HEAD")) refs.remotes.push(name);
+    } else if (tok.startsWith("refs/tags/")) {
+      refs.tags.push(tok.slice("refs/tags/".length));
+    }
+    // Anything else (refs/stash, notes, review refs) is not a branch worth a pill.
+  }
+  return refs;
+}
+
+export const GRAPH_FORMAT = `${RECORD}%H${UNIT}%P${UNIT}%an${UNIT}%at${UNIT}%D${UNIT}%s`;
+
+/** The output of `git log --format=GRAPH_FORMAT`. Pure, so it is testable without a repo. */
+export function parseGraphLog(out: string): GraphCommit[] {
+  const commits: GraphCommit[] = [];
+  for (const rec of out.split(RECORD)) {
+    if (!rec.trim()) continue;
+    // %s is last and never contains a newline, so the record ends at the first one.
+    const line = rec.replace(/\n[\s\S]*$/, "");
+    const parts = line.split(UNIT);
+    if (parts.length < 6) continue;
+    const [hash, parents, author, at, deco] = parts;
+    // A subject can hold anything but a newline; rejoin in case it held a UNIT too.
+    const subject = parts.slice(5).join(UNIT);
+    if (!isSha(hash)) continue;
+    commits.push({
+      hash,
+      parents: parents.trim() ? parents.trim().split(/\s+/) : [],
+      author,
+      at: Number(at) || 0,
+      subject,
+      refs: parseDecorations(deco),
+    });
+  }
+  return commits;
+}
+
+/**
+ * Commits for the lane graph, newest first in date order (children always above
+ * parents, branches interleaved by time, which is what a lane layout needs).
+ */
+export async function graph(
+  cwd: string,
+  opts: { limit?: number; all?: boolean } = {},
+): Promise<GraphResult> {
+  const empty = { commits: [], head: null, branch: null, worktrees: [] };
+  const status = await repoStatus(cwd);
+  if (!status.isRepo || !status.root) return { ok: false, ...empty, error: "not a git repository" };
+
+  const raw = Number(opts.limit);
+  const limit = Number.isFinite(raw) && raw > 0 ? Math.min(2000, Math.floor(raw)) : 300;
+  const all = opts.all !== false;
+
+  const [logR, headR, wt] = await Promise.all([
+    run(status.root, [
+      "log",
+      "--no-color",
+      "--no-show-signature",
+      "--date-order",
+      "--decorate=full",
+      `--format=${GRAPH_FORMAT}`,
+      `--max-count=${limit}`,
+      // Order matters: --exclude applies to the --all that follows it. Stash commits
+      // carry two or three parents and would read as merges that never happened.
+      ...(all ? ["--exclude=refs/stash", "--all"] : ["HEAD"]),
+      "--",
+    ]),
+    run(status.root, ["rev-parse", "--verify", "--quiet", "HEAD"]),
+    worktrees(status.root).catch(() => null),
+  ]);
+
+  const head = headR.ok ? headR.out.trim() || null : null;
+  const trees = (wt?.worktrees ?? [])
+    .filter((w) => !w.bare)
+    .map((w) => ({ path: w.path, branch: w.branch, head: w.head }));
+
+  if (!logR.ok) {
+    // An unborn branch has no history yet; that is an empty graph, not a failure.
+    if (!head) return { ok: true, ...empty, branch: status.branch, worktrees: trees, error: null };
+    return { ok: false, ...empty, worktrees: trees, error: logR.err || "git log failed" };
+  }
+
+  return {
+    ok: true,
+    commits: parseGraphLog(logR.out),
+    head,
+    branch: status.branch,
+    worktrees: trees,
+    error: null,
+  };
 }
 
 // ── worktrees ─────────────────────────────────────────────────────────────────
@@ -690,6 +852,33 @@ export type WorktreeRepo = {
   bare: boolean;
 };
 
+
+/** Run `fn` over `items` with at most `limit` in flight, so a long list cannot spawn a git process per entry at once. */
+async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  return out;
+}
+
+/**
+ * The listing is cached for a few seconds and shared between concurrent callers:
+ * every client asks on every git event, and each answer costs a `git rev-parse` per
+ * candidate plus a `git worktree list` per repository.
+ */
+const REPOS_TTL_MS = 5_000;
+let reposCache: { key: string; at: number; value: Promise<WorktreeRepo[]> } | null = null;
+
+/** Called whenever a repository changed; the next listing re-reads git. */
+export function invalidateWorktreeRepos(): void {
+  reposCache = null;
+}
 /**
  * The repositories behind a set of directories, one entry per repository.
  *
@@ -699,12 +888,26 @@ export type WorktreeRepo = {
  * asking from the main checkout when there is one keeps the reported name stable — a
  * linked worktree's directory is named for its branch.
  */
-export async function worktreeRepos(candidates: string[]): Promise<WorktreeRepo[]> {
+export function worktreeRepos(candidates: string[]): Promise<WorktreeRepo[]> {
+  const key = candidates.join("\0");
+  const now = Date.now();
+  if (reposCache && reposCache.key === key && now - reposCache.at < REPOS_TTL_MS) return reposCache.value;
+  const value = scanWorktreeRepos(candidates);
+  const entry = { key, at: now, value };
+  reposCache = entry;
+  value.catch(() => {
+    if (reposCache === entry) reposCache = null;
+  });
+  return value;
+}
+
+async function scanWorktreeRepos(candidates: string[]): Promise<WorktreeRepo[]> {
   // Candidates arrive from two sources that overlap heavily — a worktree in the
   // configured directory is usually also one a session has run in — and probing the
-  // same directory twice costs the same as probing two.
-  const dirs = [...new Set(candidates.filter((d) => d && isAbsolute(d)))];
-  const found = await Promise.all(dirs.map((dir) => repoIdentity(dir)));
+  // same directory twice costs the same as probing two. A directory that is gone
+  // cannot answer, and probing it spawns git for nothing.
+  const dirs = [...new Set(candidates.filter((d) => d && isAbsolute(d) && existsSync(d)))];
+  const found = await pool(dirs, 8, (dir) => repoIdentity(dir));
 
   const byKey = new Map<string, WorktreeRepo>();
   for (const id of found) {
@@ -727,7 +930,7 @@ export async function worktreeRepos(candidates: string[]): Promise<WorktreeRepo[
   }
 
   const repos = [...byKey.values()];
-  const counted = await Promise.all(repos.map((r) => worktrees(r.root).catch(() => null)));
+  const counted = await pool(repos, 8, (r) => worktrees(r.root).catch(() => null));
 
   const out: WorktreeRepo[] = [];
   for (const [i, repo] of repos.entries()) {
@@ -1218,7 +1421,7 @@ export async function checkout(
         if (!plausibleRef(from) || !(await refExists(root, from)))
           return finish(cwd, false, `unknown start point: ${from}`, null);
       }
-      const r = await run(root, ["switch", "--create", name, ...(from ? [from] : [])]);
+      const r = await run(root, ["switch", "--create", name, ...(from ? [from] : [])], { timeoutMs: WRITE_TIMEOUT_MS });
       return finish(cwd, r.ok, r.ok ? null : r.err || "git switch failed", null);
     }
 
@@ -1245,7 +1448,7 @@ export async function checkout(
       }
     }
 
-    const r = await run(root, args);
+    const r = await run(root, args, { timeoutMs: WRITE_TIMEOUT_MS });
     if (r.ok) return finish(cwd, true, null, null);
 
     return finish(cwd, false, r.err || "git switch failed", switchHint(r.err));
@@ -1355,7 +1558,7 @@ export async function pull(cwd: string): Promise<WriteResult> {
         "A fast-forward can't apply. Rebase or merge in a terminal, where conflicts can be resolved.",
       );
 
-    const merged = await run(root, ["merge", "--ff-only", "@{u}"]);
+    const merged = await run(root, ["merge", "--ff-only", "@{u}"], { timeoutMs: WRITE_TIMEOUT_MS });
     if (!merged.ok) return finish(cwd, false, merged.err || "git merge --ff-only failed", switchHint(merged.err));
 
     return finish(cwd, true, null, null, `Fast-forwarded ${behind} commit${behind === 1 ? "" : "s"}.`);
@@ -1419,7 +1622,7 @@ export async function stage(
   if (!specs) return { ok: false, status, error: "bad path", hint: null };
 
   return withLock(root, async () => {
-    const r = await run(root, ["add", "--all", "--", ...specs]);
+    const r = await run(root, ["add", "--all", "--", ...specs], { timeoutMs: WRITE_TIMEOUT_MS });
     if (!r.ok) return finish(cwd, false, r.err || "git add failed", null);
     const n = opts.all ? null : specs.length;
     return finish(cwd, true, null, null, n === null ? "Staged everything." : `Staged ${n} file${n === 1 ? "" : "s"}.`);
@@ -1450,7 +1653,7 @@ export async function unstage(
     const args = (await hasHead(root))
       ? ["restore", "--staged", "--", ...specs]
       : ["rm", "--cached", "-r", "--quiet", "--", ...specs];
-    const r = await run(root, args);
+    const r = await run(root, args, { timeoutMs: WRITE_TIMEOUT_MS });
     if (!r.ok) return finish(cwd, false, r.err || "git restore --staged failed", null);
     const n = opts.all ? null : specs.length;
     return finish(
@@ -1523,14 +1726,14 @@ export async function discard(cwd: string, paths: string[]): Promise<WriteResult
         "--worktree",
         "--",
         ...tracked.map((p) => `:(literal)${p}`),
-      ]);
+      ], { timeoutMs: WRITE_TIMEOUT_MS });
       if (!r.ok) return finish(cwd, false, r.err || "git restore failed", null);
     }
 
     if (untracked.length) {
       // No -d: these are files the status listed individually, and -d would let a
       // directory take its contents with it.
-      const r = await run(root, ["clean", "-f", "--", ...untracked.map((p) => `:(literal)${p}`)]);
+      const r = await run(root, ["clean", "-f", "--", ...untracked.map((p) => `:(literal)${p}`)], { timeoutMs: WRITE_TIMEOUT_MS });
       if (!r.ok) return finish(cwd, false, r.err || "git clean failed", null);
     }
 
@@ -1971,7 +2174,7 @@ export async function worktreeAdd(
         );
     }
 
-    const r = await run(root, args);
+    const r = await run(root, args, { timeoutMs: WRITE_TIMEOUT_MS });
     if (!r.ok)
       return worktreeFinish(cwd, false, r.err || "git worktree add failed", worktreeAddHint(r.err));
 
@@ -2377,7 +2580,7 @@ export async function worktreeRemove(cwd: string, path: string): Promise<Worktre
         "Commit them, or discard them from the file list, then remove it. Nothing here deletes uncommitted work.",
       );
 
-    const r = await run(root, ["worktree", "remove", target]);
+    const r = await run(root, ["worktree", "remove", target], { timeoutMs: WRITE_TIMEOUT_MS });
     if (!r.ok)
       return worktreeFinish(
         cwd,

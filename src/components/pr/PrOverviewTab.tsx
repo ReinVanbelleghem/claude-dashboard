@@ -3,6 +3,7 @@ import { prApi, type Person, type PrCheck, type PrInlineComment, type PrOverview
 import { Markdown } from "../Markdown.tsx";
 import { CommentEditor, EditableComment, HunkSnippet, commentTime } from "./PrComments.tsx";
 import { prHash } from "./prState.ts";
+import { recall, remember } from "./prCache.ts";
 
 /**
  * The conversation page: the description, then every top-level comment and review
@@ -403,10 +404,10 @@ export function PrOverviewTab({ pr }: { pr: PrRef }) {
   const load = () =>
     prApi
       .overview(pr)
-      .then(setData)
+      .then((r) => setData(remember(pr, "overview", r)))
       .catch((e: Error) => setError(e.message));
   useEffect(() => {
-    setData(null);
+    setData(recall<PrOverview>(pr, "overview") ?? null);
     setError(null);
     load();
   }, [key]);

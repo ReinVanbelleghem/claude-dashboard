@@ -74,10 +74,10 @@ export function CommentEditor({
       ) : (
         <textarea
           className="composer-box"
-          rows={4}
+          rows={3}
           autoFocus
           value={body}
-          placeholder={`${placeholder ?? "Leave a comment (markdown)"} — ⌘↵ to save`}
+          placeholder={placeholder ?? "Leave a comment (markdown)"}
           onChange={(e) => setBody(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Escape") {
@@ -93,6 +93,7 @@ export function CommentEditor({
       )}
       {error && <div className="pr-error">{error}</div>}
       <div className="comment-actions">
+        <span className="hint">⌘↵ to save · Esc to cancel</span>
         <button className="icon-btn" onClick={onCancel}>
           Cancel
         </button>

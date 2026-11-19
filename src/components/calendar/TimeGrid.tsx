@@ -24,6 +24,7 @@ import {
 
 const DEFAULT_HOUR_PX = 48;
 const MIN_HOUR_PX = 22;
+const MIN_BLOCK_PX = 18;
 const MAX_HOUR_PX = 160;
 const ZOOM_KEY = "calendar.hourPx";
 const ZOOM_SPEED = 0.01;
@@ -273,9 +274,9 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
       if (dragged?.kind === "create" && dragged.end > from && dragged.start < to) {
         blocks.push({ kind: "new", key: "new", from: minutes(Math.max(dragged.start, from)), to: minutes(Math.min(dragged.end, to)), start: dragged.start, end: dragged.end });
       }
-      return layoutColumns(blocks);
+      return layoutColumns(blocks, Math.min((MIN_BLOCK_PX / hourPx) * 60, 25));
     });
-  }, [days, events, tasks, drag]);
+  }, [days, events, tasks, drag, hourPx]);
 
   const bars = useMemo(() => {
     const lastIndex = days.length - 1;
@@ -353,7 +354,7 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
                   : undefined;
                 return (
                   <div
-                    className={`cal-bar ${bar.ghost ? "ghost" : ""} ${bar.event.editable ? "" : "locked"} ${bar.event.other ? "other" : ""} ${bar.event.draft ? "draft" : ""} ${replyClass(bar.event)}`}
+                    className={`cal-bar ${bar.ghost ? "ghost" : ""} ${bar.event.editable ? "" : "locked"} ${bar.event.other ? "other" : ""} ${bar.event.draft ? "draft" : ""} ${bar.event.status ? `status ${bar.event.status.kind}` : ""} ${replyClass(bar.event)}`}
                     key={bar.key}
                     style={{ ...place, ...tint(bar.event.color) }}
                     {...hover.bind(bar.event)}
@@ -425,7 +426,7 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
               const { event } = block;
               return (
                 <div
-                  className={`cal-ev ${short ? "short" : ""} ${block.ghost ? "ghost" : ""} ${event.editable ? "" : "locked"} ${event.other ? "other" : ""} ${event.draft ? "draft" : ""} ${replyClass(event)}`}
+                  className={`cal-ev ${short ? "short" : ""} ${block.ghost ? "ghost" : ""} ${event.editable ? "" : "locked"} ${event.other ? "other" : ""} ${event.draft ? "draft" : ""} ${event.status ? `status ${event.status.kind}` : ""} ${replyClass(event)}`}
                   key={block.key}
                   style={{ ...box, ...tint(event.color) }}
                   {...hover.bind(event)}

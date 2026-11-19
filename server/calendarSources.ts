@@ -21,7 +21,30 @@ const GOOGLE_LABEL = /google|gmail/i;
 
 type Sources = { calendars: CalendarInfo[]; macHidden: Set<string>; errors: string[] };
 
-async function sources(): Promise<Sources> {
+const SOURCES_TTL_MS = 30_000;
+const EVENTS_TTL_MS = 5_000;
+const EVENTS_KEPT = 40;
+
+let knownSources: { at: number; value: Promise<Sources> } | null = null;
+const knownEvents = new Map<string, { at: number; value: Promise<{ events: CalendarEvent[]; errors: string[] }> }>();
+
+/** Forget what was read, after anything that changes a calendar. */
+export function invalidateCalendar(): void {
+  knownSources = null;
+  knownEvents.clear();
+}
+
+function sources(): Promise<Sources> {
+  if (knownSources && Date.now() - knownSources.at < SOURCES_TTL_MS) return knownSources.value;
+  const value = readSources();
+  knownSources = { at: Date.now(), value };
+  value.catch(() => {
+    if (knownSources?.value === value) knownSources = null;
+  });
+  return value;
+}
+
+async function readSources(): Promise<Sources> {
   const mac = await macCalendars();
   const errors: string[] = [];
   const google = (
@@ -50,7 +73,21 @@ export async function listCalendars(): Promise<CalendarInfo[]> {
 
 const byStart = (a: CalendarEvent, b: CalendarEvent) => a.start - b.start || b.end - a.end;
 
-export async function listEvents(from: number, to: number): Promise<{ events: CalendarEvent[]; errors: string[] }> {
+export function listEvents(from: number, to: number): Promise<{ events: CalendarEvent[]; errors: string[] }> {
+  const key = `${from}:${to}`;
+  const hit = knownEvents.get(key);
+  if (hit && Date.now() - hit.at < EVENTS_TTL_MS) return hit.value;
+  const value = readEvents(from, to);
+  knownEvents.delete(key);
+  knownEvents.set(key, { at: Date.now(), value });
+  if (knownEvents.size > EVENTS_KEPT) knownEvents.delete(knownEvents.keys().next().value!);
+  value.catch(() => {
+    if (knownEvents.get(key)?.value === value) knownEvents.delete(key);
+  });
+  return value;
+}
+
+async function readEvents(from: number, to: number): Promise<{ events: CalendarEvent[]; errors: string[] }> {
   const [{ macHidden, errors }, mac, google] = await Promise.all([
     sources(),
     macEvents(from, to),
@@ -79,11 +116,13 @@ export async function listPeople(): Promise<Person[]> {
 }
 
 export async function createEvent(draft: EventDraft): Promise<void> {
+  invalidateCalendar();
   if (parseGoogleCalendarId(draft.calendarId) || draft.google) return createGoogleEvent(draft);
   await createMacEvent(draft);
 }
 
 export async function updateEvent(patch: EventPatch): Promise<void> {
+  invalidateCalendar();
   if (parseGoogleCalendarId(patch.calendarId)) {
     const { id, occurrence: _occurrence, span: _span, calendarId, seriesId: _seriesId, google: _google, ...fields } = patch;
     return updateGoogleEvent(calendarId!, id, fields);
@@ -93,6 +132,7 @@ export async function updateEvent(patch: EventPatch): Promise<void> {
 }
 
 export async function deleteEvent(ref: EventRef): Promise<void> {
+  invalidateCalendar();
   if (parseGoogleCalendarId(ref.calendarId)) {
     const wholeSeries = ref.span === "future" && ref.seriesId;
     return deleteGoogleEvent(ref.calendarId!, wholeSeries ? ref.seriesId! : ref.id);

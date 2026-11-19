@@ -89,6 +89,8 @@ export type Settings = {
       native: boolean;
       /** Web Notification raised by the dashboard tab. Only fires while a tab is alive. */
       browser: boolean;
+      /** A toast inside the dashboard page itself, bottom right. */
+      inApp: boolean;
       /** Mirrored to a Google Chat space, so alerts reach you away from the desk. */
       googleChat: boolean;
     };
@@ -223,6 +225,8 @@ export type Settings = {
     themes?: SavedTheme[];
     disabledModels?: string[];
     defaultModel?: string;
+    /** The permission mode a session starts in, new or resumed. Empty means Auto. */
+    defaultPermissionMode?: string;
     customModels?: { value: string; label: string }[];
     /** Repositories (by shared `.git`) shown first on the Worktrees page. */
     pinnedRepos?: string[];
@@ -317,7 +321,7 @@ const DEFAULTS: Settings = {
       calendarInvite: true,
       calendarStarting: true,
     },
-    channels: { native: true, browser: true, googleChat: false },
+    channels: { native: true, browser: true, inApp: true, googleChat: false },
     googleChatWebhook: "",
     delaySeconds: 10,
     cooldownSeconds: 120,

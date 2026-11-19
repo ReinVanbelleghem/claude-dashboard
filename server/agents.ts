@@ -45,6 +45,8 @@ export type TimelineItem = (
       ts: number;
       text: string;
       queued?: boolean;
+      /** Set on a queued message, so the CLI's echo of it at pickup can be matched back. */
+      uuid?: string;
       /**
        * Attached images. The base64 still never enters the timeline — a few
        * screenshots would be megabytes on every SSE fan-out — but the bytes are
@@ -542,6 +544,7 @@ function userMessage(
   text: string,
   images: InboundImage[] = [],
   priority?: "now" | "next" | "later",
+  uuid?: string,
 ): SDKUserMessage {
   // Images lead: the model reads the blocks in order, and the text almost always
   // refers back to the picture ("why does this look wrong?").
@@ -557,6 +560,7 @@ function userMessage(
     message: { role: "user", content },
     parent_tool_use_id: null,
     priority,
+    ...(uuid ? { uuid } : {}),
   } as SDKUserMessage;
 }
 
@@ -626,6 +630,11 @@ function knownTitle(sessionId: string): string | null {
   return restorable.find((r) => r.sessionId === sessionId)?.title ?? null;
 }
 
+export function knownModel(sessionId: string): string | null {
+  for (const a of agents.values()) if (a.sessionId === sessionId && a.model) return a.model;
+  return restorable.find((r) => r.sessionId === sessionId)?.model ?? null;
+}
+
 export function startAgent(opts: StartOptions): string {
   const key = randomUUID();
   const queue = inputQueue();
@@ -673,6 +682,9 @@ export function startAgent(opts: StartOptions): string {
       // this is opted into only when the session is deliberately started that way.
       allowDangerouslySkipPermissions: opts.permissionMode === "bypassPermissions",
       resume: opts.resume,
+      // Makes the CLI echo each user message back, by uuid, at the moment it takes it
+      // up — the only signal that a queued message was folded into the running turn.
+      extraArgs: { "replay-user-messages": null },
       title: opts.title?.trim() || undefined,
       allowedTools: opts.allowedTools,
       mcpServers: opts.mcpServers,
@@ -945,6 +957,17 @@ async function consume(agent: Agent) {
         }
 
         case "user": {
+          if (anyMsg.isReplay && anyMsg.uuid) {
+            const picked = agent.timeline.find(
+              (i): i is Extract<TimelineItem, { kind: "user" }> => i.kind === "user" && i.queued === true && i.uuid === anyMsg.uuid,
+            );
+            if (picked) {
+              delete picked.queued;
+              emit("agent-item", { key: agent.key, item: picked, replace: true });
+              touch(agent);
+            }
+            break;
+          }
           // Tool results arrive as user messages; attach them to their call so
           // the UI can show one collapsible block per tool instead of two. The
           // lookup is by tool_use_id, which is unique across subagents too.
@@ -973,7 +996,11 @@ async function consume(agent: Agent) {
         }
 
         case "result": {
-          for (const i of agent.timeline) if (i.kind === "user" && i.queued) delete i.queued;
+          for (const i of agent.timeline) {
+            if (i.kind !== "user" || !i.queued) continue;
+            delete i.queued;
+            emit("agent-item", { key: agent.key, item: i, replace: true });
+          }
           append(agent, {
             kind: "result",
             ts: Date.now(),
@@ -1045,14 +1072,15 @@ export function sendMessage(key: string, text: string, images: InboundImage[] = 
   const a = agents.get(key);
   if (!a || a.status === "ended" || a.status === "error") return false;
   const busy = a.status === "thinking" || a.status === "awaiting-permission";
+  const uuid = busy ? randomUUID() : undefined;
   append(a, {
     kind: "user",
     ts: Date.now(),
     text: display ?? text,
-    ...(busy ? { queued: true } : {}),
+    ...(uuid ? { queued: true, uuid } : {}),
     ...(images.length ? { images: images.map(persistImage) } : {}),
   });
-  a.push(userMessage(text, images, busy ? "next" : undefined));
+  a.push(userMessage(text, images, busy ? "next" : undefined, uuid));
   if (a.suggestion) {
     a.suggestion = null;
     emit("agent-suggestion", { key, suggestion: null });
@@ -1252,7 +1280,10 @@ export async function stopAgent(key: string, reason = "ended from the dashboard"
  * worktree that has since been removed would otherwise reach the SDK as a spawn into
  * nowhere, failing somewhere far less legible than here.
  */
-export function restoreAgent(sessionId: string): { key: string } | { error: string } {
+export function restoreAgent(
+  sessionId: string,
+  defaults: { model?: string; permissionMode?: PermissionMode } = {},
+): { key: string } | { error: string } {
   const row = restorable.find((r) => r.sessionId === sessionId);
   if (!row) return { error: "unknown session" };
   if (!existsSync(row.cwd))
@@ -1261,7 +1292,8 @@ export function restoreAgent(sessionId: string): { key: string } | { error: stri
     key: startAgent({
       cwd: row.cwd,
       research: row.research === true,
-      model: row.model ?? undefined,
+      model: row.model ?? defaults.model,
+      permissionMode: defaults.permissionMode,
       title: row.title ?? undefined,
       resume: sessionId,
     }),

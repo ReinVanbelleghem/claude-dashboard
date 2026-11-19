@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { recall, remember, warm } from "./prCache.ts";
 import { prApi, prKey, type AgentSummary, type PrDetail, type PrRef, type PrWatch, type PrWatchChange, type Settings } from "../../api.ts";
 import { RefreshIcon } from "../Icons.tsx";
 import { CiDot, ContextLinks, DraftBadge, ReviewBadge, StateBadge } from "./PrBadges.tsx";
@@ -8,6 +9,8 @@ import { PrOverviewTab } from "./PrOverviewTab.tsx";
 import { PrRunsTab, RunStatusBadge } from "./PrRunsTab.tsx";
 import { SinceStrip, WatchToggle } from "./PrWatchBits.tsx";
 import { isTyping, prHash, usePrRuns } from "./prState.ts";
+
+const WARM_DELAY_MS = 150;
 
 /**
  * One pull request, full page: header with the action buttons, then Files changed
@@ -68,17 +71,19 @@ export function PrPage({
     setError(null);
     return prApi
       .detail(pr)
-      .then((r) => setDetail(r.pr))
+      .then((r) => setDetail(remember(pr, "detail", r.pr)))
       .catch((e: Error) => setError(e.message));
   }, [key]);
 
   useEffect(() => {
-    setDetail(null);
+    setDetail(recall<PrDetail>(pr, "detail") ?? null);
     loadDetail();
+    const idle = window.setTimeout(() => warm(pr, (["overview", "files", "threads", "commits"] as const).filter((part) => part !== tab)), WARM_DELAY_MS);
     prApi
       .template(pr)
       .then((r) => setTemplate(r.body))
       .catch(() => {});
+      return () => window.clearTimeout(idle);
   }, [key]);
 
   const refresh = useCallback(() => {

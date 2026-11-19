@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { fmtAgo, type ReviewComment } from "../api.ts";
-import { CheckIcon, TrashIcon } from "./Icons.tsx";
+import { CheckIcon, CommentIcon, PencilIcon, RefreshIcon, TrashIcon } from "./Icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 /**
@@ -40,37 +40,35 @@ export function CommentThread({
   return (
     <div className={`comment ${resolved ? "resolved" : ""}`}>
       <div className="comment-head">
-        <span className="comment-where">
-          {comment.line ? `line ${comment.line}` : "file"}
-          {resolved && " · resolved"}
-          {comment.sentAt && !resolved && " · sent to Claude"}
+        <span className="comment-who">
+          <CommentIcon /> You
         </span>
+        <span className="comment-where">{comment.line ? `on line ${comment.line}` : "on this file"}</span>
         <time>{fmtAgo(comment.updatedAt)}</time>
-        <span style={{ flex: 1 }} />
-        <button
-          className="icon-btn ghost square"
-          title={resolved ? "Reopen" : "Resolve — hides it and drops it from the prompt"}
-          onClick={() => handlers.update(comment.id, { status: resolved ? "open" : "resolved" })}
-        >
-          {resolved ? "↺" : <CheckIcon />}
-        </button>
-        <button
-          className="icon-btn ghost square"
-          title="Edit"
-          onClick={() => {
-            setDraft(comment.body);
-            setEditing(!editing);
-          }}
-        >
-          ✎
-        </button>
-        <button
-          className="icon-btn ghost square"
-          title="Delete this comment"
-          onClick={() => handlers.remove(comment.id)}
-        >
-          <TrashIcon />
-        </button>
+        {resolved && <span className="comment-tag done">Resolved</span>}
+        {comment.sentAt && !resolved && <span className="comment-tag">Sent to Claude</span>}
+        <span className="comment-tools">
+          <button
+            title={resolved ? "Reopen" : "Resolve: hides it and drops it from the prompt"}
+            aria-label={resolved ? "Reopen" : "Resolve"}
+            onClick={() => handlers.update(comment.id, { status: resolved ? "open" : "resolved" })}
+          >
+            {resolved ? <RefreshIcon /> : <CheckIcon />}
+          </button>
+          <button
+            title="Edit"
+            aria-label="Edit"
+            onClick={() => {
+              setDraft(comment.body);
+              setEditing(!editing);
+            }}
+          >
+            <PencilIcon />
+          </button>
+          <button className="danger" title="Delete this comment" aria-label="Delete" onClick={() => handlers.remove(comment.id)}>
+            <TrashIcon />
+          </button>
+        </span>
       </div>
 
       {adrift && !resolved && (
@@ -142,10 +140,10 @@ export function NewComment({
     <div className="comment new">
       <textarea
         className="composer-box"
-        rows={3}
+        rows={2}
         autoFocus
         value={body}
-        placeholder={`${placeholder} — ⌘↵ to save`}
+        placeholder={placeholder}
         onChange={(e) => setBody(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Escape") onCancel();
@@ -156,6 +154,7 @@ export function NewComment({
         }}
       />
       <div className="comment-actions">
+        <span className="hint">⌘↵ to comment · Esc to cancel</span>
         <button className="icon-btn" onClick={onCancel}>
           Cancel
         </button>

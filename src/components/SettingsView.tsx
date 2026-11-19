@@ -19,6 +19,8 @@ import { footerPagesOf, orderedPages, type PageDef } from "../pages.ts";
 import { useSortable } from "../useSortable.ts";
 import { ServicesSettings } from "./services/ServicesSettings.tsx";
 import { Select } from "./Select.tsx";
+import { MODES, MODE_HELP, MODE_LABEL } from "./Conversation.tsx";
+import { permissionModeOr } from "../../shared/templates.ts";
 import { ReviewsSettings } from "./pr/ReviewsSettings.tsx";
 
 function labelFromModelId(id: string): string {
@@ -47,7 +49,7 @@ const SECTIONS: { key: SectionKey; label: string; help: string }[] = [
   { key: "appearance", label: "Appearance", help: "Theme, accent, tab icon" },
   { key: "pages", label: "Pages", help: "Which pages the dock shows" },
   { key: "notifications", label: "Notifications", help: "What interrupts you" },
-  { key: "sessions", label: "Sessions", help: "Where a card opens, and which model" },
+  { key: "sessions", label: "Sessions", help: "Where a card opens, model and permissions" },
   { key: "artifacts", label: "Artifacts", help: "Where generated pages are kept" },
   { key: "services", label: "Services", help: "The local dev stack" },
   { key: "code", label: "Code", help: "Diffs, worktrees and pull requests" },
@@ -269,16 +271,33 @@ export function SettingsView({
 
           return (
             <div className="panel">
-              <h2>Default model</h2>
-              <p className="hint">Used for a new session unless you pick a different one when starting it.</p>
-              <Select
-                value={settings.ui.defaultModel || "default"}
-                options={[
-                  { value: "default", label: "Default (recommended)", hint: "Let the CLI pick" },
-                  ...merged.filter((m) => !disabled.includes(m.value)),
-                ]}
-                onChange={(v) => save({ ui: { defaultModel: v === "default" ? "" : v } })}
-              />
+              <h2>Defaults</h2>
+              <p className="hint">
+                What a new session starts with unless you pick something else when starting it. A resumed session comes
+                back with these too.
+              </p>
+              <div className="session-defaults-grid">
+                <label className="field">
+                  <span>Model</span>
+                  <Select
+                    value={settings.ui.defaultModel || "default"}
+                    options={[
+                      { value: "default", label: "Default (recommended)", hint: "Let the CLI pick" },
+                      ...merged.filter((m) => !disabled.includes(m.value)),
+                    ]}
+                    onChange={(v) => save({ ui: { defaultModel: v === "default" ? "" : v } })}
+                  />
+                </label>
+                <label className="field">
+                  <span>Permissions</span>
+                  <Select
+                    ariaLabel="Default permissions"
+                    value={permissionModeOr(settings.ui.defaultPermissionMode)}
+                    options={MODES.map((m) => ({ value: m, label: MODE_LABEL[m], hint: MODE_HELP[m] }))}
+                    onChange={(v) => save({ ui: { defaultPermissionMode: v } })}
+                  />
+                </label>
+              </div>
 
               <h2 style={{ marginTop: 22 }}>Available models</h2>
               <p className="hint">Turn off the ones you never want to see. At least one has to stay on.</p>

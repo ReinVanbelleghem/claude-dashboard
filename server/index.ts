@@ -24,6 +24,7 @@ import {
   renamePastSession,
   restartAgent,
   restoreAgent,
+  knownModel,
   rosterPayload,
   sendMessage,
   setAgentEmitter,
@@ -68,6 +69,7 @@ import {
   checkout as gitCheckout,
   commit as gitCommit,
   diff as gitDiff,
+  graph as gitGraph,
   discard as gitDiscard,
   fetch as gitFetch,
   log as gitLog,
@@ -84,6 +86,7 @@ import {
   dirtyCounts as gitDirtyCounts,
   worktrees as gitWorktrees,
   worktreeRepos as gitWorktreeRepos,
+  invalidateWorktreeRepos,
   provisionPlan as gitProvisionPlan,
   provisionSuggest as gitProvisionSuggest,
 } from "./git.ts";
@@ -124,7 +127,7 @@ import { closeTerminal, createTerminal, initTerminals, listTerminals, renameTerm
 import { initExplain, onAgentItem as explainOnItem, onRoster as explainOnRoster } from "./prExplain.ts";
 import { initReview } from "./prReview.ts";
 import { reviewRepoLabel, reviewRoot } from "./prRepos.ts";
-import { initRuns, onAgentItem as runsOnItem, onRoster as runsOnRoster, runMessagePreamble } from "./prRuns.ts";
+import { initRuns, onAgentItem as runsOnItem, onRoster as runsOnRoster, runMessagePreamble, runOfSession } from "./prRuns.ts";
 import {
   buildState as servicesState,
   capturePane,
@@ -144,6 +147,7 @@ import { listRuns, nextFires, runTemplate, startScheduler } from "./templates.ts
 import { MAX_DROP_BYTES, pruneDropped, storeDropped } from "./dropped.ts";
 import { needsInput, readRegistry } from "./registry.ts";
 import type { TaskAdd, TaskPatch } from "../shared/tasks.ts";
+import { permissionModeOr, type PermissionMode } from "../shared/templates.ts";
 import {
   addTask,
   addTaskProject,
@@ -168,7 +172,7 @@ import type { EventDraft, EventPatch, EventRef } from "../shared/calendar.ts";
 import { CALENDAR_SAFE_TOOLS, calendarToolServer } from "./calendarTools.ts";
 import { addProposal, approveProposal, discardProposal, listProposals, updateProposal } from "./calendarProposals.ts";
 import { disconnectGoogle, finishGoogleConnect, googleAvailability, googleConnectUrl, googleOtherEvents, googleStatus, removeGoogleClient, replyToGoogleEvent, setGoogleClient, setGoogleEventGuests, setGoogleGuests } from "./google.ts";
-import { createEvent, deleteEvent, listCalendars, listEvents, listPeople, updateEvent } from "./calendarSources.ts";
+import { createEvent, deleteEvent, invalidateCalendar, listCalendars, listEvents, listPeople, updateEvent } from "./calendarSources.ts";
 import {
   attachSession,
   createWorkspace,
@@ -188,6 +192,7 @@ import {
   syncWorkspaces,
   updateWorkspace,
   workspaceHolds,
+  workspaceForFolder,
   workspacesPayload,
   type SessionRef,
 } from "./workspaces.ts";
@@ -264,6 +269,7 @@ type Client = { send: (event: string, data: unknown) => void; close: () => void 
 const clients = new Set<Client>();
 
 function broadcast(event: string, data: unknown) {
+  if (event === "git" || event === "worktrees") invalidateWorktreeRepos();
   for (const c of clients) {
     try {
       c.send(event, data);
@@ -288,6 +294,7 @@ setNotifyEmitter(broadcast);
  */
 let lastServices = "";
 async function broadcastServices(force = false): Promise<void> {
+  if (!force && clients.size === 0) return;
   const { services } = getSettings();
   try {
     const state = await servicesState(services.defs, services.paths, services.compose);
@@ -519,6 +526,11 @@ function toolObject(toolName: string, input: unknown): string | null {
 }
 
 /** "Wants to run a command: bun test" — the request, in words you can act on. */
+function sessionDefaults(): { model?: string; permissionMode: PermissionMode } {
+  const { ui } = getSettings();
+  return { model: ui.defaultModel?.trim() || undefined, permissionMode: permissionModeOr(ui.defaultPermissionMode) };
+}
+
 function permissionDetail(toolName: string, input: unknown, description: string | null): string {
   if (toolName.startsWith("mcp__")) {
     const [, server, tool] = toolName.split("__");
@@ -645,7 +657,11 @@ startScheduler(db, (t, r) => {
 });
 
 // coalesced pass instead of an event per line written.
+let idleTicks = 0;
 setInterval(async () => {
+  // Nobody is watching: the index only has to stay roughly current, so run a
+  // quarter as often instead of re-statting every transcript on every tick.
+  if (clients.size === 0 && ++idleTicks % 4 !== 0) return;
   try {
     if ((await indexOnce(db)) > 0) {
       broadcast("index", { at: Date.now() });
@@ -1019,7 +1035,7 @@ const server = Bun.serve<PtyData, never>({
 
     if (p === "/api/agents/restore" && req.method === "POST") {
       const body = (await req.json().catch(() => ({}))) as { sessionId?: string };
-      const r = body.sessionId ? restoreAgent(body.sessionId) : { error: "unknown session" };
+      const r = body.sessionId ? restoreAgent(body.sessionId, sessionDefaults()) : { error: "unknown session" };
       if ("key" in r) return json({ key: r.key });
       // A missing directory is a different failure from a missing session: the
       // session is known, its checkout is not there any more.
@@ -1051,12 +1067,14 @@ const server = Bun.serve<PtyData, never>({
       const cwd = research ? scratchDir() : expand(body?.cwd?.trim() ?? "");
       if (!cwd) return json({ error: "cwd is required" }, 400);
       if (!existsSync(cwd)) return json({ error: `no such directory: ${cwd}` }, 400);
+      const resume = body?.resume || undefined;
+      const defaults = sessionDefaults();
       const key = startAgent({
         cwd,
         research,
-        model: body?.model || undefined,
-        permissionMode: (body?.permissionMode as never) || undefined,
-        resume: body?.resume || undefined,
+        model: body?.model || (resume ? knownModel(resume) || defaults.model : undefined),
+        permissionMode: (body?.permissionMode as never) || (resume ? defaults.permissionMode : undefined),
+        resume,
         prompt: body?.prompt || undefined,
         title: body?.title || undefined,
         templateId: body?.templateId || undefined,
@@ -1135,6 +1153,7 @@ const server = Bun.serve<PtyData, never>({
     }
     if (p === "/api/calendar/refresh" && req.method === "POST") {
       try {
+        invalidateCalendar();
         return json({ changed: await refreshMacCalendar() });
       } catch (e) {
         return json({ error: (e as Error).message }, 502);
@@ -1184,6 +1203,7 @@ const server = Bun.serve<PtyData, never>({
         if (p === "/api/google/availability") {
           return json({ availability: await googleAvailability(body.account, body.emails ?? [], Number(body.start), Number(body.end)) });
         }
+        invalidateCalendar();
         if (body.calendarId && body.id) await setGoogleEventGuests(body.calendarId, body.id, body.guests ?? [], body.rooms ?? []);
         else await setGoogleGuests(body.account, String(body.externalId ?? ""), body.guests ?? [], body.rooms ?? []);
         return json({ ok: true });
@@ -1199,6 +1219,7 @@ const server = Bun.serve<PtyData, never>({
       }
       try {
         await replyToGoogleEvent(body.calendarId, body.id, reply);
+        invalidateCalendar();
         broadcast("calendar", { at: Date.now() });
         return json({ ok: true });
       } catch (e) {
@@ -1658,9 +1679,10 @@ const server = Bun.serve<PtyData, never>({
     if (p === "/api/terminals" && req.method === "GET") return json({ terminals: listTerminals() });
     if (p === "/api/terminals" && req.method === "POST") {
       const b = (await req.json().catch(() => ({}))) as { folder?: unknown; workspaceId?: unknown; title?: unknown };
+      const folder = typeof b.folder === "string" ? expand(b.folder) : "";
       const made = await createTerminal({
-        folder: typeof b.folder === "string" ? expand(b.folder) : "",
-        workspaceId: Number.isInteger(b.workspaceId) ? (b.workspaceId as number) : null,
+        folder,
+        workspaceId: Number.isInteger(b.workspaceId) ? (b.workspaceId as number) : await workspaceForFolder(folder),
         title: typeof b.title === "string" ? b.title : undefined,
       });
       return "error" in made ? json(made, 400) : json({ terminal: made });
@@ -2111,6 +2133,8 @@ const server = Bun.serve<PtyData, never>({
         return json(await gitLog(cwd, Number(url.searchParams.get("limit") ?? 50)));
       }
 
+      if (action === "graph") return json(await gitGraph(cwd, { limit: Number(url.searchParams.get("limit") ?? 300), all: url.searchParams.get("all") !== "0" }));
+
       if (action === "branch-files") return json({ files: await branchFiles(cwd) });
 
       if (action === "commit") {
@@ -2236,6 +2260,12 @@ const server = Bun.serve<PtyData, never>({
         if (!r.ok) return json(r, r.error === "unknown session" ? 404 : 400);
         setSessionTitle(id, title);
         return json({ ok: true, title });
+      }
+
+      if (action === "pr-run") {
+        const agentKey = url.searchParams.get("key") ?? "";
+        const agent = listAgents().find((a) => a.key === id || a.key === agentKey || a.sessionId === id);
+        return json({ run: runOfSession([id, agentKey, agent?.key ?? "", agent?.sessionId ?? ""]) });
       }
 
       const detail = sessionDetail(id);

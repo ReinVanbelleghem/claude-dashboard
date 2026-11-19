@@ -22,8 +22,24 @@ export function useJumpToEnd(
     done.current = key;
     // Instant, and on the container only — scrollIntoView would drag the whole
     // window along with it.
-    el.scrollTop = el.scrollHeight;
+    return settleAtEnd(el);
   }, [ref, ready, key]);
+}
+
+/**
+ * Scrolls to the end now and again on the next two frames. Rows that were off
+ * screen are laid out at an estimated height (content-visibility), so the first
+ * jump lands on an estimate; once the rows it revealed have their real height the
+ * end has moved, and the later passes follow it. Returns a cancel function.
+ */
+export function settleAtEnd(el: HTMLElement): () => void {
+  el.scrollTop = el.scrollHeight;
+  let frames = 2;
+  let frame = requestAnimationFrame(function again() {
+    el.scrollTop = el.scrollHeight;
+    if (--frames > 0) frame = requestAnimationFrame(again);
+  });
+  return () => cancelAnimationFrame(frame);
 }
 
 /** Tracks how far a scrollable element is from each end. */

@@ -35,12 +35,7 @@ export const GitControls = memo(function GitControls({
 
   return (
     <div className="panel git-controls-panel">
-      <div className="panel-head">
-        <h2>Git</h2>
-        <button className="icon-btn tiny" onClick={repo.refresh} title="Re-read the repository">
-          Refresh
-        </button>
-      </div>
+      <div className="tasks-side-label">Branch</div>
 
       <BranchSwitcher
         cwd={repo.cwd}
@@ -51,8 +46,7 @@ export const GitControls = memo(function GitControls({
       />
 
       <p className="hint git-meta">
-        {status.name}
-        {status.upstream ? ` · tracking ${status.upstream}` : " · no upstream"}
+        {status.upstream ? `Tracking ${status.upstream}` : "No upstream yet"}
         {status.ahead > 0 && ` · ${status.ahead} ahead`}
         {status.behind > 0 && ` · ${status.behind} behind`}
       </p>
@@ -130,6 +124,8 @@ export const GitControls = memo(function GitControls({
           )}
         </div>
 
+        {(staged > 0 || repo.message.trim() !== "") && (
+          <>
         <textarea
           rows={3}
           placeholder={staged > 0 ? "Describe this commit…" : "Stage something first…"}
@@ -157,6 +153,8 @@ export const GitControls = memo(function GitControls({
               and a real branch name wraps that button onto three lines. */}
           {busy === "Commit" ? "Committing…" : "Commit"}
         </button>
+          </>
+        )}
       </div>
 
       {notice && (

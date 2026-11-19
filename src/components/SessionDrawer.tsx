@@ -1,3 +1,4 @@
+import { isArtifactKey } from "../../shared/artifacts.ts";
 import { isTerminalKey } from "../../shared/terminals.ts";
 import { useEffect, useRef, useState } from "react";
 import type { AgentSummary, Settings } from "../api.ts";
@@ -123,7 +124,7 @@ export function SessionDrawer({
       <div className="drawer-resize-handle" style={{ right: width }} onPointerDown={startDrag} title="Drag to resize">
         <span className="drawer-resize-grip" />
       </div>
-      <aside className={`drawer ${agent ? "drawer-live" : ""}${isTerminalKey(id) ? " drawer-live drawer-term" : ""}`} ref={aside} style={{ width }}>
+      <aside className={`drawer ${agent ? "drawer-live" : ""}${isTerminalKey(id) || isArtifactKey(id) ? " drawer-live drawer-term" : ""}`} ref={aside} style={{ width }}>
         <SessionPanelContent
           id={id}
           agent={agent}

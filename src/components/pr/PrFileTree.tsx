@@ -70,7 +70,7 @@ export function PrFileTree({
         const isClosed = closed.has(f.path) && !filter;
         return (
           <div key={f.path}>
-            <button className="pr-tree-folder" style={{ paddingLeft: 8 + depth * 12 }} onClick={() => toggle(f.path)}>
+            <button className="pr-tree-folder" style={{ paddingLeft: 10 + depth * 9 }} onClick={() => toggle(f.path)}>
               <span className={`diff-caret ${isClosed ? "" : "open"}`} aria-hidden="true" />
               <span className="pr-tree-name">{f.name}</span>
             </button>
@@ -86,15 +86,14 @@ export function PrFileTree({
             key={file.path}
             title={file.path}
             className={`pr-tree-file ${index === currentIndex ? "on" : ""} ${file.viewed ? "viewed" : ""}`}
-            style={{ paddingLeft: 8 + depth * 12 + 14 }}
+            style={{ paddingLeft: 10 + depth * 9 }}
             onClick={() => onSelect(index)}
           >
-            <span className={`pr-tree-status ${st.cls}`}>{st.letter}</span>
             <span className="pr-tree-name">{file.path.split("/").pop()}</span>
-            {n > 0 && <span className="chip">{n}</span>}
-            <span className="tok-add">+{file.additions}</span>
-            <span className="tok-del">−{file.deletions}</span>
-            <span className={`pr-tree-check ${file.viewed ? "on" : ""}`}>✓</span>
+            {n > 0 && <span className="pr-tree-count">{n}</span>}
+            {file.additions > 0 && <span className="tok-add">+{file.additions}</span>}
+            {file.deletions > 0 && <span className="tok-del">−{file.deletions}</span>}
+            {file.viewed ? <span className="pr-tree-check on">✓</span> : <span className={`pr-tree-status ${st.cls}`}>{st.letter}</span>}
           </button>
         );
       })}
@@ -103,7 +102,7 @@ export function PrFileTree({
 
   return (
     <div className="pr-tree">
-      <input className="search" value={filter} placeholder="Filter files…" onChange={(e) => setFilter(e.target.value)} />
+      <input className="search" value={filter} placeholder="Filter files" onChange={(e) => setFilter(e.target.value)} />
       <div className="pr-tree-list">{tree.count === 0 ? <div className="empty">No matching files</div> : renderChildren(tree.root, 0)}</div>
     </div>
   );

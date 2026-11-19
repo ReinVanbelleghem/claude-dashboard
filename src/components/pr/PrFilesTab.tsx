@@ -7,6 +7,8 @@ import { PrFileCard } from "./PrFileCard.tsx";
 import { PrFileTree } from "./PrFileTree.tsx";
 import type { ReviewHandlers } from "./PrComments.tsx";
 import { isTyping, useExplanations, useRemembered } from "./prState.ts";
+import { recall, remember } from "./prCache.ts";
+import { PanelLeftIcon } from "../Icons.tsx";
 
 /**
  * "Files changed": the diff with GitHub's threads and your pending comments, a file
@@ -51,13 +53,13 @@ export function PrFilesTab({ pr, settings, onSettings }: { pr: PrRef; settings: 
     setFilesError(null);
     prApi
       .files(pr)
-      .then(setFiles)
+      .then((r) => setFiles(remember(pr, "files", r)))
       .catch((e: Error) => setFilesError(e.message));
   }, [key]);
   const reloadThreads = useCallback(() => {
     prApi
       .threads(pr)
-      .then((r) => setThreads(r.threads))
+      .then((r) => setThreads(remember(pr, "threads", r.threads)))
       .catch(() => {});
   }, [key]);
   const reloadDrafts = useCallback(() => {
@@ -67,7 +69,8 @@ export function PrFilesTab({ pr, settings, onSettings }: { pr: PrRef; settings: 
       .catch(() => {});
   }, [key]);
   useEffect(() => {
-    setFiles(null);
+    setFiles(recall<FilesResponse>(pr, "files") ?? null);
+    setThreads(recall<ReviewThread[]>(pr, "threads") ?? []);
     loadFiles();
     reloadThreads();
     reloadDrafts();
@@ -261,16 +264,12 @@ export function PrFilesTab({ pr, settings, onSettings }: { pr: PrRef; settings: 
   return (
     <div className="pr-files" ref={filesRef}>
       <div className="pr-toolbar pr-files-bar" ref={toolbarRef}>
-        <button className={`icon-btn tiny ${showTree ? "on" : ""}`} onClick={toggleTree}>
-          Files
+        <button className="icon-btn square" onClick={toggleTree} title={showTree ? "Hide the file tree" : "Show the file tree"} aria-label={showTree ? "Hide the file tree" : "Show the file tree"} aria-expanded={showTree}>
+          <PanelLeftIcon />
         </button>
-        <span>
+        <span className="pr-files-count" title="Shortcuts: j / k file · n / p hunk · v viewed · c comment">
           {list.length} files · {viewedCount} viewed
         </span>
-        <button className="link-btn inline" onClick={() => setCollapsed(Object.fromEntries(list.map((f) => [f.path, !allCollapsed])))}>
-          {allCollapsed ? "Expand all" : "Collapse all"}
-        </button>
-        <span className="pr-keys">j/k file · n/p hunk · v viewed · c comment</span>
         <span style={{ flex: 1 }} />
         <div className="seg">
           <button className={mode === "unified" ? "active" : ""} onClick={() => setMode("unified")}>
@@ -280,11 +279,18 @@ export function PrFilesTab({ pr, settings, onSettings }: { pr: PrRef; settings: 
             Split
           </button>
         </div>
-        <button className={`icon-btn tiny ${explainOpen ? "on" : ""}`} onClick={toggleExplain} title="Explain selected code (⌘⇧E)">
-          Explain{rootCount ? ` (${rootCount})` : ""}
+        <button className="pr-bar-btn" onClick={() => setCollapsed(Object.fromEntries(list.map((f) => [f.path, !allCollapsed])))}>
+          {allCollapsed ? "Expand all" : "Collapse all"}
         </button>
-        <button className={`icon-btn tiny ${showConversations ? "on" : ""}`} onClick={toggleConversations}>
-          Conversations ({sortedThreads.filter((t) => !t.isResolved).length}/{sortedThreads.length})
+        <button className={`pr-bar-btn ${explainOpen ? "on" : ""}`} aria-pressed={explainOpen} onClick={toggleExplain} title="Explain selected code (⌘⇧E)">
+          Explain
+          {rootCount > 0 && <em>{rootCount}</em>}
+        </button>
+        <button className={`pr-bar-btn ${showConversations ? "on" : ""}`} aria-pressed={showConversations} onClick={toggleConversations} title="Review threads: open / all">
+          Conversations
+          <em>
+            {sortedThreads.filter((t) => !t.isResolved).length}/{sortedThreads.length}
+          </em>
         </button>
         <ReviewMenu pr={pr} draftCount={drafts.length} onSubmitted={() => {
           reloadDrafts();

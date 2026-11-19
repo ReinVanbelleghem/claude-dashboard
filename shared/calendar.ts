@@ -23,6 +23,25 @@ export type Attendee = {
 
 export type Reply = Attendee["status"];
 
+export type EventKind = "outOfOffice" | "focusTime" | "workingLocation";
+
+export type WorkingLocation = { type: "home" | "office" | "custom"; label?: string };
+
+/** What makes a Google event more than a meeting: time away, time to focus, or where you work that day. */
+export type EventStatus = {
+  kind: EventKind;
+  /** Out of office and focus time: Google declines the meetings that fall inside it. */
+  autoDecline?: boolean;
+  /** Focus time: Google Chat is muted while it runs. */
+  doNotDisturb?: boolean;
+  location?: WorkingLocation;
+};
+
+export const EVENT_KIND_LABEL: Record<EventKind, string> = { outOfOffice: "Out of office", focusTime: "Focus time", workingLocation: "Working location" };
+
+export const workingLocationLabel = (location: WorkingLocation | undefined): string =>
+  location?.type === "office" ? location.label || "Office" : location?.type === "custom" ? location.label || "Somewhere else" : "Home";
+
 export type CalendarEvent = {
   /** Unique per occurrence, so two days of one repeating event can sit in one list. */
   key: string;
@@ -56,6 +75,7 @@ export type CalendarEvent = {
   other?: boolean;
   /** A suggested meeting that does not exist yet; it waits for approval. */
   draft?: boolean;
+  status?: EventStatus;
 };
 
 /** A colleague's or a room's calendar kept in the sidebar. */
@@ -82,6 +102,8 @@ export type EventDraft = {
   notes?: string;
   /** Set when the event has guests, a room or a Meet link: Google then creates it and sends the invitations. */
   google?: GoogleInvite;
+  /** Makes it an out of office, a focus time or a working location; these live on the account's main Google calendar. */
+  status?: EventStatus;
 };
 
 /** A meeting suggested by a planning session, shown on the calendar as a draft until approved or discarded. */

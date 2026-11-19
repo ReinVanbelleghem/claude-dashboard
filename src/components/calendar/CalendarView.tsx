@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   calendarApi,
   settingsApi,
@@ -101,7 +101,19 @@ const WEEK_STARTS: { value: WeekStart; label: string }[] = [
   { value: 6, label: "Saturday" },
 ];
 
-export function CalendarView({
+const ownEvents = new Map<string, CalendarEvent[]>();
+const othersEvents = new Map<string, CalendarEvent[]>();
+const CACHE_KEPT = 60;
+const NO_GOOGLE: GoogleStatus = { hasClient: false, clientSource: null, accounts: [], needsReconnect: [] };
+const lastSeen: { status: MacCalendarStatus | null; calendars: CalendarInfo[]; people: CalendarPerson[]; google: GoogleStatus } = { status: null, calendars: [], people: [], google: NO_GOOGLE };
+
+function keep<T>(cache: Map<string, T>, key: string, value: T) {
+  cache.delete(key);
+  cache.set(key, value);
+  if (cache.size > CACHE_KEPT) cache.delete(cache.keys().next().value!);
+}
+
+export const CalendarView = memo(function CalendarView({
   tasks,
   projects,
   settings,
@@ -123,20 +135,18 @@ export function CalendarView({
   /** A day to show, asked for from outside: a notification about a meeting on it. */
   goTo?: { day: string; at: number } | null;
 }) {
-  const [status, setStatus] = useState<MacCalendarStatus | null>(null);
+  const [status, setStatus] = useState<MacCalendarStatus | null>(lastSeen.status);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [calendars, setCalendars] = useState<CalendarInfo[]>([]);
-  const [people, setPeople] = useState<CalendarPerson[]>([]);
-  const [google, setGoogle] = useState<GoogleStatus>({ hasClient: false, clientSource: null, accounts: [], needsReconnect: [] });
+  const [calendars, setCalendars] = useState<CalendarInfo[]>(lastSeen.calendars);
+  const [people, setPeople] = useState<CalendarPerson[]>(lastSeen.people);
+  const [google, setGoogle] = useState<GoogleStatus>(lastSeen.google);
   const [googleSetup, setGoogleSetup] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [proposals, setProposals] = useState<CalendarProposal[]>([]);
   const [passing, setPassing] = useState<OtherCalendar[]>([]);
   const [otherEvents, setOtherEvents] = useState<Record<string, CalendarEvent[]>>({});
   const [otherProblems, setOtherProblems] = useState<Record<string, string>>({});
-  const ownCache = useRef(new Map<string, CalendarEvent[]>());
   const shownRange = useRef("");
-  const otherCache = useRef(new Map<string, CalendarEvent[]>());
   const loadedOthers = useRef(new Map<string, string>());
   const [sidebar, setSidebar] = useState(storedSidebar);
   const [error, setError] = useState<string | null>(null);
@@ -215,21 +225,30 @@ export function CalendarView({
     const range = `${from}:${to}`;
     if (shownRange.current !== range) {
       shownRange.current = range;
-      const remembered = ownCache.current.get(range);
+      const remembered = ownEvents.get(range);
       if (remembered) setEvents(remembered);
     }
     try {
+      const early = lastSeen.status?.enabled ? calendarApi.events(from, to) : null;
+      early?.catch(() => {});
       const next = await calendarApi.status();
+      lastSeen.status = next;
       if (request !== latest.current) return;
       setStatus(next);
-      calendarApi.google().then(setGoogle).catch(() => {});
+      calendarApi
+        .google()
+        .then((g) => {
+          lastSeen.google = g;
+          setGoogle(g);
+        })
+        .catch(() => {});
       calendarApi
         .proposals()
         .then((r) => setProposals(r.proposals))
         .catch(() => {});
       if (!next.enabled) return setEvents([]);
-      const payload = await calendarApi.events(from, to);
-      ownCache.current.set(`${from}:${to}`, payload.events);
+      const payload = await (early ?? calendarApi.events(from, to));
+      keep(ownEvents, `${from}:${to}`, payload.events);
       if (request !== latest.current) return;
       setEvents(payload.events);
       setError(payload.errors?.[0] ?? null);
@@ -277,11 +296,17 @@ export function CalendarView({
     if (!status?.enabled) return;
     calendarApi
       .calendars()
-      .then((r) => setCalendars(r.calendars))
+      .then((r) => {
+        lastSeen.calendars = r.calendars;
+        setCalendars(r.calendars);
+      })
       .catch((e: Error) => setError(e.message));
     calendarApi
       .people()
-      .then((r) => setPeople(r.people))
+      .then((r) => {
+        lastSeen.people = r.people;
+        setPeople(r.people);
+      })
       .catch(() => {});
   }, [status?.enabled]);
 
@@ -292,7 +317,7 @@ export function CalendarView({
     const remembered = Object.fromEntries(
       preloadKey
         .split(",")
-        .map((email) => [email, otherCache.current.get(`${email}|${from}:${to}`)] as const)
+        .map((email) => [email, othersEvents.get(`${email}|${from}:${to}`)] as const)
         .filter((entry): entry is [string, CalendarEvent[]] => entry[1] !== undefined),
     );
     if (Object.keys(remembered).length > 0) setOtherEvents((all) => ({ ...all, ...remembered }));
@@ -301,7 +326,7 @@ export function CalendarView({
       calendarApi
         .otherCalendar(email, from, to)
         .then((r) => {
-          otherCache.current.set(`${email}|${from}:${to}`, r.events);
+          keep(othersEvents, `${email}|${from}:${to}`, r.events);
           if (stale) return;
           loadedOthers.current.set(email, version);
           setOtherEvents((all) => ({ ...all, [email]: r.events }));
@@ -329,13 +354,13 @@ export function CalendarView({
         if (stale) return;
         await calendarApi
           .events(nextFrom, nextTo)
-          .then((payload) => ownCache.current.set(range, payload.events))
+          .then((payload) => keep(ownEvents, range, payload.events))
           .catch(() => {});
         for (const email of (canCompare ? comparedKey.split(",") : []).filter(Boolean)) {
           if (stale) return;
           await calendarApi
             .otherCalendar(email, nextFrom, nextTo)
-            .then((r) => otherCache.current.set(`${email}|${range}`, r.events))
+            .then((r) => keep(othersEvents, `${email}|${range}`, r.events))
             .catch(() => {});
         }
       }
@@ -748,7 +773,7 @@ export function CalendarView({
       )}
     </div>
   );
-}
+});
 
 function Setup({ status, onStatus }: { status: MacCalendarStatus; onStatus: (s: MacCalendarStatus) => void }) {
   const [busy, setBusy] = useState(false);

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { fmtUsd, prApi, type AgentSummary, type Finding, type FindingSeverity, type FindingTarget, type PrRun, type Settings } from "../../api.ts";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { fmtUsd, prApi, type AgentSummary, type Finding, type FindingSeverity, type FindingTarget, type PrRun, type Settings, fmtAgo } from "../../api.ts";
 import { LiveConversation } from "../Conversation.tsx";
 import { Markdown } from "../Markdown.tsx";
 import { CommentIcon, TrashIcon } from "../Icons.tsx";
@@ -10,6 +10,9 @@ import { prHash, usePrRuns } from "./prState.ts";
  * its findings (when the action asked for them) above the live conversation, so a
  * follow-up typed in the composer updates the list.
  */
+const CHAT_MIN_HEIGHT = 360;
+const CHAT_BOTTOM_GAP = 4;
+
 export const RUN_LABEL: Record<PrRun["status"], string> = {
   starting: "starting",
   running: "running",
@@ -49,14 +52,14 @@ export function PrRunsTab({
         {runs.length === 0 && <div className="empty">No runs yet. Start one from the buttons in the header.</div>}
         {runs.map((r) => (
           <a key={r.id} href={prHash(pr, `/runs/${r.id}`)} className={`pr-run-row ${selected?.id === r.id ? "on" : ""}`}>
-            <div className="pr-run-row-top">
-              <RunStatusBadge status={r.status} />
-              <span>{r.actionName}</span>
-            </div>
-            <div className="pr-run-row-sub">
-              {new Date(r.createdAt).toLocaleString()}
-              {r.costUsd != null && ` · ${fmtUsd(r.costUsd)}`}
-            </div>
+            <span className={`pr-run-dot ${r.status}`} title={RUN_LABEL[r.status]} />
+            <span className="pr-run-row-text">
+              <span className="pr-run-row-top">{r.actionName}</span>
+              <span className="pr-run-row-sub">
+                {RUN_LABEL[r.status]} · {fmtAgo(new Date(r.createdAt).getTime())}
+                {r.costUsd != null && ` · ${fmtUsd(r.costUsd)}`}
+              </span>
+            </span>
           </a>
         ))}
       </aside>
@@ -72,6 +75,26 @@ function RunView({ run, agents, settings, onSettings }: { run: PrRun; agents: Ag
   const live = !!agent && agent.status !== "ended" && agent.status !== "error";
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const chat = useRef<HTMLDivElement | null>(null);
+  const [chatHeight, setChatHeight] = useState<number | null>(null);
+  const hasFindings = !!run.findings;
+  useLayoutEffect(() => {
+    const fit = () => {
+      const el = chat.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      let below = CHAT_BOTTOM_GAP;
+      for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        below += parseFloat(style.paddingBottom) + parseFloat(style.marginBottom) + parseFloat(style.borderBottomWidth);
+      }
+      setChatHeight(Math.max(CHAT_MIN_HEIGHT, Math.floor(window.innerHeight - top - below)));
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [live, hasFindings, error]);
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -98,17 +121,18 @@ function RunView({ run, agents, settings, onSettings }: { run: PrRun; agents: Ag
         )}
         <span style={{ flex: 1 }} />
         {run.sessionId && (
-          <a className="icon-btn tiny" href={`#/session/${encodeURIComponent(run.sessionId)}`} title="Open the session on its own page">
+          <a className="pr-bar-btn" href={`#/session/${encodeURIComponent(run.sessionId)}`} title="Open the session on its own page">
             Open session
           </a>
         )}
         {!live && run.sessionId && (
-          <button className="icon-btn tiny primary" disabled={busy} onClick={() => act(() => prApi.resumeRun(run.id))}>
+          <button className="pr-bar-btn primary" disabled={busy} onClick={() => act(() => prApi.resumeRun(run.id))}>
             Resume
           </button>
         )}
         <button
-          className="icon-btn tiny"
+          className="icon-btn square"
+          aria-label="Delete this run"
           disabled={busy || live}
           title={live ? "End the session first" : "Delete this run's record (the session transcript stays)"}
           onClick={() => {
@@ -122,7 +146,7 @@ function RunView({ run, agents, settings, onSettings }: { run: PrRun; agents: Ag
       {error && <div className="pr-error">{error}</div>}
       {run.findings && <FindingsPanel run={run} />}
       {live && agent ? (
-        <div className="panel chat-pane page-live pr-run-chat">
+        <div className="panel chat-pane page-live pr-run-chat" ref={chat} style={chatHeight ? { height: chatHeight, maxHeight: "none" } : undefined}>
           <LiveConversation agentKey={agent.key} settings={settings} onSettings={onSettings} />
         </div>
       ) : (
@@ -175,15 +199,19 @@ function FindingsPanel({ run }: { run: PrRun }) {
       <button className="pr-findings-head" onClick={() => setOpen((o) => !o)}>
         <span className={`diff-caret ${open ? "open" : ""}`} aria-hidden="true" />
         <strong>Findings</strong>
-        {SEVERITIES.map(({ key, label, cls }) => {
+        {SEVERITIES.map(({ key, label }) => {
           const n = findings.filter((f) => f.severity === key).length;
           return n > 0 ? (
-            <span key={key} className={`pr-badge ${cls}`}>
-              {n} {label}
+            <span key={key} className="pr-sev-count">
+              <span className={`pr-sev-dot ${key}`} />
+              {n} {label.toLowerCase()}
             </span>
           ) : null;
         })}
         <span style={{ flex: 1 }} />
+        <span className="pr-findings-progress">
+          <i style={{ width: `${findings.length ? (checked / findings.length) * 100 : 0}%` }} />
+        </span>
         <span className="hint">
           {checked}/{findings.length} handled
         </span>
@@ -193,11 +221,8 @@ function FindingsPanel({ run }: { run: PrRun }) {
           <div className="pr-findings-summary">
             <Markdown text={summary} />
             <div className="pr-findings-tools">
-              <button className="link-btn inline" onClick={() => setExpanded(new Set(findings.map((f) => f.id)))}>
-                Expand all
-              </button>
-              <button className="link-btn inline" onClick={() => setExpanded(new Set())}>
-                Collapse all
+              <button className="pr-bar-btn" onClick={() => setExpanded(expanded.size === findings.length ? new Set() : new Set(findings.map((f) => f.id)))}>
+                {expanded.size === findings.length ? "Collapse all" : "Expand all"}
               </button>
               <label className="check" style={{ marginLeft: "auto" }}>
                 <input type="checkbox" checked={hideChecked} onChange={(e) => setHideChecked(e.target.checked)} />
@@ -211,9 +236,10 @@ function FindingsPanel({ run }: { run: PrRun }) {
             const visible = hideChecked ? group.filter((f) => !run.checkedFindings.includes(f.id)) : group;
             return (
               <div key={key}>
-                <div className="pr-findings-group">
-                  <span className={`pr-badge ${cls}`}>{label}</span>
-                  <span>{group.length}</span>
+                <div className={`pr-findings-group ${cls}`}>
+                  <span className={`pr-sev-dot ${key}`} />
+                  <span>{label}</span>
+                  <em>{group.length}</em>
                 </div>
                 {visible.map((f) => (
                   <FindingRow key={f.id} run={run} finding={f} expanded={expanded.has(f.id)} onToggle={() => toggle(f.id)} target={targets[f.id]} />
@@ -260,7 +286,7 @@ function FindingRow({ run, finding, expanded, onToggle, target }: { run: PrRun; 
           onChange={(e) => prApi.checkFinding(run.id, finding.id, e.target.checked).catch(() => {})}
           title={isChecked ? "Handled — untick to bring it back" : "Mark as handled"}
         />
-        <span className={`pr-badge ${sev.cls}`}>{finding.severity}</span>
+        <span className={`pr-sev-dot ${finding.severity}`} title={`${sev.label} severity`} />
         {finding.isNew && <span className="pr-badge accent">New</span>}
         {moved && (
           <span className={`pr-badge ${up ? "warn" : ""}`}>
@@ -277,6 +303,7 @@ function FindingRow({ run, finding, expanded, onToggle, target }: { run: PrRun; 
           )}
         </span>
         {posted && <span className={`pr-badge ${posted.kind === "draft" ? "pending" : "ok"}`}>{posted.kind === "draft" ? "in review" : "commented"}</span>}
+        <span className={`diff-caret ${expanded ? "open" : ""}`} aria-hidden="true" />
       </div>
       {expanded && (
         <div className={`pr-finding-body sev-${finding.severity}`}>

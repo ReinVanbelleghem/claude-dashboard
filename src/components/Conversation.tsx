@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   agentApi,
   agentBus,
@@ -9,7 +9,6 @@ import {
   settingsApi,
   toolSummary,
   type AgentDetail,
-  type AgentMeter,
   type ImageMediaType,
   type ModelInfo,
   type PermissionMode,
@@ -30,7 +29,8 @@ import {
 } from "./composerTokens.ts";
 import { highlight } from "./highlight.tsx";
 import { Markdown, handleMdCopy } from "./Markdown.tsx";
-import { ScrollJump, useJumpToEnd, useScrollEdges } from "./scroll.tsx";
+import { UsageRings } from "./UsageRings.tsx";
+import { settleAtEnd, ScrollJump, useJumpToEnd, useScrollEdges } from "./scroll.tsx";
 import { Select } from "./Select.tsx";
 
 /** What the composer holds between a paste and a send. */
@@ -316,6 +316,9 @@ export function LiveConversation({
     };
   }, [agentKey]);
 
+  const pendingDelta = useRef("");
+  const deltaFrame = useRef<number | null>(null);
+
   useEffect(() => {
     const unsubscribe = agentBus.subscribe((e) => {
       if (e.type === "agents") {
@@ -325,7 +328,17 @@ export function LiveConversation({
       }
       if (e.type === "pr-run" || e.type === "pr-explain" || e.type === "pr-watch") return;
       if (e.key !== agentKey) return;
-      if (e.type === "agent-delta") setStreaming((s) => s + e.text);
+      if (e.type === "agent-delta") {
+        pendingDelta.current += e.text;
+        if (deltaFrame.current === null) {
+          deltaFrame.current = requestAnimationFrame(() => {
+            deltaFrame.current = null;
+            const text = pendingDelta.current;
+            pendingDelta.current = "";
+            if (text) setStreaming((s) => s + text);
+          });
+        }
+      }
       else if (e.type === "agent-models") setData((d) => (d ? { ...d, models: e.models } : d));
       else if (e.type === "agent-commands")
         setData((d) => (d ? { ...d, commands: e.commands } : d));
@@ -334,6 +347,7 @@ export function LiveConversation({
         setData((d) => (d ? { ...d, suggestion: e.suggestion } : d));
       else if (e.type === "agent-meter") setData((d) => (d ? { ...d, meter: e.meter } : d));
       else if (e.type === "agent-item") {
+        pendingDelta.current = "";
         setStreaming("");
         setData((d) => {
           if (!d) return d;
@@ -346,6 +360,9 @@ export function LiveConversation({
     });
     return () => {
       unsubscribe();
+      if (deltaFrame.current !== null) cancelAnimationFrame(deltaFrame.current);
+      deltaFrame.current = null;
+      pendingDelta.current = "";
     };
   }, [agentKey]);
 
@@ -355,7 +372,7 @@ export function LiveConversation({
   // After that, follow the tail only while the reader is still at the bottom.
   useEffect(() => {
     const el = scroller.current;
-    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+    if (el && pinned.current) return settleAtEnd(el);
   }, [data?.timeline.length, streaming]);
 
   const edges = useScrollEdges(scroller, data?.timeline.length);
@@ -401,13 +418,17 @@ export function LiveConversation({
     el.style.height = `${Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
   }, [draft]);
 
-  useEffect(() => saveDraft(agentKey, draft), [agentKey, draft]);
-  useEffect(() => saveAttachments(agentKey, attached), [agentKey, attached]);
   /**
    * The same pane can be pointed at another session without unmounting, so the
    * draft has to follow the key rather than only the mount.
    */
   const shownKey = useRef(agentKey);
+  useEffect(() => {
+    if (shownKey.current === agentKey) saveDraft(agentKey, draft);
+  }, [agentKey, draft]);
+  useEffect(() => {
+    if (shownKey.current === agentKey) saveAttachments(agentKey, attached);
+  }, [agentKey, attached]);
   useEffect(() => {
     if (shownKey.current === agentKey) return;
     shownKey.current = agentKey;
@@ -815,6 +836,8 @@ export function LiveConversation({
   if (!data) return <div className="empty">Loading session…</div>;
 
   const tasks = data.tasks ?? [];
+  const taskIdByToolUse = new Map<string, string>();
+  for (const t of tasks) if (t.toolUseId) taskIdByToolUse.set(t.toolUseId, t.taskId);
   const running = tasks.filter((t) => t.status === "running" || t.status === "pending");
   const finishedTasks = tasks.filter((t) => t.status !== "running" && t.status !== "pending");
   // Running first, and a finished agent stays visible while you are reading it.
@@ -955,13 +978,9 @@ export function LiveConversation({
             key={n}
             item={item}
             agentKey={agentKey}
-            onOpenAgent={(id) => setTab(id)}
+            onOpenAgent={setTab}
             // The Task card links to the tab whose messages it owns.
-            taskIdFor={
-              item.kind === "tool"
-                ? (tasks.find((t) => t.toolUseId === item.id)?.taskId ?? null)
-                : null
-            }
+            taskIdFor={item.kind === "tool" ? (taskIdByToolUse.get(item.id) ?? null) : null}
           />
         ))}
         {openTask && (
@@ -1318,6 +1337,11 @@ export function LiveConversation({
                 if (files.length) void absorbFiles(files);
               }}
             />
+            {data.meter && (
+              <span className="composer-meter">
+                <UsageRings meter={data.meter} compact />
+              </span>
+            )}
             {turnControl}
             {/* One word either way. Mid-turn it queues rather than interrupts, which
                 the tooltip says — but a button whose label changes under you is worse
@@ -1332,64 +1356,11 @@ export function LiveConversation({
             </button>
             </div>
           </div>
-          {data.meter && <UsageLine meter={data.meter} />}
         </div>
 
       </div>
       {data.error && <div className="chat-error">{data.error}</div>}
     </>
-  );
-}
-
-/** 80% and up is worth a glance, 95% and up is about to bite. */
-function level(pct: number) {
-  return pct >= 95 ? "over" : pct >= 80 ? "warn" : "";
-}
-
-function untilReset(at: number, now: number) {
-  const min = Math.max(0, Math.round((at - now) / 60_000));
-  if (min >= 24 * 60) return `${Math.floor(min / 1440)}d ${Math.floor((min % 1440) / 60)}h`;
-  return min >= 60 ? `${Math.floor(min / 60)}h ${min % 60}m` : `${min}m`;
-}
-
-function kTokens(n: number) {
-  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
-  return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
-}
-
-/**
- * The terminal's status line under the composer: how full the context is, and how
- * much of the 5-hour and weekly plan limits are spent. Plan limits only exist on a
- * subscription, so with an API key the line is context alone.
- */
-function UsageLine({ meter }: { meter: AgentMeter }) {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(t);
-  }, []);
-  const { context, fiveHour, sevenDay } = meter;
-  if (!context && !fiveHour && !sevenDay) return null;
-  return (
-    <div className="usage-line">
-      {context && (
-        <span className={level(context.pct)} title="Context window used by this session">
-          Context {Math.round(context.pct)}% · {kTokens(context.tokens)}/{kTokens(context.max)}
-        </span>
-      )}
-      {fiveHour && (
-        <span className={level(fiveHour.pct)} title="5-hour plan limit">
-          5h {Math.round(fiveHour.pct)}%
-          {fiveHour.resetsAt ? ` · resets in ${untilReset(fiveHour.resetsAt, now)}` : ""}
-        </span>
-      )}
-      {sevenDay && (
-        <span className={level(sevenDay.pct)} title="Weekly plan limit">
-          7d {Math.round(sevenDay.pct)}%
-          {sevenDay.resetsAt ? ` · resets in ${untilReset(sevenDay.resetsAt, now)}` : ""}
-        </span>
-      )}
-    </div>
   );
 }
 
@@ -1436,10 +1407,42 @@ function sameItem(a: TimelineItem, b: TimelineItem): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "tool" && b.kind === "tool") return a.id === b.id;
   if (a.kind === "permission" && b.kind === "permission") return a.requestId === b.requestId;
+  if (a.kind === "user" && b.kind === "user") return a.uuid !== undefined && a.uuid === b.uuid;
   return false;
 }
 
-function Item({
+const LONG_PROMPT_CHARS = 900;
+const LONG_PROMPT_LINES = 14;
+
+function LongPrompt({ text }: { text: string }) {
+  const long = text.length > LONG_PROMPT_CHARS || text.split("\n").length > LONG_PROMPT_LINES;
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div className={`turn-plain${long && !open ? " clamped" : ""}`}>
+        <Markdown text={text} />
+      </div>
+      {long && (
+        <button className="turn-more" onClick={() => setOpen(!open)}>
+          {open ? "Show less" : "Show the whole message"}
+        </button>
+      )}
+    </>
+  );
+}
+
+/** A collapsed card's body is most of a long transcript's DOM, so it is built only while the card is open. */
+function LazyDetails({ className, summary, children }: { className: string; summary: ReactNode; children: () => ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details className={className} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>{summary}</summary>
+      {open && children()}
+    </details>
+  );
+}
+
+const Item = memo(function Item({
   item,
   agentKey,
   onOpenAgent,
@@ -1466,9 +1469,7 @@ function Item({
               <code>{item.text.slice(1)}</code>
             </div>
           ) : (
-            <div className="turn-plain">
-              <Markdown text={item.text} />
-            </div>
+            <LongPrompt text={item.text} />
           )}
           {item.images && item.images.length > 0 && <Attachments images={item.images} />}
         </div>
@@ -1491,18 +1492,17 @@ function Item({
 
     case "thinking":
       return (
-        <details className="tool thinking">
-          <summary>
-            <span className="tool-name">thinking</span>
-          </summary>
-          <pre>{item.text}</pre>
-        </details>
+        <LazyDetails className="tool thinking" summary={<span className="tool-name">thinking</span>}>
+          {() => <pre>{item.text}</pre>}
+        </LazyDetails>
       );
 
     case "tool":
       return (
-        <details className={`tool ${item.ok === false ? "failed" : ""}`}>
-          <summary>
+        <LazyDetails
+          className={`tool ${item.ok === false ? "failed" : ""}`}
+          summary={
+            <>
             <span className="tool-name">{item.name}</span>
             <span className="tool-arg">{toolSummary("", item.input).replace(/^ · /, "")}</span>
             {/* A Task call has a whole conversation behind it; offer the way in. */}
@@ -1518,12 +1518,18 @@ function Item({
               </button>
             )}
             {item.ok === false && <span className="tool-bad">failed</span>}
-          </summary>
+            </>
+          }
+        >
           {/* The arguments are JSON; colouring them makes a long Bash command or
               a Write payload scannable. */}
-          <pre>{highlight(JSON.stringify(item.input, null, 2), "json")}</pre>
-          {item.result !== undefined && <pre className="tool-result">{item.result}</pre>}
-        </details>
+          {() => (
+            <>
+              <pre>{highlight(JSON.stringify(item.input, null, 2), "json")}</pre>
+              {item.result !== undefined && <pre className="tool-result">{item.result}</pre>}
+            </>
+          )}
+        </LazyDetails>
       );
 
     case "permission":
@@ -1564,7 +1570,7 @@ function Item({
     case "error":
       return <div className="chat-error">{item.text}</div>;
   }
-}
+});
 
 /**
  * The turn's answer, for a session started with an output schema.

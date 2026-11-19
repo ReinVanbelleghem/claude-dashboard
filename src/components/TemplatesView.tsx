@@ -10,6 +10,7 @@ import {
   type Schedule,
   type Template,
   type TemplateRun,
+  permissionModeOr,
 } from "../../shared/templates.ts";
 import { MODES, MODE_HELP, MODE_LABEL, STARTER_MODELS } from "./Conversation.tsx";
 import { FolderField } from "./FolderPicker.tsx";
@@ -112,7 +113,11 @@ export function TemplatesView({
           <button
             className="icon-btn"
             onClick={() => {
-              setEditing({ ...blankTemplate(newId()), model: settings?.ui.defaultModel ?? "" });
+              setEditing({
+                ...blankTemplate(newId()),
+                model: settings?.ui.defaultModel ?? "",
+                permissionMode: permissionModeOr(settings?.ui.defaultPermissionMode),
+              });
               setIsNew(true);
             }}
           >

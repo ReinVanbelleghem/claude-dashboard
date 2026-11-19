@@ -1,4 +1,7 @@
+import { isArtifactKey } from "../../shared/artifacts.ts";
+import { ClaudeMark } from "./Icons.tsx";
 import { isTerminalKey } from "../../shared/terminals.ts";
+import { ArtifactPanel } from "./ArtifactPane.tsx";
 import { TerminalPanel } from "./TerminalPane.tsx";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -15,6 +18,7 @@ import { Receipt } from "./Receipt.tsx";
 import { LiveConversation } from "./Conversation.tsx";
 import { EditableTitle } from "./EditableTitle.tsx";
 import { GitBadge } from "./GitPanel.tsx";
+import { PrBackLink } from "./pr/PrBackLink.tsx";
 import { SessionMenu } from "./SessionMenu.tsx";
 import { ScrollJump, useJumpToEnd, useScrollEdges } from "./scroll.tsx";
 import { Transcript, type TurnRow } from "./Transcript.tsx";
@@ -52,6 +56,9 @@ export function ExternalNotice({ canAdopt }: { canAdopt?: boolean }) {
 export function SessionPanelContent(props: Parameters<typeof SessionPanelBody>[0]) {
   if (isTerminalKey(props.id)) {
     return <TerminalPanel id={props.id} onClose={props.onClose} onHeadPointerDown={props.onHeadPointerDown} headStart={props.headStart} />;
+  }
+  if (isArtifactKey(props.id)) {
+    return <ArtifactPanel id={props.id} onHeadPointerDown={props.onHeadPointerDown} headStart={props.headStart} />;
   }
   return <SessionPanelBody {...props} />;
 }
@@ -144,7 +151,10 @@ function SessionPanelBody({
         {titleEditable ? (
           <EditableTitle as="h3" value={title} onRename={renameTo} />
         ) : (
-          <h3>{title}</h3>
+          <h3 className="session-title">
+            <ClaudeMark />
+            <span>{title}</span>
+          </h3>
         )}
         <div className="drawer-actions">
           {/* Open full page, Notify, Restart and Stop used to sit here as four
@@ -170,6 +180,7 @@ function SessionPanelBody({
       <div className="drawer-meta">
         <p className="drawer-sub">{cwd ?? id}</p>
         {cwd && <GitBadge cwd={cwd} compact />}
+        <PrBackLink sessionId={id} agentKey={agent?.key} />
       </div>
 
       {agent ? (

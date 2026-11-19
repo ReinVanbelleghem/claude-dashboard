@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { WeekStartContext } from "./components/DatePicker.tsx";
 import {
   agentApi,
   agentBus,
@@ -15,6 +16,7 @@ import {
   type SessionRow,
   type Settings,
   type Task,
+  type TaskProject,
   taskApi,
   type TasksPayload,
   settingsApi,
@@ -26,6 +28,8 @@ import {
   type InboxPayload,
   terminalApi,
   type WorkspaceTerminal,
+  artifactApi,
+  type Artifact,
 } from "./api.ts";
 import {
   applyAppearance,
@@ -53,7 +57,8 @@ import {
   TerminalIcon,
   WorktreeIcon,
 } from "./components/Icons.tsx";
-import { NotificationBell, NotificationCenter } from "./components/NotificationCenter.tsx";
+import { NOTIFY_KINDS, NotificationBell, NotificationCenter } from "./components/NotificationCenter.tsx";
+import { Toaster, toast, type OpenGesture } from "./components/Toasts.tsx";
 import { PrPage, routePr, type PrRoute } from "./components/pr/PrPage.tsx";
 import { ReviewsView } from "./components/pr/ReviewsView.tsx";
 import { usePrWatches } from "./components/pr/prState.ts";
@@ -69,8 +74,9 @@ import { sidebarPrefs, useSidebarPrefs } from "./components/sidebar/prefs.ts";
 import { RailSessions } from "./components/sidebar/RailSessions.tsx";
 import { buildSessions } from "./components/sidebar/sessions.ts";
 import { WorkspaceTree } from "./components/sidebar/WorkspaceTree.tsx";
-import { AnswerNext } from "./components/AnswerNext.tsx";
+import { useAnswerNextKey } from "./components/AnswerNext.tsx";
 import { Tile } from "./components/Charts.tsx";
+import { DesktopBar } from "./components/DesktopBar.tsx";
 import { DesktopView } from "./components/DesktopView.tsx";
 import { FindBar } from "./components/FindBar.tsx";
 import { ArtifactsView } from "./components/ArtifactsView.tsx";
@@ -81,6 +87,8 @@ import { NewSessionModal } from "./components/NewSessionModal.tsx";
 import { WorkspacePage } from "./components/WorkspacePage.tsx";
 import { TerminalPage } from "./components/TerminalPane.tsx";
 import { isTerminalKey, terminalKey } from "../shared/terminals.ts";
+import { artifactSlugOf, isArtifactKey } from "../shared/artifacts.ts";
+import { ArtifactPage } from "./components/ArtifactPane.tsx";
 import { isChatPath, workspaceTitle } from "../shared/workspaces.ts";
 import { Palette } from "./components/Palette.tsx";
 import { SessionDrawer } from "./components/SessionDrawer.tsx";
@@ -96,16 +104,23 @@ import {
   defaultRect,
   dropSessionTile,
   layerPoint,
-  readTiles,
+  newDesktopId,
+  nextDesktopName,
+  readDesktops,
+  refitDesktops,
+  showTile,
   rectForZone,
-  writeTiles,
+  writeDesktops,
   SESSION_DRAG_MIME,
+  type DesktopsState,
+  type LayerSize,
   type TileRect,
   type TileState,
 } from "./tiles.ts";
 import { PAGES, isPageVisible, visiblePages, type Tab } from "./pages.ts";
 
 const dropGeometry = { defaultRect, clampRect, rectForZone };
+const NO_TILES: TileState[] = [];
 
 const TAB_LABEL: Record<Tab, string> = Object.fromEntries(PAGES.map((p) => [p.key, p.label])) as Record<Tab, string>;
 
@@ -143,6 +158,10 @@ const TAB_ROUTES: Record<string, Tab> = { "#/tasks": "tasks", "#/calendar": "cal
 /** #/calendar/<epoch ms>: the calendar, on the week that moment falls in. */
 const CALENDAR_AT = /^#\/calendar\/(\d+)$/;
 
+const NO_ARTIFACTS: Artifact[] = [];
+const NO_TASKS: Task[] = [];
+const NO_PROJECTS: TaskProject[] = [];
+
 export default function App() {
   const [tab, setTab] = useState<Tab>("live");
   const [live, setLive] = useState<LivePayload | null>(null);
@@ -161,8 +180,74 @@ export default function App() {
     if (tab !== "services" || services) return;
     servicesApi.state().then(setServices).catch(() => {});
   }, [tab, services]);
-  const [tiles, setTiles] = useState<TileState[]>(readTiles);
-  const nextZ = useRef(1 + tiles.reduce((m, t) => Math.max(m, t.z), 0));
+  const [desks, setDesks] = useState<DesktopsState>(readDesktops);
+  const tiles = useMemo(() => desks.desktops.find((d) => d.id === desks.active)?.tiles ?? NO_TILES, [desks]);
+  const nextZ = useRef(1 + desks.desktops.reduce((m, d) => d.tiles.reduce((n, t) => Math.max(n, t.z), m), 0));
+  /** Change the tiles of one desktop, the showing one unless another is named. */
+  const setTilesOf = useCallback((desktopId: string | null, update: (prev: TileState[]) => TileState[]) => {
+    setDesks((prev) => {
+      const target = desktopId ?? prev.active;
+      let changed = false;
+      const desktops = prev.desktops.map((d) => {
+        if (d.id !== target) return d;
+        const next = update(d.tiles);
+        if (next === d.tiles) return d;
+        changed = true;
+        return { ...d, tiles: next };
+      });
+      return changed ? { ...prev, desktops } : prev;
+    });
+  }, []);
+  const setTiles = useCallback((update: (prev: TileState[]) => TileState[]) => setTilesOf(null, update), [setTilesOf]);
+  const fitDesktops = useCallback((size: LayerSize) => setDesks((prev) => refitDesktops(prev, size)), []);
+  const setAllTiles = useCallback((update: (prev: TileState[]) => TileState[]) => {
+    setDesks((prev) => {
+      let changed = false;
+      const desktops = prev.desktops.map((d) => {
+        const next = update(d.tiles);
+        if (next === d.tiles) return d;
+        changed = true;
+        return { ...d, tiles: next };
+      });
+      return changed ? { ...prev, desktops } : prev;
+    });
+  }, []);
+  const selectDesktop = useCallback((id: string) => setDesks((prev) => (prev.active === id ? prev : { ...prev, active: id })), []);
+  const addDesktop = useCallback(() => {
+    setDesks((prev) => {
+      const id = newDesktopId();
+      return { ...prev, desktops: [...prev.desktops, { id, name: nextDesktopName(prev.desktops), tiles: [] }], active: id };
+    });
+  }, []);
+  const renameDesktop = useCallback((id: string, name: string) => {
+    const next = name.trim();
+    if (!next) return;
+    setDesks((prev) => ({ ...prev, desktops: prev.desktops.map((d) => (d.id === id ? { ...d, name: next } : d)) }));
+  }, []);
+  const moveDesktop = useCallback((from: number, to: number) => {
+    setDesks((prev) => {
+      const desktops = [...prev.desktops];
+      const [moved] = desktops.splice(from, 1);
+      if (!moved) return prev;
+      desktops.splice(to, 0, moved);
+      return { ...prev, desktops };
+    });
+  }, []);
+  const closeDesktop = useCallback((id: string) => {
+    setDesks((prev) => {
+      if (prev.desktops.length < 2) return prev;
+      const at = prev.desktops.findIndex((d) => d.id === id);
+      if (at < 0) return prev;
+      const desktops = prev.desktops.filter((d) => d.id !== id);
+      return { ...prev, desktops, active: prev.active === id ? desktops[Math.max(0, at - 1)].id : prev.active };
+    });
+  }, []);
+  const copyTileToDesktop = useCallback(
+    (tileId: string, desktopId: string, rect: TileRect) => {
+      setTilesOf(desktopId, (prev) => showTile(prev, [tileId], rect, () => nextZ.current++, dropGeometry));
+    },
+    [setTilesOf],
+  );
 
   /**
    * ⌘⇧M: "show desktop" for tiles. Minimizes every open one, tagging each
@@ -201,7 +286,7 @@ export default function App() {
    * id already exists, the key-named one is the duplicate and goes.
    */
   useEffect(() => {
-    setTiles((prev) => {
+    setAllTiles((prev) => {
       let changed = false;
       const next: TileState[] = [];
       for (const t of prev) {
@@ -242,6 +327,7 @@ export default function App() {
     terminalApi.list().then((r) => setTerminals(r.terminals)).catch(() => {});
   }, []);
   const [inbox, setInbox] = useState<InboxPayload>({ items: [], unread: 0 });
+  const followRef = useRef<(href: string, gesture?: OpenGesture) => void>(() => {});
   const [showInbox, setShowInbox] = useState(false);
   const [calendarGoTo, setCalendarGoTo] = useState<{ day: string; at: number } | null>(null);
   useEffect(() => {
@@ -304,7 +390,7 @@ export default function App() {
       const id = routeSessionId();
       setPageId(id);
       setWorkspacePageId(routeWorkspaceId());
-      if (id) setOpenId(null);
+      if (id || routePrNow()) setOpenId(null);
       setPrRoute(routePrNow());
     };
     if (TAB_ROUTES[window.location.hash] || CALENDAR_AT.test(window.location.hash)) onHash();
@@ -436,6 +522,26 @@ export default function App() {
     // The daemon owns the decision to notify; the tab only raises the banner.
     es.addEventListener("notify", (e) => {
       const p = JSON.parse((e as MessageEvent).data) as NotifyPayload;
+      const href = p.href ?? (p.sessionId ? `#/session/${encodeURIComponent(p.sessionId)}` : "");
+      const follow = (gesture?: OpenGesture) => followRef.current(href, gesture);
+      if (p.toast !== false) {
+        const kind = NOTIFY_KINDS[p.kind] ?? NOTIFY_KINDS.needsInput;
+        toast({
+          key: p.key,
+          kicker: kind.label,
+          title: p.label ?? p.title.split(" · ").slice(1).join(" · ") ?? p.title,
+          description: p.body,
+          meta: p.context,
+          tone: kind.tone,
+          icon: kind.icon,
+          duration: p.urgent ? 0 : undefined,
+          onOpen: (gesture) => {
+            follow(gesture);
+            if (p.inboxId) void inboxApi.read([p.inboxId]).then(setInbox).catch(() => {});
+          },
+        });
+      }
+      if (p.banner === false || (p.toast !== false && document.visibilityState === "visible")) return;
       if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
       const note = new Notification(p.title, {
         body: `${p.body}\n${p.context}`,
@@ -448,8 +554,7 @@ export default function App() {
       } as NotificationOptions);
       note.onclick = () => {
         window.focus();
-        if (p.href) window.location.hash = p.href;
-        else if (p.sessionId) window.location.hash = `#/session/${encodeURIComponent(p.sessionId)}`;
+        follow();
         note.close();
       };
     });
@@ -464,7 +569,13 @@ export default function App() {
      * the worktree list, which watches the same signal — re-read instead of showing a
      * branch that has since moved.
      */
-    const wrote = () => invalidateStatusCache();
+    // A burst of git events (one commit fires several) collapses into one refetch.
+    let wroteTimer: ReturnType<typeof setTimeout> | undefined;
+    const wrote = () => {
+      clearTimeout(wroteTimer);
+      wroteTimer = setTimeout(invalidateStatusCache, 500);
+    };
+    const stopWrote = () => clearTimeout(wroteTimer);
     es.addEventListener("git", wrote);
     es.addEventListener("worktrees", wrote);
     // Owned-session traffic: the roster lives here, the rest goes to the bus for
@@ -489,7 +600,10 @@ export default function App() {
       agentBus.publish({ type: "pr-explain", explanation: JSON.parse((e as MessageEvent).data) }),
     );
     es.addEventListener("pr-watch", (e) => agentBus.publish({ type: "pr-watch", ...JSON.parse((e as MessageEvent).data) }));
-    return () => es.close();
+    return () => {
+      stopWrote();
+      es.close();
+    };
   }, [refreshRecent]);
 
   const needsInput = live?.counts.needsInput ?? 0;
@@ -544,18 +658,12 @@ export default function App() {
   // Persisted so a reload finds the same windows in the same places; re-saved
   // on every change rather than only on close, since a crash or a stray
   // reload should not lose a layout you just spent time arranging.
-  useEffect(() => writeTiles(tiles), [tiles]);
+  useEffect(() => writeDesktops(desks), [desks]);
 
-  // A width/height saved on a bigger monitor, or a window just resized
-  // narrower, should not strand a tile off-screen with no way to reach it —
-  // the same lesson the drawer's own width already learned.
-  useEffect(() => {
-    function onResize() {
-      setTiles((prev) => prev.map((t) => ({ ...t, rect: clampRect(t.rect) })));
-    }
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
+  const frontTileId = useMemo(() => {
+    const shown = tiles.filter((t) => !t.minimized);
+    return shown.length ? shown.reduce((a, b) => (b.z > a.z ? b : a)).id : null;
+  }, [tiles]);
 
   const focusTile = useCallback((id: string) => {
     setTiles((prev) => prev.map((t) => (t.id === id ? { ...t, z: nextZ.current++ } : t)));
@@ -667,6 +775,12 @@ export default function App() {
       const point = layerPoint(e.clientX, e.clientY);
       const agent = agentsRef.current.find((x) => x.sessionId === id || x.key === id);
       const ids = [...new Set([id, agent?.sessionId, agent?.key].filter((x): x is string => !!x))];
+      const onTab = (e.target as Element | null)?.closest?.("[data-desktop]")?.getAttribute("data-desktop") ?? null;
+      if (onTab) {
+        selectDesktop(onTab);
+        setTilesOf(onTab, (prev) => showTile(prev, ids, null, () => nextZ.current++, dropGeometry));
+        return;
+      }
       setTiles((prev) => dropSessionTile(prev, ids, point, () => nextZ.current++, dropGeometry));
     }
     window.addEventListener("dragover", onDragOver);
@@ -687,6 +801,10 @@ export default function App() {
    * the gestures independently reconfigurable neither is guaranteed to still
    * be reachable through a setting.
    */
+  const showInTasks = useCallback((task: Task) => {
+    setFocusTaskId(task.id);
+    setTab("tasks");
+  }, []);
   const openSession = useCallback(
     (id: string, opts?: { full?: boolean; tile?: boolean; drawer?: boolean; option?: boolean }) => {
       if (opts?.drawer) {
@@ -711,6 +829,17 @@ export default function App() {
     },
     [settings?.ui.clickOpensIn, settings?.ui.cmdClickOpensIn, settings?.ui.optionClickOpensIn, openTile],
   );
+  useAnswerNextKey(blockedQueue, pageId ?? openId, openSession);
+  const followLink = useCallback(
+    (href: string, gesture?: OpenGesture) => {
+      if (!href) return;
+      const session = href.match(/^#\/session\/(.+)$/);
+      if (session) openSession(decodeURIComponent(session[1]!), { full: !!gesture && (gesture.metaKey || gesture.ctrlKey), option: gesture?.altKey });
+      else window.location.hash = href;
+    },
+    [openSession],
+  );
+  followRef.current = followLink;
 
   /** Terminal-owned and still alive: cannot be adopted without a transcript clash. */
   const isLiveExternal = (id: string | null) =>
@@ -762,6 +891,7 @@ export default function App() {
   const pageIcon = (t: Tab) => (t === "desktop" ? NineDotsIcon : TAB_ICON[t]);
   const goTo = (t: Tab) => {
     setTab(t);
+    setOpenId(null);
     // Leaving the full-page view is implicit in picking a page.
     if (onFullPage) window.location.hash = "";
   };
@@ -819,7 +949,7 @@ export default function App() {
         pending: 0,
         at: t.createdAt,
         since: t.createdAt,
-        chat: false,
+        chat: t.workspaceId === null && isChatPath(t.folder),
         model: "",
         external: false,
         terminal: true,
@@ -827,6 +957,27 @@ export default function App() {
     ],
     [agents, live, titles, sidebarSeen, onScreen, terminals, restorable],
   );
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  useEffect(() => {
+    artifactApi
+      .list()
+      .then((r) => setArtifacts(r.artifacts.filter((a) => !a.missing && !a.hidden)))
+      .catch(() => {});
+  }, [artifactTick]);
+  /** Artifacts under the workspace whose sessions wrote them, newest first. */
+  const workspaceArtifacts = useMemo(() => {
+    const out = new Map<number, Artifact[]>();
+    for (const a of artifacts) {
+      const homes = new Set(a.sessions.map((s) => workspaces?.sessions[s.id]).filter((id): id is number => id !== undefined));
+      for (const id of homes) out.set(id, [...(out.get(id) ?? []), a]);
+    }
+    return out;
+  }, [artifacts, workspaces]);
+  const sessionArtifacts = useMemo(() => {
+    const out = new Map<string, Artifact[]>();
+    for (const a of artifacts) for (const s of a.sessions) out.set(s.id, [...(out.get(s.id) ?? []), a]);
+    return out;
+  }, [artifacts]);
   const filedWorkspaces = useMemo(() => {
     if (!workspaces) return workspaces;
     const filed = { ...workspaces.sessions };
@@ -854,6 +1005,13 @@ export default function App() {
     }
     return out;
   }, [tasks]);
+  const pageTasks = useMemo(
+    () =>
+      (tasks?.tasks ?? [])
+        .filter((t) => t.workspaceId === workspacePageId)
+        .sort((a, b) => Number(a.completedAt !== null) - Number(b.completedAt !== null) || a.order - b.order),
+    [tasks, workspacePageId],
+  );
   const minimizedTiles = useMemo(() => {
     const ids = new Set<string>();
     for (const t of tiles) {
@@ -898,9 +1056,11 @@ export default function App() {
       <WorkspaceTree
         sessions={sidebarSessions}
         payload={filedWorkspaces}
-        activeId={pageId ?? openId}
+        activeId={pageId ?? openId ?? frontTileId}
         minimized={minimizedTiles}
         workspaceTasks={workspaceTasks}
+        workspaceArtifacts={workspaceArtifacts}
+        sessionArtifacts={sessionArtifacts}
         onOpen={openSession}
         onNewWorkspace={(folder) => setNewWorkspace({ folder: folder ?? null })}
         onNewSession={startSessionIn}
@@ -921,7 +1081,9 @@ export default function App() {
   const crumb = pageId
     ? isTerminalKey(pageId)
       ? (terminals.find((t) => terminalKey(t.id) === pageId)?.title ?? "Terminal")
-      : (agentFor(pageId)?.title ?? "Session")
+      : isArtifactKey(pageId)
+        ? (artifacts.find((a) => a.slug === artifactSlugOf(pageId))?.title ?? "Artifact")
+        : (agentFor(pageId)?.title ?? "Session")
     : workspacePage
       ? workspaceTitle(workspacePage)
       : prRoute
@@ -966,22 +1128,17 @@ export default function App() {
   );
 
   return (
+    <WeekStartContext.Provider value={settings?.ui.calendarWeekStart ?? 1}>
     <div className="app">
       {sidebar}
       <div className="app-main">
         {topbar}
         <div className="shell">
-      <AnswerNext
-        queue={blockedQueue}
-        external={needsInput}
-        openId={pageId ?? openId}
-        onOpen={openSession}
-      />
-
       {pageId && isTerminalKey(pageId) && (
         <TerminalPage id={pageId} onBack={closePage} onOpenWorkspace={(id) => openWorkspace({ id })} />
       )}
-      {pageId && !isTerminalKey(pageId) && (
+      {pageId && isArtifactKey(pageId) && <ArtifactPage id={pageId} onBack={closePage} />}
+      {pageId && !isTerminalKey(pageId) && !isArtifactKey(pageId) && (
         <SessionPage
           id={sessionIdFor(pageId) ?? pageId}
           agent={agentFor(pageId)}
@@ -1007,9 +1164,9 @@ export default function App() {
           workspace={workspacePage}
           sessions={sidebarSessions.filter((s) => s.ids.some((id) => filedWorkspaces?.sessions[id] === workspacePage.id))}
           onNewTerminal={newTerminal}
-          sessionIds={Object.entries(workspaces?.sessions ?? {})
-            .filter(([, ws]) => ws === workspacePage.id)
-            .map(([id]) => id)}
+          artifacts={workspaceArtifacts.get(workspacePage.id) ?? NO_ARTIFACTS}
+          tasks={pageTasks}
+          shared={(workspaces?.workspaces ?? []).filter((o) => o.id !== workspacePage.id && o.status !== "archived" && o.folder === workspacePage.folder).length}
           settings={settings}
           onSettings={setSettings}
           onBack={closePage}
@@ -1101,7 +1258,12 @@ export default function App() {
         </div>
       )}
 
-      {!onFullPage && tab === "desktop" && <DesktopView />}
+      {!onFullPage && tab === "desktop" && (
+        <>
+          <DesktopBar desktops={desks.desktops} active={desks.active} onSelect={selectDesktop} onAdd={addDesktop} onRename={renameDesktop} onClose={closeDesktop} onMove={moveDesktop} />
+          <DesktopView />
+        </>
+      )}
       {!onFullPage && tab === "reviews" && (
         <ReviewsView
           settings={settings}
@@ -1148,15 +1310,12 @@ export default function App() {
           }}
         />
       )}
-      {!onFullPage && tab === "calendar" && <CalendarView tasks={tasks?.tasks ?? []} projects={tasks?.projects ?? []} settings={settings}
+      {!onFullPage && tab === "calendar" && <CalendarView tasks={tasks?.tasks ?? NO_TASKS} projects={tasks?.projects ?? NO_PROJECTS} settings={settings}
           onSettings={setSettings}
           changed={calendarChanged}
           goTo={calendarGoTo}
           onOpenSession={openSession}
-          onOpenInTasks={(task) => {
-            setFocusTaskId(task.id);
-            setTab("tasks");
-          }}
+          onOpenInTasks={showInTasks}
         />}
       {!onFullPage && tab === "history" && (
         <HistoryView
@@ -1226,8 +1385,10 @@ export default function App() {
         onClose={closeTile}
         onFocus={focusTile}
         onRectChange={updateTileRect}
+        onLayerSize={fitDesktops}
         onOpenFull={openTileFull}
         onMinimize={minimizeTile}
+        onCopyToDesktop={copyTileToDesktop}
       />
 
       {openId && (
@@ -1243,10 +1404,12 @@ export default function App() {
       {/* Suppressed while an overlay owns the screen: its own control is there. */}
       {!openId && !showNew && !showFolders && !showPalette && <PageScrollJump />}
 
+      <Toaster />
       {showInbox && (
         <NotificationCenter
           inbox={inbox}
           onInbox={setInbox}
+          onFollow={followLink}
           onClose={() => setShowInbox(false)}
           onOpenSettings={() => {
             localStorage.setItem("settings-section", "notifications");
@@ -1265,10 +1428,7 @@ export default function App() {
           pageOrder={settings?.ui.pageOrder}
           onClose={() => setShowPalette(false)}
           onOpenSession={openSession}
-          onTab={(t) => {
-            setTab(t);
-            if (onFullPage) window.location.hash = "";
-          }}
+          onTab={goTo}
           onNewSession={() => setShowNew(true)}
           onNewIn={(cwd) => {
             setNewIn(cwd);
@@ -1341,5 +1501,6 @@ export default function App() {
         </div>
       </div>
     </div>
+    </WeekStartContext.Provider>
   );
 }

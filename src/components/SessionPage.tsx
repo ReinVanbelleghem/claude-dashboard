@@ -14,6 +14,7 @@ import { Receipt } from "./Receipt.tsx";
 import { LiveConversation } from "./Conversation.tsx";
 import { EditableTitle } from "./EditableTitle.tsx";
 import { GitBadge } from "./GitPanel.tsx";
+import { PrBackLink } from "./pr/PrBackLink.tsx";
 import { FolderIcon } from "./Icons.tsx";
 import { workspaceTitle, type Workspace } from "../../shared/workspaces.ts";
 import { SessionMenu } from "./SessionMenu.tsx";
@@ -121,6 +122,7 @@ export function SessionPage({
             {s?.model ? ` · ${s.model}` : ""}
           </p>
           {cwd && <GitBadge cwd={cwd} />}
+          <PrBackLink sessionId={id} agentKey={agent?.key} />
         </div>
         <span style={{ flex: 1 }} />
         {workspace && onOpenWorkspace && (

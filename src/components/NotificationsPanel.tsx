@@ -101,6 +101,11 @@ const CHANNELS: { key: keyof Settings["notifications"]["channels"]; label: strin
     help: "Raised by the dashboard tab. Only fires while a tab is open, and needs the browser's permission once.",
   },
   {
+    key: "inApp",
+    label: "Dashboard toast",
+    help: "A small card in the bottom right corner of the dashboard. Waits for you when the tab is in the background.",
+  },
+  {
     key: "googleChat",
     label: "Google Chat",
     help: "Posts to a webhook, so alerts reach you away from this machine.",

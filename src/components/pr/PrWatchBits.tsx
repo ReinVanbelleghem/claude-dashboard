@@ -26,9 +26,27 @@ export function WatchToggle({ pr, watched, compact = false }: { pr: PrRef; watch
   );
 }
 
+type CombinedChange = PrWatchChange & { times: number };
+
+/** The same thing reported more than once becomes one line, at its latest time. */
+function combine(changes: PrWatchChange[]): CombinedChange[] {
+  const byKey = new Map<string, CombinedChange>();
+  for (const c of changes) {
+    if (c.kind === "commit" || c.kind === "comment") {
+      byKey.set(`${byKey.size}`, { ...c, times: 1 });
+      continue;
+    }
+    const key = [c.kind, c.text, c.state ?? ""].join("|");
+    const seen = byKey.get(key);
+    byKey.delete(key);
+    byKey.set(key, { ...c, times: (seen?.times ?? 0) + 1 });
+  }
+  return [...byKey.values()];
+}
+
 /** Commits, reviews, comments and the CI verdict as icon-and-count chips, for the row. */
 export function ActivityChips({ watch }: { watch: PrWatch }) {
-  const changes = watch.unseen;
+  const changes = combine(watch.unseen);
   if (!changes.length) return null;
   const commits = changes.filter((c) => c.kind === "commit").reduce((n, c) => n + (c.count ?? 1), 0);
   const reviews = changes.filter((c) => c.kind === "review");
@@ -79,7 +97,8 @@ const KIND_LABEL: Record<PrWatchChange["kind"], string> = {
 };
 
 /** "Since you last looked": every unseen change with a link to it, newest last. */
-export function SinceStrip({ changes, onDismiss }: { changes: PrWatchChange[]; onDismiss: () => void }) {
+export function SinceStrip({ changes: all, onDismiss }: { changes: PrWatchChange[]; onDismiss: () => void }) {
+  const changes = combine(all);
   if (!changes.length) return null;
   return (
     <div className="pr-since" role="status">
@@ -104,6 +123,7 @@ export function SinceStrip({ changes, onDismiss }: { changes: PrWatchChange[]; o
             ) : (
               <span>{c.text}</span>
             )}
+            {c.times > 1 && <span className="pr-since-times">×{c.times}</span>}
             <span className="pr-since-when">{relativeTime(c.at)} ago</span>
           </li>
         ))}

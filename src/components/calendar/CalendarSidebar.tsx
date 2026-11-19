@@ -90,23 +90,35 @@ export function CalendarSidebar({
     style: sort.itemStyle(i),
   });
   const text = query.trim().toLowerCase();
-  const listed = useMemo(() => new Set([...pinned, ...passing].map((o) => o.email.toLowerCase())), [pinned, passing]);
+  const listed = useMemo(() => new Map([...pinned, ...passing].map((o) => [o.email.toLowerCase(), o])), [pinned, passing]);
 
   const results = useMemo(() => {
     if (text === "") return [];
-    return people.filter((p) => !listed.has(p.email.toLowerCase()) && (p.name.toLowerCase().includes(text) || p.email.toLowerCase().includes(text))).slice(0, MAX_RESULTS);
+    const known = new Set(people.map((p) => p.email.toLowerCase()));
+    const unknownListed = [...listed.values()].filter((o) => !known.has(o.email.toLowerCase())).map((o) => ({ email: o.email, name: o.name, room: o.room ?? false }));
+    return [...people, ...unknownListed]
+      .filter((p) => p.name.toLowerCase().includes(text) || p.email.toLowerCase().includes(text) || !!listed.get(p.email.toLowerCase())?.name.toLowerCase().includes(text))
+      .slice(0, MAX_RESULTS);
   }, [people, listed, text]);
 
-  const typedEmail = EMAIL.test(query.trim()) && !listed.has(text) && !results.some((r) => r.email.toLowerCase() === text) ? query.trim() : null;
+  const typedEmail = EMAIL.test(query.trim()) && !results.some((r) => r.email.toLowerCase() === text) ? query.trim() : null;
 
   const show = (person: { email: string; name: string; room: boolean }) => {
-    onShow(person);
+    const already = listed.get(person.email.toLowerCase());
+    if (!already) onShow(person);
+    else if (!already.shown) onToggle(already.email);
     setQuery("");
   };
 
   const options = useMemo(
-    () => [...results.map((p) => ({ email: p.email, name: p.name, room: p.room, label: p.name })), ...(typedEmail ? [{ email: typedEmail, name: typedEmail, room: false, label: `Show ${typedEmail}` }] : [])],
-    [results, typedEmail],
+    () => [
+      ...results.map((p) => {
+        const already = listed.get(p.email.toLowerCase());
+        return { email: p.email, name: p.name, room: p.room, label: already?.name ?? p.name, state: already ? (already.shown ? "shown" : "hidden") : null };
+      }),
+      ...(typedEmail ? [{ email: typedEmail, name: typedEmail, room: false, label: `Show ${typedEmail}`, state: null }] : []),
+    ],
+    [results, typedEmail, listed],
   );
   const [cursor, setCursor] = useState(0);
   useEffect(() => setCursor(0), [text]);
@@ -189,6 +201,7 @@ export function CalendarSidebar({
                 <button key={o.email} role="option" aria-selected={i === cursor} className={i === cursor ? "on" : ""} title={o.email} onMouseEnter={() => setCursor(i)} onClick={() => show(o)}>
                   <span>{o.label}</span>
                   {o.room && <em>room</em>}
+                  {o.state && <em>{o.state}</em>}
                 </button>
               ))}
               {results.length === 0 && !typedEmail && <p className="cal-side-note">Nobody by that name on your events. Type a full email address to look someone up.</p>}
