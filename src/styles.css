@@ -7255,6 +7255,18 @@ a.task-chip.task-link:focus-visible { outline: 2px solid var(--accent); outline-
 .cal-status-mark .icon { display: block; flex: none; width: 11px; height: 11px; margin: 0; stroke-width: 2.4; }
 b > .cal-status-mark { margin-right: 5px; vertical-align: -3px; }
 .cal-bar.status.workingLocation, .cal-chip.status.workingLocation { background: none; border-left-color: transparent; padding-left: 4px; }
+.cal-status-mark.workingLocation {
+  background: color-mix(in oklab, var(--ev, var(--accent)) 36%, var(--surface-1));
+  color: color-mix(in oklab, var(--ev, var(--accent)) 55%, var(--text-primary));
+}
+.cal-ev.status.workingLocation { background: none; box-shadow: none; border-left: 0; padding-left: 5px; }
+.cal-ev.status.workingLocation::before {
+  content: ""; position: absolute; left: 11px; top: 20px; bottom: 2px; width: 4px; border-radius: 2px;
+  background: color-mix(in oklab, var(--ev, var(--accent)) 36%, var(--surface-1));
+}
+.cal-ev.status.workingLocation > span { display: none; }
+.cal-ev.status.workingLocation b { font-weight: 500; }
+.cal-ev.status.workingLocation:hover { background: color-mix(in oklab, var(--ev, var(--accent)) 8%, transparent); }
 .cal-bar.status.workingLocation:hover, .cal-chip.status.workingLocation:hover { background: var(--surface-2); }
 .cal-ev.draft, .cal-bar.draft, .cal-chip.draft {
   border: 1.5px dashed var(--ev); border-left-width: 3px; border-left-style: solid;
