@@ -7255,6 +7255,13 @@ a.task-chip.task-link:focus-visible { outline: 2px solid var(--accent); outline-
 .cal-status-mark .icon { display: block; flex: none; width: 11px; height: 11px; margin: 0; stroke-width: 2.4; }
 b > .cal-status-mark { margin-right: 5px; vertical-align: -3px; }
 .cal-bar.status.workingLocation, .cal-chip.status.workingLocation { background: none; border-left-color: transparent; padding-left: 4px; }
+.cal-ev.status.outOfOffice, .cal-bar.status.outOfOffice, .cal-chip.bar.status.outOfOffice {
+  background: color-mix(in oklab, var(--ev, var(--accent)) 14%, var(--surface-1)); border-left-color: transparent;
+}
+.cal-ev.status.outOfOffice:hover, .cal-bar.status.outOfOffice:hover, .cal-chip.bar.status.outOfOffice:hover {
+  background: color-mix(in oklab, var(--ev, var(--accent)) 18%, var(--surface-1));
+}
+.cal-ev.status.outOfOffice b { font-weight: 500; }
 .cal-status-mark.workingLocation {
   background: color-mix(in oklab, var(--ev, var(--accent)) 36%, var(--surface-1));
   color: color-mix(in oklab, var(--ev, var(--accent)) 55%, var(--text-primary));
