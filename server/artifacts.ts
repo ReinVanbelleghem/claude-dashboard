@@ -1,13 +1,17 @@
 import type { Database } from "bun:sqlite";
-import { mkdirSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { ARTIFACT_PORT, artifactsDir, isArtifactName } from "./paths.ts";
+import { parseProjectFileId, projectFileId } from "../shared/projectFiles.ts";
+import { ARTIFACT_PORT, artifactRootOf, artifactRoots, artifactsDir, isArtifactName } from "./paths.ts";
+import { ensureProjectFolder, projectOfWorkspace } from "./workspaces.ts";
 
 /**
  * Generated HTML artifacts.
  *
- * The filesystem is the source of truth for what exists — a folder under the
- * artifact root with an HTML page in it is an artifact, whoever put it there. The
+ * The filesystem is the source of truth for what exists — a folder under an
+ * artifact root with an HTML page in it is an artifact, whoever put it there. A
+ * root is a project's `artifacts` folder, or the one folder that belongs to no
+ * project; an artifact in a project's folder is that project's by being there. The
  * transcript index is the source of truth for provenance, and lives in
  * `artifact_writes` (see indexer.ts). This module never writes that table, and the
  * indexer never writes this one.
@@ -30,7 +34,114 @@ export type Artifact = {
   /** The subset declared by the page itself, which the dashboard cannot remove. */
   metaTags: string[];
   sessions: ArtifactSession[];
+  /**
+   * Where you put it by hand: a project, one checkout in it, or (both null)
+   * nowhere. Null means it follows the sessions that wrote it.
+   */
+  link: ArtifactLink | null;
 };
+
+export type ArtifactLink = { projectId: number | null; workspaceId: number | null };
+
+function linkRows(db: Database): Map<string, ArtifactLink> {
+  db.exec("CREATE TABLE IF NOT EXISTS artifact_links (slug TEXT PRIMARY KEY, project_id INTEGER, workspace_id INTEGER)");
+  return new Map(
+    db
+      .query<{ slug: string; project_id: number | null; workspace_id: number | null }, []>("SELECT slug, project_id, workspace_id FROM artifact_links")
+      .all()
+      .map((r) => [r.slug, { projectId: r.project_id, workspaceId: r.workspace_id }]),
+  );
+}
+
+/** The project whose folder holds what belongs to this project or checkout: null when it keeps none. */
+function folderProject(link: ArtifactLink): number | null {
+  const project = link.workspaceId !== null ? projectOfWorkspace(link.workspaceId) : link.projectId;
+  if (project === null) return null;
+  try {
+    return ensureProjectFolder(project) ? project : null;
+  } catch {
+    return null;
+  }
+}
+
+function moveEntry(from: string, to: string) {
+  try {
+    renameSync(from, to);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EXDEV") throw err;
+    cpSync(from, to, { recursive: true });
+    rmSync(from, { recursive: true, force: true });
+  }
+}
+
+const KEYED_BY_SLUG = ["artifact_tags", "artifact_writes", "artifact_links", "project_hidden_artifacts"];
+
+/**
+ * Move an artifact's folder, or its one loose page, into a project's folder, or
+ * with null into the folder that belongs to no project. Its id changes with it,
+ * and everything known about it follows. Returns the new id.
+ */
+function moveArtifact(db: Database, slug: string, toProject: number | null): string {
+  const { projectId, name } = parseProjectFileId(slug);
+  const row = db.query<{ entry: string }, [string]>("SELECT entry FROM artifacts WHERE slug = ? AND missing = 0").get(slug);
+  const fromRoot = artifactRootOf(projectId);
+  const toRoot = artifactRootOf(toProject);
+  if (projectId === toProject || !row || !fromRoot || !toRoot) return slug;
+  const loose = !row.entry.includes("/");
+  const onDisk = (n: string) => (loose ? `${n}.html` : n);
+  let free = name;
+  for (let n = 2; existsSync(join(toRoot, onDisk(free))) || db.query("SELECT 1 FROM artifacts WHERE slug = ?").get(projectFileId(toProject, free)); n++) {
+    free = `${name}-${n}`;
+  }
+  mkdirSync(toRoot, { recursive: true });
+  moveEntry(join(fromRoot, onDisk(name)), join(toRoot, onDisk(free)));
+  const next = projectFileId(toProject, free);
+  const entry = loose ? onDisk(free) : `${free}/${row.entry.slice(row.entry.indexOf("/") + 1)}`;
+  db.query("UPDATE artifacts SET slug = ?, entry = ? WHERE slug = ?").run(next, entry, slug);
+  for (const table of KEYED_BY_SLUG) {
+    try {
+      db.query(`UPDATE OR REPLACE ${table} SET slug = ? WHERE slug = ?`).run(next, slug);
+    } catch {
+      continue;
+    }
+  }
+  db.query("UPDATE artifact_writes SET manual = 1 WHERE slug = ?").run(next);
+  return next;
+}
+
+/**
+ * Say whose an artifact is: a project, one checkout in it, nobody (both null),
+ * or with null whoever's sessions wrote it. Giving it to a project that keeps a
+ * folder moves it there, and giving it to nobody moves it to the folder that
+ * belongs to no project, so the artifact may come back under a new id.
+ */
+export function setArtifactLink(db: Database, slug: string, link: ArtifactLink | null): Artifact | null {
+  linkRows(db);
+  if (link === null) {
+    db.query("DELETE FROM artifact_links WHERE slug = ?").run(slug);
+    return artifactDetail(db, slug);
+  }
+  const home = folderProject(link);
+  const id = moveArtifact(db, slug, home);
+  if (home !== null && link.workspaceId === null) db.query("DELETE FROM artifact_links WHERE slug = ?").run(id);
+  else
+    db.query(
+      `INSERT INTO artifact_links (slug, project_id, workspace_id) VALUES (?, ?, ?)
+       ON CONFLICT(slug) DO UPDATE SET project_id = excluded.project_id, workspace_id = excluded.workspace_id`,
+    ).run(id, link.workspaceId === null ? link.projectId : null, link.workspaceId);
+  return artifactDetail(db, id);
+}
+
+/**
+ * Whose an artifact in a project's folder is: the project's as a whole, by
+ * being there, unless you tied it to one of that project's checkouts. Which
+ * sessions wrote it does not place it, or a page two checkouts' sessions both
+ * touched would sit under both and under the project too.
+ */
+function linkInProject(projectId: number, stored: ArtifactLink | undefined): ArtifactLink {
+  if (stored && stored.workspaceId !== null && projectOfWorkspace(stored.workspaceId) === projectId) return stored;
+  return { projectId, workspaceId: null };
+}
 
 export type ArtifactSession = {
   id: string;
@@ -55,14 +166,21 @@ function humanise(slug: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
+  ldquo: "\u201c", rdquo: "\u201d", lsquo: "\u2018", rsquo: "\u2019", sbquo: "\u201a", bdquo: "\u201e",
+  laquo: "\u00ab", raquo: "\u00bb", ndash: "\u2013", mdash: "\u2014", hellip: "\u2026", middot: "\u00b7", bull: "\u2022",
+  rarr: "\u2192", larr: "\u2190", harr: "\u2194", times: "\u00d7", deg: "\u00b0", euro: "\u20ac", pound: "\u00a3",
+  copy: "\u00a9", reg: "\u00ae", trade: "\u2122", eacute: "\u00e9", egrave: "\u00e8", euml: "\u00eb", iuml: "\u00ef", ouml: "\u00f6", uuml: "\u00fc",
+};
+const ENTITY = /&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]*);/gi;
+
 function decodeEntities(s: string): string {
-  return s
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&");
+  return s.replace(ENTITY, (whole, name: string) => {
+    if (name[0] !== "#") return NAMED_ENTITIES[name] ?? NAMED_ENTITIES[name.toLowerCase()] ?? whole;
+    const code = name[1]!.toLowerCase() === "x" ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+  });
 }
 
 /** The page's own title and tags, from its first few KB. */
@@ -166,52 +284,56 @@ function entryFor(dir: string): string | null {
 
 function scanDisk(): DiskArtifact[] {
   ensureArtifactsDir();
-  let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
-  try {
-    entries = readdirSync(artifactsDir(), { withFileTypes: true }) as never;
-  } catch {
-    return [];
-  }
-
   const out: DiskArtifact[] = [];
-  for (const e of entries) {
-    if (!isArtifactName(e.name) || SKIP_DIRS.has(e.name)) continue;
-    const full = join(artifactsDir(), e.name);
-
-    if (e.isDirectory()) {
-      const entry = entryFor(full);
-      if (!entry) continue;
-      const w = walk(full);
-      out.push({
-        slug: e.name,
-        entry: `${e.name}/${entry}`,
-        createdTs: w.created,
-        modifiedTs: w.modified,
-        size: w.size,
-        fileCount: w.count,
-      });
+  for (const root of artifactRoots()) {
+    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+    try {
+      entries = readdirSync(root.dir, { withFileTypes: true }) as never;
+    } catch {
       continue;
     }
+    for (const e of entries) {
+      if (!isArtifactName(e.name) || SKIP_DIRS.has(e.name)) continue;
+      const full = join(root.dir, e.name);
 
-    // A loose page at the root is an artifact too — not everything arrives in a folder.
-    if (e.isFile() && e.name.toLowerCase().endsWith(".html")) {
-      try {
-        const st = statSync(full);
+      if (e.isDirectory()) {
+        const entry = entryFor(full);
+        if (!entry) continue;
+        const w = walk(full);
         out.push({
-          slug: e.name.slice(0, -5),
-          entry: e.name,
-          createdTs: Math.floor(st.birthtimeMs || st.mtimeMs),
-          modifiedTs: Math.floor(st.mtimeMs),
-          size: st.size,
-          fileCount: 1,
+          slug: projectFileId(root.projectId, e.name),
+          entry: `${e.name}/${entry}`,
+          createdTs: w.created,
+          modifiedTs: w.modified,
+          size: w.size,
+          fileCount: w.count,
         });
-      } catch {
-        /* vanished mid-scan */
+        continue;
+      }
+
+      // A loose page at the root is an artifact too — not everything arrives in a folder.
+      if (e.isFile() && e.name.toLowerCase().endsWith(".html")) {
+        try {
+          const st = statSync(full);
+          out.push({
+            slug: projectFileId(root.projectId, e.name.slice(0, -5)),
+            entry: e.name,
+            createdTs: Math.floor(st.birthtimeMs || st.mtimeMs),
+            modifiedTs: Math.floor(st.mtimeMs),
+            size: st.size,
+            fileCount: 1,
+          });
+        } catch {
+          /* vanished mid-scan */
+        }
       }
     }
   }
   return out;
 }
+
+/** The folder an artifact's `entry` is relative to: its project's, or the one that belongs to none. */
+const rootOf = (slug: string): string | null => artifactRootOf(parseProjectFileId(slug).projectId);
 
 /**
  * Bring the `artifacts` table in line with the folder. Returns the number of rows
@@ -238,12 +360,13 @@ export async function reconcileArtifacts(db: Database): Promise<number> {
 
   for (const a of disk) {
     const prev = known.get(a.slug);
-    const unchanged = prev && prev.modified_ts === a.modifiedTs && prev.size === a.size && prev.missing === 0;
+    const stale = !!prev?.title && decodeEntities(prev.title) !== prev.title;
+    const unchanged = prev && !stale && prev.modified_ts === a.modifiedTs && prev.size === a.size && prev.missing === 0;
     if (unchanged) continue;
     // Re-sniffing the title is the only I/O here, so it is only done when the
     // bytes moved — which, on a steady-state tick, is never.
-    const head = await readHead(join(artifactsDir(), a.entry));
-    upsert.run(a.slug, head.title ?? humanise(a.slug), a.entry, a.createdTs, a.modifiedTs, a.size, a.fileCount);
+    const head = await readHead(join(rootOf(a.slug)!, a.entry));
+    upsert.run(a.slug, head.title ?? humanise(parseProjectFileId(a.slug).name), a.entry, a.createdTs, a.modifiedTs, a.size, a.fileCount);
     replaceMetaTags(db, a.slug, head.tags);
     changed++;
   }
@@ -271,7 +394,7 @@ function purgeNonArtifacts(db: Database): number {
     slugs.add(r.slug);
   }
   for (const slug of slugs) {
-    if (isArtifactName(slug)) continue;
+    if (isArtifactName(parseProjectFileId(slug).name)) continue;
     db.query("DELETE FROM artifacts WHERE slug = ?").run(slug);
     db.query("DELETE FROM artifact_tags WHERE slug = ?").run(slug);
     db.query("DELETE FROM artifact_writes WHERE slug = ?").run(slug);
@@ -343,6 +466,11 @@ function attachSessions(db: Database, rows: ArtifactRow[]): Artifact[] {
   const tagsQ = db.query<{ tag: string; source: string }, [string]>(
     "SELECT tag, source FROM artifact_tags WHERE slug = ? ORDER BY source DESC, tag ASC",
   );
+  const links = linkRows(db);
+  const linkOf = (slug: string): ArtifactLink | null => {
+    const { projectId } = parseProjectFileId(slug);
+    return projectId === null ? (links.get(slug) ?? null) : linkInProject(projectId, links.get(slug));
+  };
   return rows.map((r) => ({
     slug: r.slug,
     title: r.title ?? r.slug,
@@ -357,6 +485,7 @@ function attachSessions(db: Database, rows: ArtifactRow[]): Artifact[] {
     tags: tagsQ.all(r.slug).map((t) => t.tag),
     metaTags: tagsQ.all(r.slug).filter((t) => t.source === "meta").map((t) => t.tag),
     sessions: q.all(r.slug).map(({ id, title, cwd, ts }) => ({ id, title, cwd, ts })),
+    link: linkOf(r.slug),
   }));
 }
 
@@ -404,11 +533,11 @@ export function artifactDetail(db: Database, slug: string): Artifact | null {
 export function deleteArtifact(db: Database, slug: string): boolean {
   const row = db.query<ArtifactRow, [string]>("SELECT * FROM artifacts WHERE slug = ?").get(slug);
   if (!row) return false;
-  const base = baseDirFor(row.entry);
+  const root = rootOf(slug);
   try {
     // Only ever a path we resolved out of our own table, and re-checked here.
-    const target = resolve(base === artifactsDir() ? join(artifactsDir(), row.entry) : base);
-    if (target !== resolve(artifactsDir()) && target.startsWith(resolve(artifactsDir()) + sep)) {
+    const target = root ? resolve(join(root, row.entry.split("/")[0]!)) : null;
+    if (root && target && target !== resolve(root) && target.startsWith(resolve(root) + sep)) {
       rmSync(target, { recursive: true, force: true });
     }
   } catch {
@@ -417,12 +546,6 @@ export function deleteArtifact(db: Database, slug: string): boolean {
   db.query("DELETE FROM artifacts WHERE slug = ?").run(slug);
   db.query("DELETE FROM artifact_tags WHERE slug = ?").run(slug);
   return true;
-}
-
-/** The directory an artifact's relative URLs resolve against. */
-function baseDirFor(entry: string): string {
-  const parts = entry.split("/");
-  return parts.length > 1 ? join(artifactsDir(), parts[0]!) : artifactsDir();
 }
 
 // ── API routes (on the daemon port) ──────────────────────────────────────────
@@ -470,6 +593,17 @@ export async function handleArtifactRoute(
     const tags = Array.isArray(body.tags) ? body.tags.map(String) : [];
     const a = setUserTags(db, slug, tags);
     return a ? json({ artifact: a, tags: allTags(db) }) : json({ error: "not found" }, 404);
+  }
+  if (sub === "link" && req.method === "POST") {
+    const body = (await req.json().catch(() => ({}))) as { follow?: boolean; projectId?: number | null; workspaceId?: number | null };
+    const a = setArtifactLink(
+      db,
+      slug,
+      body.follow
+        ? null
+        : { projectId: Number.isInteger(body.projectId) ? body.projectId! : null, workspaceId: Number.isInteger(body.workspaceId) ? body.workspaceId! : null },
+    );
+    return a ? json({ artifact: a }) : json({ error: "not found" }, 404);
   }
   if (sub === "hide" && req.method === "POST") {
     const body = (await req.json().catch(() => ({}))) as { hidden?: unknown };
@@ -659,10 +793,10 @@ function contentType(path: string): string {
  * artifact folder cannot be used to read the rest of the disk — the same check
  * files.ts makes for repository files.
  */
-function safeResolve(rel: string): string | null {
+function safeResolve(base: string, rel: string): string | null {
   try {
-    const root = realpathSync(artifactsDir());
-    const target = realpathSync(resolve(join(artifactsDir(), rel)));
+    const root = realpathSync(base);
+    const target = realpathSync(resolve(join(base, rel)));
     if (target !== root && !target.startsWith(root + sep)) return null;
     if (!statSync(target).isFile()) return null;
     return target;
@@ -694,7 +828,8 @@ export function startArtifactServer(db: Database) {
       // against whichever directory that page lives in.
       const relBase = row.entry.includes("/") ? `${row.entry.split("/")[0]}/` : "";
       const rel = sub ? `${relBase}${sub}` : row.entry;
-      const file = safeResolve(rel);
+      const base = rootOf(slug);
+      const file = base ? safeResolve(base, rel) : null;
       if (!file) return new Response("Not found", { status: 404 });
 
       const headers = {

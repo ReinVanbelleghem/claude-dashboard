@@ -205,6 +205,18 @@ function migrate(db: Database) {
       ts         INTEGER,
       PRIMARY KEY (slug, session_id)
     );
+    CREATE TABLE IF NOT EXISTS note_writes (
+      path       TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      ts         INTEGER,
+      PRIMARY KEY (path, session_id)
+    );
+    CREATE TABLE IF NOT EXISTS drawing_writes (
+      slug       TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      ts         INTEGER,
+      PRIMARY KEY (slug, session_id)
+    );
     CREATE INDEX IF NOT EXISTS idx_artifact_writes_session ON artifact_writes(session_id);
   `);
 

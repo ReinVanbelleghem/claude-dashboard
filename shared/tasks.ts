@@ -50,6 +50,12 @@ export type Task = {
   createdAt: number;
   /** The workspace it belongs to. A workspace can hold any number of tasks. */
   workspaceId: number | null;
+  /**
+   * The piece of work it is part of, as the sidebar knows projects: its
+   * workspace's, or one it was tied to directly. Not the task list above,
+   * which is also called a project. Absent from a daemon older than this.
+   */
+  workProjectId?: number | null;
 };
 
 export type TasksPayload = {
@@ -76,6 +82,8 @@ export type TaskAdd = {
   cwd?: string;
   /** The workspace the task belongs to. */
   workspaceId?: number;
+  /** The piece of work it is part of, when it belongs to no one workspace in it: a project from the sidebar, by id. */
+  workProjectId?: number;
   /** Addresses the task is about. Any found in the text or the description are added too. */
   links?: string[];
   /** "agent" when a session added it on your behalf. */

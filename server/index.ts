@@ -1,7 +1,7 @@
 import { watch } from "node:fs";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, normalize } from "node:path";
 import {
   agentsUnder,
   answerPermission,
@@ -62,9 +62,11 @@ import {
   saveFavourite,
   scratchDir,
 } from "./dirs.ts";
-import { browse as browseFiles, readFile, writeFile } from "./files.ts";
+import {
+  grepFolder, browse as browseFiles, readFile, writeFile } from "./files.ts";
 import {
   branchFiles,
+  grep as gitGrep,
   branches as gitBranches,
   checkout as gitCheckout,
   commit as gitCommit,
@@ -80,6 +82,7 @@ import {
   stage as gitStage,
   unstage as gitUnstage,
   worktreeAdd as gitWorktreeAdd,
+  projectWorktreePath,
   worktreePrune as gitWorktreePrune,
   worktreeRemove as gitWorktreeRemove,
   worktreeReprovision as gitWorktreeReprovision,
@@ -113,6 +116,11 @@ import {
   ARTIFACT_PORT,
   artifactsDir,
   setArtifactsDir,
+  setDrawingsDir,
+  setNotesDir,
+  setProjectsDir,
+  notesDir,
+  drawingsDir,
   PORT,
   PROJECTS_DIR,
   SCRATCH_DIR,
@@ -160,6 +168,7 @@ import {
   initTasks,
   reopenTask,
   reorderTaskProjects,
+  setTaskWorkProject,
   setTaskWorkspace,
   tasksChanged,
   tasksPayload,
@@ -175,6 +184,7 @@ import { disconnectGoogle, finishGoogleConnect, googleAvailability, googleConnec
 import { createEvent, deleteEvent, invalidateCalendar, listCalendars, listEvents, listPeople, updateEvent } from "./calendarSources.ts";
 import {
   attachSession,
+  attachSessionToProject,
   createWorkspace,
   deleteProject,
   deleteWorkspace,
@@ -183,6 +193,20 @@ import {
   reorderSessions,
   reorderWorkspaces,
   workspacesOfProject,
+  projectIconPath,
+  createProject,
+  ensureProjectFolder,
+  loadProjectFolders,
+  projectForFolder,
+  sessionsOfProject,
+  archiveProject,
+  unarchiveProject,
+  moveWorkspace,
+  renameProject,
+  setProjectImage,
+  setGoalImage,
+  setGoalMark,
+  setProjectMark,
   workspacesSharingFolder,
   GOALS_DIR,
   initWorkspaces,
@@ -196,6 +220,39 @@ import {
   workspacesPayload,
   type SessionRef,
 } from "./workspaces.ts";
+import { workspaceStack } from "./stacks.ts";
+import {
+  noteFile,
+  createNote,
+  initNotes,
+  createFolder,
+  linkFolder,
+  linkNote,
+  noteAsset,
+  notesPayload,
+  readNote,
+  reconcileNotes,
+  renameNote,
+  saveNote,
+  trashNote,
+  unplaceNotesOf,
+  unplaceNotesOfProject,
+} from "./notes.ts";
+import {
+  createDrawing,
+  drawingFile,
+  deleteDrawing,
+  drawingPreviewPath,
+  drawingsPayload,
+  initDrawings,
+  readDrawing,
+  reconcileDrawings,
+  saveDrawing,
+  unplaceDrawingsOf,
+  unplaceDrawingsOfProject,
+  updateDrawing,
+} from "./drawings.ts";
+import type { DiffRange } from "../shared/stacks.ts";
 import {
   getSettings,
   loadSettings,
@@ -252,17 +309,12 @@ console.log(
   if (stamped > 0) console.log(`[claude-dashboard] tagged ${stamped} review comment(s) with their repository`);
 }
 
+loadProjectFolders(db);
 console.log("[claude-dashboard] backfilling index…");
 const t0 = Date.now();
 const touched = await indexOnce(db);
 console.log(`[claude-dashboard] indexed ${touched} transcript(s) in ${Date.now() - t0}ms`);
 
-applyArtifactsRoot(settings.ui.artifactsRoot);
-{
-  const found = await reconcileArtifacts(db);
-  if (found > 0) console.log(`[claude-dashboard] reconciled ${found} artifact(s)`);
-  console.log(`[claude-dashboard] artifacts folder: ${artifactsDir()}`);
-}
 
 // ── SSE fan-out ────────────────────────────────────────────────────────────────
 type Client = { send: (event: string, data: unknown) => void; close: () => void };
@@ -314,7 +366,20 @@ initReview(db);
 initRuns(db, broadcast);
 initExplain(db, broadcast);
 initPrWatch(db, broadcast);
+setProjectsDir(settings.ui.projectsRoot ?? "");
 initWorkspaces(db, (payload) => broadcast("workspaces", payload), { reviewRoot });
+applyArtifactsRoot(settings.ui.artifactsRoot);
+{
+  const found = await reconcileArtifacts(db);
+  if (found > 0) console.log(`[claude-dashboard] reconciled ${found} artifact(s)`);
+  console.log(`[claude-dashboard] artifacts folder: ${artifactsDir()}`);
+}
+initDrawings(db);
+initNotes(db);
+setNotesDir(settings.ui.notesRoot ?? "");
+reconcileNotes();
+setDrawingsDir(settings.ui.drawingsRoot ?? "");
+reconcileDrawings();
 initTasks(db, (payload) => broadcast("tasks", payload));
 initCalendarWatch();
 setInterval(() => {
@@ -676,6 +741,8 @@ setInterval(async () => {
     // Cheap on a steady state: one readdir, and a title is only re-read from a
     // file whose bytes actually moved.
     if ((await reconcileArtifacts(db)) > 0) broadcast("artifacts", { at: Date.now() });
+    if (reconcileDrawings() > 0) broadcast("drawings", { at: Date.now() });
+    if (reconcileNotes() > 0) broadcast("notes", { at: Date.now() });
     syncWorkspacesNow();
     void refreshAutoGoals(getSettings().ui.workspaceAutoGoal !== false).catch((err) =>
       console.error("[claude-dashboard] workspace goals failed:", err),
@@ -942,6 +1009,20 @@ function overview() {
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────
 const DIST = join(import.meta.dir, "..", "dist");
+// The packaged app carries the fonts beside the daemon; a checkout reads them from the installed package.
+const EXCALIDRAW_BUNDLED = join(import.meta.dir, "..", "excalidraw-assets");
+const EXCALIDRAW_ASSETS = existsSync(EXCALIDRAW_BUNDLED)
+  ? EXCALIDRAW_BUNDLED
+  : join(import.meta.dir, "..", "node_modules", "@excalidraw", "excalidraw", "dist", "prod");
+/** What this daemon was built from, so the app can tell a daemon left over from an older build. */
+const RELEASE: { version: string | null; build: string | null } = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version?: string; build?: string };
+    return { version: pkg.version ?? null, build: pkg.build ?? null };
+  } catch {
+    return { version: null, build: null };
+  }
+})();
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), {
     status,
@@ -966,6 +1047,13 @@ function applyArtifactsRoot(root: string): boolean {
  * artifact's origin is not the dashboard's. A request with no Origin header is a
  * non-browser caller (curl, a script) and is left alone.
  */
+/** `base` and `head` from the query string, when both are given. */
+function rangeParam(url: URL): DiffRange | undefined {
+  const base = url.searchParams.get("base");
+  const head = url.searchParams.get("head");
+  return base && head ? { base, head } : undefined;
+}
+
 function originAllowed(req: Request, url: URL): boolean {
   const origin = req.headers.get("origin");
   if (!origin) return true;
@@ -1025,9 +1113,179 @@ const server = Bun.serve<PtyData, never>({
     if (p.startsWith("/api/") && !originAllowed(req, url))
       return json({ error: "cross-origin request refused" }, 403);
 
+    // ── notes ────────────────────────────────────────────────────────────────
+    if (p === "/api/notes" && req.method === "GET") {
+      reconcileNotes();
+      return json(notesPayload());
+    }
+    if (p === "/api/notes" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as
+        | { title?: string; content?: string; folder?: string; cwd?: string; projectId?: number | null; workspaceId?: number | null }
+        | null;
+      const given = Number.isInteger(body?.workspaceId) ? body!.workspaceId! : null;
+      const projectId = Number.isInteger(body?.projectId) ? body!.projectId! : null;
+      const fromCwd = given === null && projectId === null && body?.cwd ? await workspaceForFolder(expand(body.cwd)).catch(() => null) : null;
+      const note = createNote({
+        title: typeof body?.title === "string" ? body.title : undefined,
+        content: typeof body?.content === "string" ? body.content : undefined,
+        folder: typeof body?.folder === "string" ? body.folder : undefined,
+        workspaceId: given ?? fromCwd,
+        projectId: projectId ?? (given === null && fromCwd === null && body?.cwd ? projectForFolder(expand(body.cwd)) : null),
+      });
+      if (!note) return json({ error: "that folder is not inside the notes folder" }, 400);
+      broadcast("notes", { at: Date.now() });
+      return json({ note, file: noteFile(note.path) });
+    }
+    if (p === "/api/note" && req.method === "GET") {
+      const note = readNote(url.searchParams.get("path") ?? "");
+      return note ? json(note) : json({ error: "no such note" }, 404);
+    }
+    if (p === "/api/note" && req.method === "PUT") {
+      const body = (await req.json().catch(() => null)) as { path?: string; content?: string; baseHash?: string } | null;
+      if (typeof body?.path !== "string" || typeof body.content !== "string") return json({ error: "path and content are required" }, 400);
+      const r = saveNote(body.path, body.content, body.baseHash);
+      if (r.ok) broadcast("notes", { at: Date.now(), path: body.path, hash: r.hash });
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    if (p === "/api/note" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as
+        | { path?: string; rename?: string; projectId?: number | null; workspaceId?: number | null }
+        | null;
+      const path = body?.path ?? "";
+      const link: { projectId?: number | null; workspaceId?: number | null } = {};
+      if (body && "projectId" in body) link.projectId = Number.isInteger(body.projectId) ? body.projectId : null;
+      if (body && "workspaceId" in body) link.workspaceId = Number.isInteger(body.workspaceId) ? body.workspaceId : null;
+      let note = "projectId" in link || "workspaceId" in link ? linkNote(path, link) : readNote(path)?.note ?? null;
+      if (note && typeof body?.rename === "string") {
+        note = renameNote(note.path, body.rename);
+        if (!note) return json({ error: "a note by that name is already in that folder, or the name will not do" }, 409);
+      }
+      if (note) broadcast("notes", { at: Date.now(), ...(note.path === path ? {} : { moved: { from: path, to: note.path } }) });
+      return note ? json({ note }) : json({ error: "no such note" }, 404);
+    }
+    if (p === "/api/note" && req.method === "DELETE") {
+      const ok = trashNote(url.searchParams.get("path") ?? "");
+      if (ok) broadcast("notes", { at: Date.now() });
+      return ok ? json({ ok: true }) : json({ error: "no such note" }, 404);
+    }
+    if (p === "/api/note-folder" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { folder?: string; projectId?: number | null; workspaceId?: number | null } | null;
+      const ok = linkFolder(body?.folder ?? "", {
+        projectId: Number.isInteger(body?.projectId) ? body!.projectId! : null,
+        workspaceId: Number.isInteger(body?.workspaceId) ? body!.workspaceId! : null,
+      });
+      if (ok) broadcast("notes", { at: Date.now() });
+      return ok ? json({ ok: true }) : json({ error: "not a folder inside the notes folder" }, 400);
+    }
+    if (p === "/api/note-dir" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { path?: string } | null;
+      const made = createFolder(body?.path ?? "");
+      if (made) broadcast("notes", { at: Date.now() });
+      return made ? json({ folder: made }) : json({ error: "that is not a folder inside the notes folder" }, 400);
+    }
+    if (p === "/api/note-asset" && req.method === "GET") {
+      const asset = noteAsset(url.searchParams.get("path") ?? "");
+      return asset
+        ? new Response(Bun.file(asset.file), {
+            headers: {
+              "content-type": asset.type,
+              "cache-control": "no-cache",
+              "x-content-type-options": "nosniff",
+              "content-security-policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:",
+            },
+          })
+        : json({ error: "no such image" }, 404);
+    }
+
+    // ── drawings ─────────────────────────────────────────────────────────────
+    if (p === "/api/drawings" && req.method === "GET") {
+      reconcileDrawings();
+      return json(drawingsPayload());
+    }
+    if (p === "/api/drawings" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as
+        | { title?: string; cwd?: string; workspaceId?: number | null; projectId?: number | null }
+        | null;
+      const given = Number.isInteger(body?.workspaceId) ? body!.workspaceId! : null;
+      const projectId = Number.isInteger(body?.projectId) ? body!.projectId! : null;
+      const fromCwd = given === null && projectId === null && body?.cwd ? await workspaceForFolder(expand(body.cwd)).catch(() => null) : null;
+      const drawing = createDrawing({
+        title: typeof body?.title === "string" ? body.title : undefined,
+        workspaceId: given ?? fromCwd,
+        projectId: projectId ?? (given === null && fromCwd === null && body?.cwd ? projectForFolder(expand(body.cwd)) : null),
+      });
+      broadcast("drawings", { at: Date.now() });
+      return json({ drawing, file: drawingFile(drawing.slug) });
+    }
+    if (p.startsWith("/api/drawings/")) {
+      const [rawSlug, part] = p.slice("/api/drawings/".length).split("/");
+      const slug = decodeURIComponent(rawSlug ?? "");
+      if (part === "preview.svg" && req.method === "GET") {
+        const path = drawingPreviewPath(slug);
+        return path
+          ? new Response(Bun.file(path), {
+              headers: {
+                "content-type": "image/svg+xml",
+                "cache-control": "no-cache",
+                "x-content-type-options": "nosniff",
+                // An agent can write this file, so it is an image and nothing more: opened on its own it runs no script.
+                "content-security-policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:",
+              },
+            })
+          : json({ error: "no preview" }, 404);
+      }
+      if (part) return json({ error: "not found" }, 404);
+      if (req.method === "GET") {
+        const scene = readDrawing(slug);
+        return scene ? json(scene) : json({ error: "no such drawing" }, 404);
+      }
+      if (req.method === "PUT") {
+        const body = (await req.json().catch(() => null)) as { scene?: string; baseHash?: string; preview?: string } | null;
+        if (typeof body?.scene !== "string") return json({ error: "scene is required" }, 400);
+        const r = saveDrawing(slug, body.scene, { baseHash: body.baseHash, preview: body.preview });
+        if (r.ok) broadcast("drawings", { at: Date.now(), slug, hash: r.hash });
+        return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+      }
+      if (req.method === "POST") {
+        const body = (await req.json().catch(() => null)) as
+          | { title?: string; workspaceId?: number | null; projectId?: number | null }
+          | null;
+        const patch: { title?: string; workspaceId?: number | null; projectId?: number | null } = {};
+        if (typeof body?.title === "string") patch.title = body.title;
+        if (body && "projectId" in body) patch.projectId = Number.isInteger(body.projectId) ? body.projectId : null;
+        if (body && "workspaceId" in body) patch.workspaceId = Number.isInteger(body.workspaceId) ? body.workspaceId : null;
+        const drawing = updateDrawing(slug, patch);
+        if (drawing) broadcast("drawings", { at: Date.now(), ...(drawing.slug === slug ? {} : { moved: { from: slug, to: drawing.slug } }) });
+        return drawing ? json({ drawing }) : json({ error: "no such drawing" }, 404);
+      }
+      if (req.method === "DELETE") {
+        const ok = deleteDrawing(slug);
+        if (ok) broadcast("drawings", { at: Date.now() });
+        return ok ? json({ ok: true }) : json({ error: "no such drawing" }, 404);
+      }
+      return json({ error: "method not allowed" }, 405);
+    }
+
+    // Excalidraw's own fonts, served from the installed package so drawing works offline.
+    if (p.startsWith("/excalidraw-assets/") && req.method === "GET") {
+      const rel = normalize(decodeURIComponent(p.slice("/excalidraw-assets/".length)));
+      if (rel.startsWith("..") || isAbsolute(rel)) return json({ error: "not found" }, 404);
+      const file = Bun.file(join(EXCALIDRAW_ASSETS, rel));
+      return (await file.exists())
+        ? new Response(file, { headers: { "cache-control": "public, max-age=31536000, immutable" } })
+        : json({ error: "not found" }, 404);
+    }
+
     // ── generated artifacts ──────────────────────────────────────────────────
     const artifactResponse = await handleArtifactRoute(req, url, db);
-    if (artifactResponse) return artifactResponse;
+    if (artifactResponse) {
+      if (req.method === "POST" && p.endsWith("/link") && artifactResponse.ok) {
+        const from = decodeURIComponent(p.slice("/api/artifacts/".length, -"/link".length));
+        const to = ((await artifactResponse.clone().json().catch(() => null)) as { artifact?: { slug?: string } } | null)?.artifact?.slug;
+        broadcast("artifacts", { at: Date.now(), ...(to && to !== from ? { moved: { from, to } } : {}) });
+      }
+      return artifactResponse;
+    }
 
     // ── owned sessions (write path) ──────────────────────────────────────────
     if (p === "/api/agents" && req.method === "GET")
@@ -1086,12 +1344,26 @@ const server = Bun.serve<PtyData, never>({
     }
 
     if (p === "/api/workspaces" && req.method === "GET") return json(workspacesPayload());
+    if (p.startsWith("/api/project-icon/") && req.method === "GET") {
+      const path = projectIconPath(p.slice("/api/project-icon/".length));
+      return path
+        ? new Response(Bun.file(path), {
+            headers: { "content-type": "image/png", "cache-control": "public, max-age=31536000, immutable" },
+          })
+        : json({ error: "no such icon" }, 404);
+    }
     if (p === "/api/workspaces" && req.method === "POST") {
-      const body = (await req.json().catch(() => null)) as { goal?: string; folder?: string } | null;
+      const body = (await req.json().catch(() => null)) as { goal?: string; folder?: string; projectId?: number } | null;
       const folder = expand(body?.folder?.trim() ?? "");
       if (!folder) return json({ error: "folder is required" }, 400);
       if (!existsSync(folder)) return json({ error: `no such directory: ${folder}` }, 400);
-      return json({ workspace: await createWorkspace({ goal: body?.goal ?? "", folder }) });
+      return json({
+        workspace: await createWorkspace({
+          goal: body?.goal ?? "",
+          folder,
+          projectId: Number.isInteger(body?.projectId) ? body!.projectId : undefined,
+        }),
+      });
     }
     if (p === "/api/calendar" && req.method === "GET") return json(await macCalendarStatus());
     if (p === "/api/calendar/enable" && req.method === "POST") {
@@ -1324,7 +1596,7 @@ const server = Bun.serve<PtyData, never>({
       const [rawId, action] = p.slice("/api/tasks/".length).split("/");
       const id = Number(rawId);
       if (!Number.isInteger(id)) return json({ error: "no such task" }, 404);
-      const body = (await req.json().catch(() => null)) as (TaskPatch & { workspaceId?: number | null }) | null;
+      const body = (await req.json().catch(() => null)) as (TaskPatch & { workspaceId?: number | null; workProjectId?: number | null }) | null;
       if (action === "complete" || action === "reopen") {
         const task = action === "complete" ? completeTask(id) : reopenTask(id);
         return task ? json({ task }) : json({ error: "no such task" }, 404);
@@ -1335,7 +1607,7 @@ const server = Bun.serve<PtyData, never>({
         return json({ ok: true });
       }
       if (action === "workspace") {
-        const task = setTaskWorkspace(id, body?.workspaceId ?? null);
+        const task = Number.isInteger(body?.workProjectId) ? setTaskWorkProject(id, body!.workProjectId as number) : setTaskWorkspace(id, body?.workspaceId ?? null);
         return !task ? json({ error: "no such task" }, 404) : "error" in task ? json(task, 404) : json({ task });
       }
       if (action) return json({ error: `this daemon does not know the task action "${action}" — restart it to pick up newer code` }, 404);
@@ -1345,23 +1617,97 @@ const server = Bun.serve<PtyData, never>({
 
     if (p === "/api/workspaces/reorder" && req.method === "POST") {
       const body = (await req.json().catch(() => null)) as
-        | { ids?: number[]; projects?: string[]; sessions?: string[][] }
+        | { ids?: number[]; projects?: number[]; sessions?: string[][] }
         | null;
       if (Array.isArray(body?.sessions)) {
         reorderSessions(body.sessions.filter(Array.isArray).map((g) => g.filter((x) => typeof x === "string")));
       }
       if (Array.isArray(body?.ids)) reorderWorkspaces(body.ids.filter((x) => Number.isInteger(x)));
-      if (Array.isArray(body?.projects)) reorderProjects(body.projects.filter((x) => typeof x === "string"));
+      if (Array.isArray(body?.projects)) reorderProjects(body.projects.filter((x) => Number.isInteger(x)));
       return json({ ok: true });
     }
-    if (p === "/api/workspaces/project-delete" && req.method === "POST") {
-      const body = (await req.json().catch(() => null)) as { key?: string } | null;
+    if (p === "/api/workspaces/project-mark" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as
+        | { key?: string; icon?: string | null; color?: string | null; image?: string }
+        | null;
       const key = body?.key ?? "";
-      const held = new Set(workspacesOfProject(key).flatMap((w) => sessionsOfWorkspace(w.id)));
+      if (typeof body?.image === "string") {
+        const res = setProjectImage(key, body.image);
+        return "error" in res ? json(res, 400) : json(res);
+      }
+      return setProjectMark(key, { icon: body?.icon, color: body?.color })
+        ? json({ ok: true })
+        : json({ error: "no such project, glyph or colour" }, 400);
+    }
+    if (p === "/api/workspaces/project-delete" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { id?: number } | null;
+      const projectId = Number.isInteger(body?.id) ? body!.id! : -1;
+      const gone = workspacesOfProject(projectId);
+      const held = new Set([...gone.flatMap((w) => sessionsOfWorkspace(w.id)), ...sessionsOfProject(projectId)]);
       for (const a of listAgents()) {
         if (held.has(a.key) || (a.sessionId && held.has(a.sessionId))) await endSession(a.key);
       }
-      return deleteProject(key) ? json({ ok: true }) : json({ error: "no such project" }, 404);
+      for (const w of gone) unplaceDrawingsOf(w.id);
+      unplaceDrawingsOfProject(projectId);
+      for (const w of gone) unplaceNotesOf(w.id);
+      unplaceNotesOfProject(projectId);
+      return deleteProject(projectId) ? json({ ok: true }) : json({ error: "no such project" }, 404);
+    }
+    if (p === "/api/projects" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { name?: string; unnamed?: boolean } | null;
+      const name = body?.name?.trim() ?? "";
+      return name ? json({ project: createProject(name, { unnamed: body?.unnamed === true }) }) : json({ error: "a name is required" }, 400);
+    }
+    if (p.startsWith("/api/projects/") && p.endsWith("/mark") && req.method === "POST") {
+      const projectId = Number(p.slice("/api/projects/".length, -"/mark".length));
+      const body = (await req.json().catch(() => null)) as { icon?: string | null; color?: string | null; image?: string } | null;
+      if (!Number.isInteger(projectId)) return json({ error: "no such project" }, 404);
+      if (typeof body?.image === "string") {
+        const res = setGoalImage(projectId, body.image);
+        return "error" in res ? json(res, 400) : json(res);
+      }
+      return setGoalMark(projectId, { icon: body?.icon, color: body?.color })
+        ? json({ ok: true })
+        : json({ error: "no such project, glyph or colour" }, 400);
+    }
+    if (/^\/api\/projects\/\d+\/attach$/.test(p) && req.method === "POST") {
+      const projectId = Number(p.slice("/api/projects/".length).split("/")[0]);
+      const body = (await req.json().catch(() => null)) as { ids?: unknown } | null;
+      const ids = Array.isArray(body?.ids) ? body.ids.filter((x): x is string => typeof x === "string" && !!x) : [];
+      return attachSessionToProject(ids, projectId) ? json({ ok: true }) : json({ error: "no such project, or it holds sessions only in its checkouts" }, 404);
+    }
+    if (/^\/api\/projects\/\d+\/folder$/.test(p) && req.method === "POST") {
+      const projectId = Number(p.slice("/api/projects/".length).split("/")[0]);
+      try {
+        const folder = ensureProjectFolder(projectId);
+        return folder ? json({ folder }) : json({ error: "this project has no folder of its own" }, 404);
+      } catch (err) {
+        return json({ error: `could not make the project's folder: ${err instanceof Error ? err.message : String(err)}` }, 500);
+      }
+    }
+    if (/^\/api\/projects\/\d+\/(archive|unarchive)$/.test(p) && req.method === "POST") {
+      const [rawId, action] = p.slice("/api/projects/".length).split("/");
+      const projectId = Number(rawId);
+      if (action === "unarchive") {
+        const ok = unarchiveProject(projectId);
+        if (ok) for (const kind of ["artifacts", "notes", "drawings"]) broadcast(kind, { at: Date.now() });
+        return ok ? json({ ok: true }) : json({ error: "no such project" }, 404);
+      }
+      const held = new Set([...workspacesOfProject(projectId).flatMap((w) => sessionsOfWorkspace(w.id)), ...sessionsOfProject(projectId)]);
+      for (const a of listAgents()) {
+        if (held.has(a.key) || (a.sessionId && held.has(a.sessionId))) await endSession(a.key);
+      }
+      const archived = archiveProject(projectId);
+      if (!archived) return json({ error: "no such project" }, 404);
+      for (const kind of ["artifacts", "notes", "drawings"]) broadcast(kind, { at: Date.now() });
+      tasksChanged();
+      return json({ ok: true, workspaces: archived.length });
+    }
+    if (p.startsWith("/api/projects/") && req.method === "POST") {
+      const projectId = Number(p.slice("/api/projects/".length));
+      const body = (await req.json().catch(() => null)) as { name?: string } | null;
+      const project = Number.isInteger(projectId) ? renameProject(projectId, body?.name ?? "") : null;
+      return project ? json({ project }) : json({ error: "no such project, or no name" }, 404);
     }
     if (p.startsWith("/api/workspaces/") && req.method === "POST") {
       const [rawId, action] = p.slice("/api/workspaces/".length).split("/");
@@ -1381,7 +1727,9 @@ const server = Bun.serve<PtyData, never>({
         if (!w) return json({ error: "not found" }, 404);
         if (body?.worktree !== true) {
           await endSessionsOf();
-          deleteWorkspace(id);
+          unplaceDrawingsOf(id);
+        unplaceNotesOf(id);
+        deleteWorkspace(id);
           return json({ ok: true, worktreeRemoved: false });
         }
         /**
@@ -1425,8 +1773,16 @@ const server = Bun.serve<PtyData, never>({
           repoKey: r.status?.commonDir ?? null,
         });
         broadcast("worktrees", { repoKey: r.status?.commonDir ?? null, worktrees: r.worktrees });
+        unplaceDrawingsOf(id);
+        unplaceNotesOf(id);
         deleteWorkspace(id);
         return json({ ok: true, worktreeRemoved: true });
+      }
+      if (action === "project") {
+        const move = body as { projectId?: number } | null;
+        return Number.isInteger(move?.projectId) && moveWorkspace(id, move!.projectId!)
+          ? json({ ok: true })
+          : json({ error: "no such workspace or project" }, 404);
       }
       if (!action) {
         const w = updateWorkspace(id, { goal: typeof body?.goal === "string" ? body.goal : undefined });
@@ -1632,7 +1988,7 @@ const server = Bun.serve<PtyData, never>({
       }
     }
 
-    if (p === "/api/health") return json({ ok: true, projectsDir: PROJECTS_DIR });
+    if (p === "/api/health") return json({ ok: true, projectsDir: PROJECTS_DIR, pid: process.pid, ...RELEASE });
 
     // ── settings ─────────────────────────────────────────────────────────────
     if (p === "/api/settings") {
@@ -1650,6 +2006,17 @@ const server = Bun.serve<PtyData, never>({
           db.query("DELETE FROM artifacts").run();
           await reconcileArtifacts(db);
           broadcast("artifacts", { at: Date.now() });
+        }
+        setProjectsDir(next.ui.projectsRoot ?? "");
+        if (setNotesDir(next.ui.notesRoot ?? "")) {
+          db.query("UPDATE notes SET missing = 1").run();
+          reconcileNotes();
+          broadcast("notes", { at: Date.now() });
+        }
+        if (setDrawingsDir(next.ui.drawingsRoot ?? "")) {
+          db.query("UPDATE drawings SET missing = 1").run();
+          reconcileDrawings();
+          broadcast("drawings", { at: Date.now() });
         }
         // Other open tabs should not keep showing the old toggles.
         broadcast("settings", next);
@@ -1832,6 +2199,7 @@ const server = Bun.serve<PtyData, never>({
           from?: string;
           paths?: unknown;
           path?: string;
+          projectId?: unknown;
           provision?: boolean;
           rules?: unknown[];
           all?: boolean;
@@ -1848,11 +2216,22 @@ const server = Bun.serve<PtyData, never>({
           const branch = b.branch?.trim();
           if (!branch) return json({ error: "branch is required" }, 400);
           const ui = getSettings().ui;
+          let path = b.path;
+          if (!path?.trim() && Number.isInteger(b.projectId)) {
+            let home: string | null = null;
+            try {
+              home = ensureProjectFolder(b.projectId as number);
+            } catch (err) {
+              return json({ ok: false, error: `could not make the project's folder: ${err instanceof Error ? err.message : String(err)}` }, 409);
+            }
+            const main = home ? (await repoStatus(root).catch(() => null))?.mainRoot : null;
+            if (home && main) path = projectWorktreePath(home, main, branch);
+          }
           const r = await gitWorktreeAdd(root, {
             branch,
             create: !!b.create,
             from: b.from,
-            path: b.path,
+            path,
             root: ui.worktreeRoot || undefined,
             /**
              * Opt-out per request, so a caller that wants a bare checkout can say so
@@ -1871,6 +2250,7 @@ const server = Bun.serve<PtyData, never>({
             gitChanged(r);
             invalidateRepoKeys(db);
             broadcast("worktrees", { repoKey: r.status?.commonDir ?? null, worktrees: r.worktrees });
+            if (r.path) await workspaceForFolder(r.path).catch(() => null);
           }
           return json(r, r.ok ? 200 : 409);
         }
@@ -2122,6 +2502,7 @@ const server = Bun.serve<PtyData, never>({
           await gitDiff({
             cwd,
             scope,
+            range: rangeParam(url),
             path: url.searchParams.get("path") ?? undefined,
             ignoreWhitespace,
             context: Number(url.searchParams.get("context") ?? 3),
@@ -2135,7 +2516,22 @@ const server = Bun.serve<PtyData, never>({
 
       if (action === "graph") return json(await gitGraph(cwd, { limit: Number(url.searchParams.get("limit") ?? 300), all: url.searchParams.get("all") !== "0" }));
 
-      if (action === "branch-files") return json({ files: await branchFiles(cwd) });
+      if (action === "branch-files") return json({ files: await branchFiles(cwd, rangeParam(url)) });
+
+      if (action === "grep") {
+        const how = { caseSensitive: url.searchParams.get("case") === "1", regex: url.searchParams.get("regex") === "1" };
+        const plain = await grepFolder(cwd, url.searchParams.get("q") ?? "", how);
+        if (plain) return json(plain);
+      }
+      if (action === "grep")
+        return json(
+          await gitGrep(cwd, url.searchParams.get("q") ?? "", {
+            caseSensitive: url.searchParams.get("case") === "1",
+            regex: url.searchParams.get("regex") === "1",
+          }),
+        );
+
+      if (action === "stack") return json(await workspaceStack(cwd, url.searchParams.get("refresh") === "1"));
 
       if (action === "commit") {
         const sha = url.searchParams.get("sha") ?? "";

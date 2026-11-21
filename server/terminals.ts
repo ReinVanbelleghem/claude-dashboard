@@ -4,8 +4,12 @@ import { basename } from "node:path";
 import type { WorkspaceTerminal } from "../shared/terminals.ts";
 import { tmux } from "./services.ts";
 
-/** tmux sessions the dashboard opened as workspace terminals carry this prefix. */
-export const TERMINAL_SESSION_PREFIX = "dashterm-";
+/**
+ * tmux sessions the dashboard opened as workspace terminals carry this prefix.
+ * It follows DASHBOARD_TMUX_PREFIX, so a second dashboard on the same machine
+ * names its terminals apart from the first one's.
+ */
+export const TERMINAL_SESSION_PREFIX = `${process.env.DASHBOARD_TMUX_PREFIX ?? "dash"}term-`;
 const SYNC_MS = 5_000;
 
 type Row = { id: number; workspace_id: number | null; folder: string; title: string; session: string; created_at: number };

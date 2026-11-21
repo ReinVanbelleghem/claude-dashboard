@@ -2,7 +2,7 @@ import type { ComponentType, ReactNode } from "react";
 import type { Appearance } from "../appearance.ts";
 import { footerPagesOf, type PageDef, type Tab } from "../pages.ts";
 import { BrandMark } from "./BrandMark.tsx";
-import { ChevronIcon } from "./Icons.tsx";
+import { PinIcon, ChevronIcon } from "./Icons.tsx";
 import { sidebarPrefs, useSidebarPrefs } from "./sidebar/prefs.ts";
 
 /**
@@ -19,6 +19,10 @@ export function Sidebar({
   onSelect,
   iconFor,
   collapsed,
+  away = false,
+  peek = false,
+  onPeek,
+  onPin,
   appearance,
   blocked,
   thinking,
@@ -38,6 +42,13 @@ export function Sidebar({
   onSelect: (tab: Tab) => void;
   iconFor: (tab: Tab) => ComponentType;
   collapsed: boolean;
+  /** Folded out of sight altogether: it takes no room and comes back over the page while the pointer is at the left edge. */
+  away?: boolean;
+  /** Out of sight, but shown in full over the page right now. */
+  peek?: boolean;
+  onPeek?: (on: boolean) => void;
+  /** Pin it beside the page, or let it go out of sight again. */
+  onPin?: () => void;
   appearance: Appearance;
   blocked: number;
   thinking: number;
@@ -82,15 +93,26 @@ export function Sidebar({
   const [head, ...tail] = name.trim().split(/\s+/);
   const rest = tail.join(" ");
   return (
-    <aside className={`sidebar ${collapsed ? "rail" : ""}`} aria-label="Pages">
+    <aside className={`sidebar ${collapsed ? "rail" : ""}${away ? " away" : ""}${peek ? " peek" : ""}`} aria-label="Pages" onMouseEnter={() => onPeek?.(true)} onMouseLeave={() => onPeek?.(false)}>
       <div className="sidebar-head">
-        <button className="sidebar-brand" onClick={onHome} title={`${name} — back to Live`} aria-label="Back to Live">
+        <button className="sidebar-brand" onClick={onHome} title={`${name} — back to Home`} aria-label="Back to Home">
           <BrandMark appearance={appearance} blocked={blocked} thinking={thinking} />
           <span className="sidebar-brand-text">
             <strong>{head}</strong>
             {rest && <small>{rest}</small>}
           </span>
         </button>
+        {onPin && (
+          <button
+            className={`sidebar-pin${away ? "" : " on"}`}
+            onClick={onPin}
+            aria-pressed={!away}
+            title={away ? "Pin the sidebar: it stays beside the page" : "Unpin the sidebar: it hides, and shows when the pointer reaches the left edge"}
+            aria-label={away ? "Pin the sidebar" : "Unpin the sidebar"}
+          >
+            <PinIcon filled={!away} />
+          </button>
+        )}
       </div>
 
       <button

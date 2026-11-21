@@ -41,6 +41,10 @@ export type SidebarSession = {
   resumable?: boolean;
   /** A shell rather than a Claude session: same row, same ways to open it. */
   terminal?: boolean;
+  /** A running service: opens like a terminal, started and stopped from the services lists. */
+  service?: boolean;
+  /** For a service: whether every pane is alive, some crashed, or all did. */
+  health?: "ok" | "partial" | "down";
 };
 
 export function modelTag(model: string | null | undefined): string {
@@ -133,7 +137,7 @@ export function buildSessions(opts: {
 }
 
 export type Card = {
-  /** `ws:<id>`, or `dir:<cwd>` for rows the daemon has not filed yet. */
+  /** `ws:<id>`, `own:<project id>` for sessions in a project's own folder, or `dir:<cwd>` for rows the daemon has not filed yet. */
   key: string;
   ws: Workspace | null;
   title: string;
@@ -143,12 +147,25 @@ export type Card = {
   needs: number;
   /** Nothing to say beyond its project's heading: no goal, and the project's own folder. Drawn without a header. */
   bare: boolean;
+  /** One of a project's checkouts, named after its repository and wearing that repository's mark. */
+  byRepo: boolean;
 };
 
 export type Project = {
+  /** `p<id>`, or `dir:<cwd>` for sessions the daemon has not filed yet. */
   key: string;
+  /** Null for sessions the daemon has not filed yet. */
+  id: number | null;
   name: string;
-  root: string;
+  /** A repository's standing project, for work in its main checkout that is part of no change. */
+  general: boolean;
+  /** The project's own folder, once it has one. */
+  folder: string | null;
+  /** The project's own mark, when it has one. */
+  icon: string | null;
+  color: string | null;
+  /** The repositories its checkouts are of, each once. */
+  repos: { key: string; name: string; root: string }[];
   cards: Card[];
   paused: Workspace[];
   archived: Workspace[];
@@ -184,19 +201,29 @@ const card = (
     status: mostUrgent(sorted.map((r) => r.status)),
     needs: sorted.filter((r) => r.status === "needs").length,
     bare,
+    byRepo: false,
   };
 };
 
 /**
  * Projects in the order you gave them, each with its active workspaces in
  * theirs and the sessions each holds, oldest first: nothing moves when a status
- * changes, and a project stays listed while empty until you delete it. An
- * implicit workspace (no typed goal) only shows while it has sessions; one you
- * named stays until you pause or archive it.
+ * changes, and a project stays listed while empty until you delete it. A
+ * project's workspaces always show, with or without sessions, until paused or
+ * archived. In a repository's standing project, a workspace nobody named only
+ * shows while it has sessions.
  */
-export function buildTree(sessions: SidebarSession[], payload: WorkspacesPayload | null, now = Date.now()): Tree {
+export function buildTree(
+  sessions: SidebarSession[],
+  payload: WorkspacesPayload | null,
+  now = Date.now(),
+  /** Projects to list although nothing runs in them, because they hold something else worth reaching: a drawing. */
+  keep: Set<number> = new Set(),
+): Tree {
   const byId = new Map((payload?.workspaces ?? []).map((w) => [w.id, w]));
   const held = new Map<number, SidebarSession[]>();
+  const own = new Map<number, SidebarSession[]>();
+  const shown = new Set((payload?.projects ?? []).filter((p) => !p.archivedAt).map((p) => p.id));
   const loose = new Map<string, SidebarSession[]>();
   const chats: SidebarSession[] = [];
 
@@ -207,41 +234,60 @@ export function buildTree(sessions: SidebarSession[], payload: WorkspacesPayload
     }
     const wsId = s.ids.map((id) => payload?.sessions[id]).find((x) => x !== undefined);
     const ws = wsId === undefined ? undefined : byId.get(wsId);
+    const home = ws ? undefined : s.ids.map((id) => payload?.projectSessions?.[id]).find((x) => x !== undefined && shown.has(x));
     if (ws) held.set(ws.id, [...(held.get(ws.id) ?? []), s]);
+    else if (home !== undefined) own.set(home, [...(own.get(home) ?? []), s]);
     else loose.set(s.cwd, [...(loose.get(s.cwd) ?? []), s]);
   }
 
   const projects = new Map<string, Project>();
-  const project = (key: string, name: string, root: string) => {
+  const node = (key: string, id: number | null, name: string, general: boolean) => {
     let p = projects.get(key);
-    if (!p) projects.set(key, (p = { key, name, root, cards: [], paused: [], archived: [] }));
+    if (!p) projects.set(key, (p = { key, id, name, general, folder: known.get(id ?? -1)?.folder ?? null, icon: known.get(id ?? -1)?.icon ?? null, color: known.get(id ?? -1)?.color ?? null, repos: [], cards: [], paused: [], archived: [] }));
     return p;
   };
-
-  for (const p of payload?.projects ?? []) project(p.key, p.name, p.root);
+  const known = new Map((payload?.projects ?? []).map((p) => [p.id, p]));
+  const put = new Set((payload?.projects ?? []).filter((p) => !!p.archivedAt).map((p) => p.id));
+  for (const p of payload?.projects ?? []) if (!put.has(p.id)) node(`p${p.id}`, p.id, p.name, p.generalKey !== null);
+  const project = (w: Workspace) => {
+    const p = node(`p${w.projectId}`, w.projectId, known.get(w.projectId)?.name ?? w.repoName, known.get(w.projectId)?.generalKey != null);
+    if (w.status !== "archived" && !p.repos.some((r) => r.key === w.repoKey)) p.repos.push({ key: w.repoKey, name: w.repoName, root: w.repoRoot });
+    return p;
+  };
+  /** Inside a project a checkout goes by its repository; a goal of its own is kept when it says more than the project's name. */
+  const titleIn = (w: Workspace, p: Project) => {
+    const goal = w.goal.trim();
+    return goal && goal !== p.name ? goal : w.repoName;
+  };
 
   for (const w of [...byId.values()].sort((a, b) => a.order - b.order || a.id - b.id)) {
     const rows = held.get(w.id) ?? [];
-    if (w.status === "paused") project(w.projectKey, w.projectName, w.projectRoot).paused.push(w);
+    if (put.has(w.projectId)) continue;
+    if (w.status === "paused") project(w).paused.push(w);
     else if (w.status === "archived") {
-      if (now - (w.archivedAt ?? 0) < ARCHIVE_SHOWN_MS && (w.explicit || w.goal.trim())) {
-        project(w.projectKey, w.projectName, w.projectRoot).archived.push(w);
-      }
-    } else if (rows.length > 0 || w.explicit) {
-      project(w.projectKey, w.projectName, w.projectRoot).cards.push(
-        card(`ws:${w.id}`, w, workspaceTitle(w), workspaceSub(w), rows, !w.goal.trim() && !w.explicit && w.folder === w.projectRoot, payload?.sessionOrder),
-      );
+      if (now - (w.archivedAt ?? 0) < ARCHIVE_SHOWN_MS && (w.explicit || w.goal.trim())) project(w).archived.push(w);
+    } else if (rows.length > 0 || w.explicit || known.get(w.projectId)?.generalKey == null) {
+      const p = project(w);
+      const bare = p.general && !w.goal.trim() && !w.explicit && w.folder === w.repoRoot;
+      const made = card(`ws:${w.id}`, w, p.general ? workspaceTitle(w) : titleIn(w, p), workspaceSub(w), rows, bare, payload?.sessionOrder);
+      p.cards.push({ ...made, byRepo: !p.general && made.title === w.repoName });
     }
   }
+  for (const [id, rows] of own) {
+    const p = known.get(id)!;
+    node(`p${id}`, id, p.name, false).cards.push(card(`own:${id}`, null, p.name, null, rows, true, payload?.sessionOrder));
+  }
   for (const [cwd, rows] of loose) {
-    project(`dir:${cwd}`, folderName(cwd), cwd).cards.push(card(`dir:${cwd}`, null, folderName(cwd), null, rows, true));
+    node(`dir:${cwd}`, null, folderName(cwd), true).cards.push(card(`dir:${cwd}`, null, folderName(cwd), null, rows, true));
   }
 
   for (const p of projects.values()) p.cards.sort((a, b) => Number(b.bare) - Number(a.bare));
 
-  const kept = new Set((payload?.projects ?? []).map((p) => p.key));
+  const kept = new Set((payload?.projects ?? []).filter((p) => p.explicit).map((p) => `p${p.id}`));
   return {
-    projects: [...projects.values()].filter((p) => kept.has(p.key) || p.cards.length || p.paused.length || p.archived.length),
+    projects: [...projects.values()].filter(
+      (p) => kept.has(p.key) || (p.id !== null && keep.has(p.id)) || p.cards.length || p.paused.length || p.archived.length,
+    ),
     chats: chats.sort((a, b) => a.since - b.since),
   };
 }

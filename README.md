@@ -12,16 +12,28 @@ the ones Claude Code itself makes.
 ## Quick start
 
 ```bash
-./install.sh        # checks dependencies, installs what's missing, builds the UI
-./start.sh          # or: bun run dev
+git clone https://github.com/ReinVanbelleghem/claude-dashboard.git
+cd claude-dashboard
+./install.sh
 ```
 
-Then open **http://localhost:5758**.
+`install.sh` checks what the dashboard needs, offers to install what is missing, and
+then asks how you want to use it:
+
+| | what you get | start it |
+| --- | --- | --- |
+| **Mac app** | "Claude Dashboard" in `/Applications`, with its own window and Dock icon. Built on your Mac in a few minutes, so macOS opens it without a warning. Apple silicon only | open it like any app |
+| **Browser** | runs from this folder | `./start.sh`, then open **http://localhost:5758** |
+
+Skip the question with `./install.sh --app` or `./install.sh --browser`. Both use the
+same data in `~/.claude-dashboard`, so you can switch at any time.
+
+**Updating:** `./install.sh --update` pulls the latest version and sets it up the way
+it already is: it rebuilds the app when the app is installed, and the browser version
+otherwise. Quit the app first; its sessions keep running and the new app picks them up.
 
 `install.sh` is safe to re-run. It verifies bun, git, the Claude Code CLI and
-`~/.claude`, offers to install anything missing (asking first — pass `--yes` to
-skip the prompts), then runs `bun install` and builds. If you already have
-everything, `bun install && ./start.sh` does the same job.
+`~/.claude`, and asks before installing anything (pass `--yes` to skip the prompts).
 
 `start.sh` runs two processes:
 
@@ -71,7 +83,7 @@ bun run package --version 2.0.0  # set exactly, then package
 `scripts/package.sh` is a plain bash script — `./scripts/package.sh --bump patch`
 works just as well if you'd rather not go through `bun run`.
 
-Produces a ~300KB zip: source plus a prebuilt `dist/`, with `node_modules`, git
+Produces a zip of a few megabytes: source plus a prebuilt `dist/`, with `node_modules`, git
 history and Finder metadata left out. Before zipping it scans the staged tree for
 credentials, keys and webhook URLs and refuses to package if it finds any.
 

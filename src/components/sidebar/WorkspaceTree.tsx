@@ -1,3 +1,5 @@
+import { markColorValue, markKey } from "../../../shared/projectMarks.ts";
+import { parseProjectFileId } from "../../../shared/projectFiles.ts";
 import {
   Fragment,
   useMemo,
@@ -8,8 +10,13 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { agentApi, terminalApi, workspaceApi, type Artifact, type Workspace, type WorkspacesPayload } from "../../api.ts";
+import { agentApi, artifactApi, drawingApi, noteApi, servicesApi, terminalApi, workspaceApi, type Artifact, type Workspace, type WorkspacesPayload } from "../../api.ts";
+import { serviceSessionOf } from "../../../shared/services.ts";
 import { artifactKey } from "../../../shared/artifacts.ts";
+import { drawingKey, type Drawing } from "../../../shared/drawings.ts";
+import { useDrawings } from "../DrawingsView.tsx";
+import { useNotes } from "../NotePane.tsx";
+import { noteRoot, noteKey, type Note } from "../../../shared/notes.ts";
 import { terminalIdOf } from "../../../shared/terminals.ts";
 import { namedByBranch, workspaceTitle } from "../../../shared/workspaces.ts";
 import {
@@ -17,7 +24,9 @@ import {
   ChevronIcon,
   ClaudeMark,
   CommentIcon,
+  DocIcon,
   DrawerOpenIcon,
+  DrawingIcon,
   FolderIcon,
   FullPageIcon,
   GitIcon,
@@ -28,13 +37,15 @@ import {
   PlusIcon,
   StopIcon,
   TasksIcon,
-  TerminalIcon,
+  ServiceIcon, TerminalIcon,
   TileWindowIcon,
   TrashIcon,
   WorktreeIcon,
+  XIcon,
 } from "../Icons.tsx";
 import { TitleEditInput } from "../EditableTitle.tsx";
 import { Popover } from "../Popover.tsx";
+import { hasOwnMark, OwnProjectMark, ProjectIcon, ProjectMark, ProjectMarkPicker } from "../ProjectMark.tsx";
 import { SESSION_DRAG_MIME } from "../../tiles.ts";
 import { useSortable, type Sortable } from "../../useSortable.ts";
 import { DeleteProjectDialog, DeleteWorkspaceDialog } from "./DeleteWorkspaceDialog.tsx";
@@ -104,6 +115,26 @@ function SortableGroup<T>({
 
 const INLINE_ARTIFACTS = 2;
 
+/**
+ * Put a project's rows in the order they were dragged into. One that has no
+ * place yet, a new workspace or the first note, goes right after whatever it
+ * follows by default, so it never jumps to the far end.
+ */
+function inSavedOrder<T extends { key: string }>(items: T[], saved: string[] | undefined): T[] {
+  if (!saved?.length) return items;
+  const rank = new Map(saved.map((key, i) => [key, i]));
+  const out = items.filter((s) => rank.has(s.key)).sort((a, b) => rank.get(a.key)! - rank.get(b.key)!);
+  items.forEach((s, i) => {
+    if (rank.has(s.key)) return;
+    const before = items
+      .slice(0, i)
+      .reverse()
+      .find((x) => out.includes(x));
+    out.splice(before ? out.indexOf(before) + 1 : 0, 0, s);
+  });
+  return out;
+}
+
 export function StatusDot({ kind }: { kind: StatusKind }) {
   return (
     <span className={`ws-st ws-st-${kind}`} title={STATUS_LABEL[kind]} role="img" aria-label={STATUS_LABEL[kind]}>
@@ -133,14 +164,19 @@ export function WorkspaceTree({
   minimized,
   workspaceTasks,
   workspaceArtifacts,
+  projectArtifacts,
   sessionArtifacts,
   onOpen,
   onNewWorkspace,
   onNewSession,
+  onNewProjectSession,
+  onNewProjectTerminal,
   onNewChat,
   onOpenWorkspace,
   onNewTerminal,
   activeWorkspaceId,
+  onOpenProject,
+  activeProjectId,
 }: {
   sessions: SidebarSession[];
   payload: WorkspacesPayload | null;
@@ -152,13 +188,23 @@ export function WorkspaceTree({
   workspaceTasks: Map<number, string[]>;
   /** The pages each workspace's sessions wrote, listed under it. */
   workspaceArtifacts: Map<number, Artifact[]>;
+  /** The pages put on a project as a whole, by hand. */
+  projectArtifacts: Map<number, Artifact[]>;
   /** The pages each session wrote, for sessions that sit outside a workspace. */
   sessionArtifacts: Map<string, Artifact[]>;
   onOpen: (id: string, opts?: OpenOpts) => void;
-  /** The New workspace dialog, optionally on one project's folder. */
-  onNewWorkspace: (folder?: string) => void;
+  /** The New workspace dialog, optionally on a repository's folder and filed in one project. */
+  onNewWorkspace: (folder?: string, projectId?: number) => void;
+  /** Open a project's own page: everything it holds, across its checkouts. */
+  onOpenProject: (projectId: number) => void;
+  /** The project whose page is on screen. */
+  activeProjectId: number | null;
   /** The new-session dialog on a folder, filed in a workspace when one is given. */
   onNewSession: (folder: string, workspaceId?: number) => void;
+  /** The new-session dialog on a project's own folder, which is made if it is not there yet. */
+  onNewProjectSession: (projectId: number) => void;
+  /** Open a shell in a project's own folder. */
+  onNewProjectTerminal: (projectId: number) => void;
   /** Start a chat that belongs to no project. */
   onNewChat: () => void;
   /** Open a shell in a workspace's folder. */
@@ -169,15 +215,24 @@ export function WorkspaceTree({
   activeWorkspaceId: number | null;
 }) {
   const prefs = useSidebarPrefs();
+  const { drawings } = useDrawings();
+  const { notes } = useNotes();
   const [menu, setMenu] = useState<Menu | null>(null);
-  const [renaming, setRenaming] = useState<{ kind: "ws" | "session"; key: string } | null>(null);
+  const [renaming, setRenaming] = useState<{ kind: "ws" | "session" | "project" | "drawing"; key: string } | null>(null);
   const [deleting, setDeleting] = useState<Workspace | null>(null);
   const [deletingProject, setDeletingProject] = useState<Project | null>(null);
+  const [marking, setMarking] = useState<{ repoKey?: string; goalId?: number; name: string; anchor: HTMLElement } | null>(null);
+  const markedProject = marking?.goalId !== undefined ? payload?.projects.find((x) => x.id === marking.goalId) : undefined;
+  const markedGoal = markedProject && { id: markedProject.id, icon: markedProject.icon, color: markedProject.color };
+  const menuAnchor = useRef<HTMLElement | null>(null);
   /** The session row being dragged: onto another row of its workspace to reorder, or out onto the page to open a tile. */
   const rowDrag = useRef<{ id: string; card: string | null } | null>(null);
   const [dropAt, setDropAt] = useState<{ id: string; after: boolean } | null>(null);
 
-  const tree = useMemo(() => buildTree(sessions, payload), [sessions, payload]);
+  const tree = useMemo(
+    () => buildTree(sessions, payload, undefined, new Set([...[...drawings, ...notes].flatMap((d) => (d.projectId === null ? [] : [d.projectId])), ...projectArtifacts.keys()])),
+    [sessions, payload, drawings, notes, projectArtifacts],
+  );
   const needsTotal = sessions.filter((s) => s.status === "needs").length;
   const only = prefs.onlyNeeds && needsTotal > 0;
   const folded = (key: string) => prefs.folds[key] === true;
@@ -186,8 +241,47 @@ export function WorkspaceTree({
   const openMenu = (e: ReactMouseEvent, items: MenuItem[]) => {
     e.preventDefault();
     e.stopPropagation();
+    menuAnchor.current = e.currentTarget as HTMLElement;
     setMenu({ anchor: e.currentTarget as HTMLElement, items });
   };
+
+  /** "Move to…" on a session: any project as a whole, or one checkout in it. Where it is put, it stays. */
+  const moveSessionItem = (s: SidebarSession, home: Card | null): MenuItem => ({
+    label: "Move to…",
+    icon: <FolderIcon open />,
+    run: () =>
+      menuAnchor.current &&
+      setMenu({
+        anchor: menuAnchor.current,
+        items: [
+          { heading: "Move to" },
+          ...(payload?.projects ?? [])
+            .filter((p) => !p.generalKey?.startsWith("review:") && !p.archivedAt)
+            .flatMap((p): MenuItem[] => {
+              const inside = (payload?.workspaces ?? []).filter((w) => w.projectId === p.id && w.status !== "archived");
+              if (p.generalKey && inside.length === 0) return [];
+              return [
+                p.generalKey
+                  ? { heading: `${p.name} (main checkout)` }
+                  : {
+                      label: p.name,
+                      icon: <ProjectIcon project={p} size={15} />,
+                      disabled: home?.key === `own:${p.id}`,
+                      run: () => void workspaceApi.attachProject(p.id, s.ids).catch(() => {}),
+                    },
+                ...inside.map(
+                  (w): MenuItem => ({
+                    label: `↳ ${w.repoName}${w.branch ? ` · ${w.branch}` : ""}`,
+                    icon: <ProjectMark projectKey={w.repoKey} name={w.repoName} size={13} />,
+                    disabled: home?.ws?.id === w.id,
+                    run: () => void workspaceApi.attach(w.id, s.ids).catch(() => {}),
+                  }),
+                ),
+              ];
+            }),
+        ],
+      }),
+  });
 
   const sessionItems = (s: SidebarSession, home: Card | null, project: Project | null): MenuItem[] => {
     const items: MenuItem[] = [
@@ -195,6 +289,13 @@ export function WorkspaceTree({
       { label: "Open in tile", icon: <TileWindowIcon />, run: () => onOpen(s.id, { tile: true }) },
       { label: "Open full page", icon: <FullPageIcon />, run: () => onOpen(s.id, { full: true }) },
     ];
+    if (s.service) {
+      return [
+        ...items,
+        "sep",
+        { label: "Stop service", icon: <StopIcon />, danger: true, run: () => void servicesApi.stop(serviceSessionOf(s.id)).catch(() => {}) },
+      ];
+    }
     if (s.terminal) {
       return [
         ...items,
@@ -209,6 +310,8 @@ export function WorkspaceTree({
         "sep",
         ...items,
         "sep",
+        moveSessionItem(s, home),
+        "sep",
         { label: "Remove from the list", icon: <TrashIcon />, run: () => void agentApi.forget(s.id).catch(() => {}) },
       ];
     }
@@ -219,17 +322,7 @@ export function WorkspaceTree({
         items.push({ label: "Stop this turn", icon: <StopIcon />, run: () => void agentApi.interrupt(key).catch(() => {}) });
       }
     }
-    const others = (project?.cards ?? []).filter((c) => c.ws && c.key !== home?.key);
-    if (others.length > 0) {
-      items.push("sep", { heading: "Move to" });
-      for (const c of others.slice(0, 8)) {
-        items.push({
-          label: c.title,
-          icon: <WorktreeIcon />,
-          run: () => void workspaceApi.attach(c.ws!.id, s.ids).catch(() => {}),
-        });
-      }
-    }
+    items.push("sep", moveSessionItem(s, home));
     if (key) {
       items.push("sep", {
         label: s.status === "ended" || s.status === "failed" ? "Clear from the sidebar" : "End session",
@@ -249,6 +342,31 @@ export function WorkspaceTree({
       { label: "New session here", icon: <PlusIcon />, run: () => onNewSession(w.folder, w.id) },
       { label: "New terminal here", icon: <TerminalIcon />, run: () => onNewTerminal(w.folder, w.id) },
       { label: "Rename goal…", icon: <PencilIcon />, run: () => setRenaming({ kind: "ws", key: c.key }) },
+      {
+        label: "Move to project…",
+        icon: <FolderIcon />,
+        run: () =>
+          menuAnchor.current &&
+          setMenu({
+            anchor: menuAnchor.current,
+            items: [
+              { heading: "Move to project" },
+              ...(payload?.projects ?? [])
+                .filter((p) => !p.generalKey || p.generalKey === w.repoKey)
+                .map((p) => ({
+                  icon: <ProjectIcon project={p} size={15} />,
+                  label: p.generalKey ? `${p.name} (general)` : p.name,
+                  disabled: p.id === w.projectId,
+                  run: () => void workspaceApi.moveToProject(w.id, p.id).catch(() => {}),
+                })),
+            ],
+          }),
+      },
+      {
+        label: "Change repository icon…",
+        icon: <ProjectMark projectKey={w.repoKey} name={w.repoName} size={15} />,
+        run: () => menuAnchor.current && setMarking({ repoKey: w.repoKey, name: w.repoName, anchor: menuAnchor.current }),
+      },
       "sep",
       {
         label: c.rows.length > 0 ? "Archive and end its sessions" : "Archive",
@@ -279,7 +397,7 @@ export function WorkspaceTree({
       flat?.ws ? [...sessionItems(s, home, project), "sep", { heading: "Workspace" }, ...cardItems(flat)] : sessionItems(s, home, project);
     const rowTitle = flat ? flat.title : s.title;
     const put = s.ids.some((id) => minimized.has(id));
-    const sortable = !only && !!home?.ws && home.rows.length > 1;
+    const sortable = !only && !!home && (!!home.ws || home.key.startsWith("own:")) && home.rows.length > 1;
     const drop = dropAt?.id === s.id ? (dropAt.after ? " drop-after" : " drop-before") : "";
     return (
       <div
@@ -327,8 +445,8 @@ export function WorkspaceTree({
         }}
         onContextMenu={(e) => openMenu(e, rowItems())}
       >
-        <span className={`ws-mark ws-mark-${s.status}`} title={STATUS_LABEL[s.status]} role="img" aria-label={STATUS_LABEL[s.status]}>
-          {s.terminal ? <TerminalIcon /> : <ClaudeMark />}
+        <span className={`ws-mark ws-mark-${s.status}${s.service ? ` ws-mark-service svc-${s.health ?? "ok"}` : ""}`} title={s.service ? (s.why ?? "Running service") : STATUS_LABEL[s.status]} role="img" aria-label={s.service ? (s.why ?? "Running service") : STATUS_LABEL[s.status]}>
+          {s.service ? <ServiceIcon /> : s.terminal ? <TerminalIcon /> : <ClaudeMark />}
         </span>
         {s.resumable && (
           <button
@@ -360,7 +478,7 @@ export function WorkspaceTree({
           ) : (
             <span className="ws-row-title">{rowTitle}</span>
           )}
-          {s.why && <span className="ws-row-why">{s.why}</span>}
+          {s.why && <span className={`ws-row-why${s.service ? " svc-crashed" : ""}`}>{s.why}</span>}
         </span>
         {put && (
           <span className="ws-row-ext" title="Its tile is put away. Open it as a tile, or drag it onto the Desktop, to bring it back.">
@@ -385,16 +503,83 @@ export function WorkspaceTree({
     );
   };
 
+  /**
+   * The "Link to…" entry every linkable thing gets: pick a project, one checkout
+   * in it, or nothing. `follow` is offered where the thing can go back to
+   * following the session that made it.
+   */
+  const linkItem = (
+    current: { projectId: number | null; workspaceId: number | null },
+    pick: (to: { projectId: number | null; workspaceId: number | null }) => void,
+    follow?: () => void,
+    /** Set for a thing that is moved rather than linked: whether its file already sits in the project's own folder. */
+    moves?: { inFolder: boolean },
+  ): MenuItem => ({
+    label: moves
+      ? current.projectId !== null || current.workspaceId !== null
+        ? "Move to another project…"
+        : "Move to a project…"
+      : current.projectId !== null || current.workspaceId !== null
+        ? "Link to something else…"
+        : "Link to a project…",
+    icon: <FolderIcon open />,
+    run: () =>
+      menuAnchor.current &&
+      setMenu({
+        anchor: menuAnchor.current,
+        items: [
+          { heading: moves ? "Move to" : "Link to" },
+          {
+            label: moves ? "No project" : "Nothing (unlink)",
+            icon: <XIcon />,
+            disabled: current.projectId === null && current.workspaceId === null && !moves?.inFolder,
+            run: () => pick({ projectId: null, workspaceId: null }),
+          },
+          ...(follow ? [{ label: "The session that wrote it", icon: <ClaudeMark />, run: follow } as MenuItem] : []),
+          "sep" as const,
+          ...(payload?.projects ?? [])
+            .filter((p) => !p.generalKey?.startsWith("review:") && !p.archivedAt)
+            .flatMap((p): MenuItem[] => [
+              {
+                label: p.generalKey ? `${p.name} (main checkout)` : p.name,
+                icon: <ProjectIcon project={p} size={15} />,
+                disabled: current.projectId === p.id && current.workspaceId === null && (!moves || moves.inFolder || !!p.generalKey),
+                run: () => pick({ projectId: p.id, workspaceId: null }),
+              },
+              ...(p.generalKey
+                ? []
+                : (payload?.workspaces ?? [])
+                    .filter((w) => w.projectId === p.id && w.status !== "archived")
+                    .map(
+                      (w): MenuItem => ({
+                        label: `↳ ${w.repoName}${w.branch ? ` · ${w.branch}` : ""}`,
+                        icon: <ProjectMark projectKey={w.repoKey} name={w.repoName} size={13} />,
+                        disabled: current.workspaceId === w.id,
+                        run: () => pick({ projectId: null, workspaceId: w.id }),
+                      }),
+                    )),
+            ]),
+        ],
+      }),
+  });
+
   const artifactItems = (a: Artifact): MenuItem[] => [
     { label: "Open in drawer", icon: <DrawerOpenIcon />, run: () => onOpen(artifactKey(a.slug), { drawer: true }) },
     { label: "Open in tile", icon: <TileWindowIcon />, run: () => onOpen(artifactKey(a.slug), { tile: true }) },
     { label: "Open full page", icon: <FullPageIcon />, run: () => onOpen(artifactKey(a.slug), { full: true }) },
+    "sep",
+    linkItem(
+      { projectId: a.link?.projectId ?? null, workspaceId: a.link?.workspaceId ?? null },
+      (to) => void artifactApi.link(a.slug, to).catch(() => {}),
+      a.link ? () => void artifactApi.link(a.slug, "follow").catch(() => {}) : undefined,
+      { inFolder: parseProjectFileId(a.slug).projectId !== null },
+    ),
   ];
 
   const artifactsOf = (ws: Workspace | null, rows: SidebarSession[]): Artifact[] => {
     const bySlug = new Map<string, Artifact>();
     for (const a of ws ? (workspaceArtifacts.get(ws.id) ?? []) : []) bySlug.set(a.slug, a);
-    for (const s of rows) for (const id of s.ids) for (const a of sessionArtifacts.get(id) ?? []) bySlug.set(a.slug, a);
+    for (const s of rows) for (const id of s.ids) for (const a of sessionArtifacts.get(id) ?? []) if (!a.link) bySlug.set(a.slug, a);
     return [...bySlug.values()].sort((a, b) => (b.modifiedTs ?? 0) - (a.modifiedTs ?? 0));
   };
 
@@ -456,9 +641,210 @@ export function WorkspaceTree({
     );
   };
 
+  const drawingItems = (d: Drawing): MenuItem[] => [
+    { label: "Open in drawer", icon: <DrawerOpenIcon />, run: () => onOpen(drawingKey(d.slug), { drawer: true }) },
+    { label: "Open in tile", icon: <TileWindowIcon />, run: () => onOpen(drawingKey(d.slug), { tile: true }) },
+    { label: "Open full page", icon: <FullPageIcon />, run: () => onOpen(drawingKey(d.slug), { full: true }) },
+    "sep",
+    { label: "Rename…", icon: <PencilIcon />, run: () => setRenaming({ kind: "drawing", key: d.slug }) },
+    linkItem({ projectId: d.projectId, workspaceId: d.workspaceId }, (to) =>
+      void drawingApi.update(d.slug, to.workspaceId !== null ? { workspaceId: to.workspaceId } : { projectId: to.projectId }).catch(() => {}),
+      undefined,
+      { inFolder: parseProjectFileId(d.slug).projectId !== null },
+    ),
+    "sep",
+    {
+      label: "Delete…",
+      icon: <TrashIcon />,
+      danger: true,
+      run: () =>
+        menuAnchor.current &&
+        setMenu({
+          anchor: menuAnchor.current,
+          items: [
+            { heading: `Delete “${d.title}”?` },
+            { label: "Delete the file for good", icon: <TrashIcon />, danger: true, run: () => void drawingApi.remove(d.slug).catch(() => {}) },
+          ],
+        }),
+    },
+  ];
+  /**
+   * A checkout's own drawings. With no workspace: the ones that belong to the
+   * project as a whole, and those of a checkout that has no card to sit under.
+   */
+  const drawingsOf = (ws: Workspace | null, project: Project | null = null): Drawing[] => {
+    if (ws) return drawings.filter((d) => d.workspaceId === ws.id);
+    if (!project || project.id === null) return [];
+    const carded = new Set(project.cards.flatMap((c) => (c.ws ? [c.ws.id] : [])));
+    return drawings.filter((d) => d.projectId === project.id && (d.workspaceId === null || !carded.has(d.workspaceId)));
+  };
+
+  const notesOf = (ws: Workspace | null, project: Project | null = null): Note[] => {
+    if (ws) return notes.filter((n) => n.workspaceId === ws.id);
+    if (!project || project.id === null) return [];
+    const carded = new Set(project.cards.flatMap((c) => (c.ws ? [c.ws.id] : [])));
+    return notes.filter((n) => n.projectId === project.id && (n.workspaceId === null || !carded.has(n.workspaceId)));
+  };
+  const noteItems = (n: Note): MenuItem[] => [
+    { label: "Open in drawer", icon: <DrawerOpenIcon />, run: () => onOpen(noteKey(n.path), { drawer: true }) },
+    { label: "Open in tile", icon: <TileWindowIcon />, run: () => onOpen(noteKey(n.path), { tile: true }) },
+    { label: "Open full page", icon: <FullPageIcon />, run: () => onOpen(noteKey(n.path), { full: true }) },
+    "sep",
+    linkItem({ projectId: n.via ? null : n.projectId, workspaceId: n.via ? null : n.workspaceId }, (to) =>
+      void noteApi.update(n.path, to.workspaceId !== null ? { workspaceId: to.workspaceId } : { projectId: to.projectId }).catch(() => {}),
+      undefined,
+      { inFolder: noteRoot(n.path).projectId !== null },
+    ),
+  ];
+  const noteRows = (groupKey: string, list: Note[], bare: boolean) => {
+    if (list.length === 0 || only) return null;
+    const key = `note:${groupKey}`;
+    const inline = list.length <= INLINE_ARTIFACTS;
+    const open = inline || prefs.folds[key] === false;
+    return (
+      <div key={key} className={`ws-arts${bare ? " bare" : ""}${inline ? " inline" : ""}`}>
+        {!inline && (
+          <button className="ws-arts-head" aria-expanded={open} onClick={() => sidebarPrefs.fold(key, open)}>
+            <span className={`ws-arts-chev${open ? " open" : ""}`}>
+              <ChevronIcon />
+            </span>
+            <DocIcon />
+            <span className="ws-arts-name">Notes</span>
+            <span className="ws-arts-count">{list.length}</span>
+          </button>
+        )}
+        {open && list.map((n) => {
+          const id = noteKey(n.path);
+          return (
+            <div
+              key={n.path}
+              className={`ws-row ws-art${activeId === id ? " on" : ""}`}
+              role="button"
+              tabIndex={0}
+              draggable
+              title={`${n.title}\n${n.path}`}
+              onDragStart={(e) => {
+                e.dataTransfer.setData(SESSION_DRAG_MIME, id);
+                e.dataTransfer.effectAllowed = "copyMove";
+              }}
+              onClick={(e) => onOpen(id, { full: e.metaKey || e.ctrlKey, option: e.altKey })}
+              onAuxClick={(e) => e.button === 1 && onOpen(id, { full: true })}
+              onKeyDown={(e) => {
+                if (e.target === e.currentTarget && e.key === "Enter") onOpen(id, { option: e.altKey });
+              }}
+              onContextMenu={(e) => openMenu(e, noteItems(n))}
+            >
+              {inline && (
+                <span className="ws-mark">
+                  <DocIcon />
+                </span>
+              )}
+              <span className="ws-row-text">
+                <span className="ws-row-title">{n.title}</span>
+              </span>
+              <span className="ws-row-age">{ageShort(n.modifiedAt)}</span>
+              <button className="ws-hover-btn" title="Note actions" aria-label={`Actions for ${n.title}`} onClick={(e) => openMenu(e, noteItems(n))}>
+                <MoreVerticalIcon />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const drawingRows = (groupKey: string, list: Drawing[], bare: boolean) => {
+    if (list.length === 0 || only) return null;
+    const key = `draw:${groupKey}`;
+    const inline = list.length <= INLINE_ARTIFACTS;
+    const open = inline || prefs.folds[key] === false;
+    return (
+      <div key={key} className={`ws-arts${bare ? " bare" : ""}${inline ? " inline" : ""}`}>
+        {!inline && (
+          <button className="ws-arts-head" aria-expanded={open} onClick={() => sidebarPrefs.fold(key, open)}>
+            <span className={`ws-arts-chev${open ? " open" : ""}`}>
+              <ChevronIcon />
+            </span>
+            <DrawingIcon />
+            <span className="ws-arts-name">Drawings</span>
+            <span className="ws-arts-count">{list.length}</span>
+          </button>
+        )}
+        {open && list.map((d) => {
+          const id = drawingKey(d.slug);
+          return (
+            <div
+              key={d.slug}
+              className={`ws-row ws-art${activeId === id ? " on" : ""}`}
+              role="button"
+              tabIndex={0}
+              draggable
+              title={`${d.title}\n${parseProjectFileId(d.slug).name}.excalidraw`}
+              onDragStart={(e) => {
+                e.dataTransfer.setData(SESSION_DRAG_MIME, id);
+                e.dataTransfer.effectAllowed = "copyMove";
+              }}
+              onClick={(e) => onOpen(id, { full: e.metaKey || e.ctrlKey, option: e.altKey })}
+              onAuxClick={(e) => e.button === 1 && onOpen(id, { full: true })}
+              onKeyDown={(e) => {
+                if (e.target === e.currentTarget && e.key === "Enter") onOpen(id, { option: e.altKey });
+              }}
+              onContextMenu={(e) => openMenu(e, drawingItems(d))}
+            >
+              {inline && (
+                <span className="ws-mark">
+                  <DrawingIcon />
+                </span>
+              )}
+              <span className="ws-row-text">
+                {renaming?.kind === "drawing" && renaming.key === d.slug ? (
+                  <span className="ws-row-title" onClick={(e) => e.stopPropagation()}>
+                    <TitleEditInput
+                      initial={d.title}
+                      placeholder="Name this drawing"
+                      onCancel={() => setRenaming(null)}
+                      onCommit={(v) => {
+                        setRenaming(null);
+                        if (v && v !== d.title) void drawingApi.update(d.slug, { title: v }).catch(() => {});
+                      }}
+                    />
+                  </span>
+                ) : (
+                  <span className="ws-row-title">{d.title}</span>
+                )}
+              </span>
+              <span className="ws-row-age">{ageShort(d.modifiedAt)}</span>
+              <button className="ws-hover-btn" title="Drawing actions" aria-label={`Actions for ${d.title}`} onClick={(e) => openMenu(e, drawingItems(d))}>
+                <MoreVerticalIcon />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const isEmptyCard = (c: Card) =>
-    c.rows.length === 0 && artifactsOf(c.ws, []).length === 0 && !(renaming?.kind === "ws" && renaming.key === c.key);
-  const isEmptyProject = (p: Project) => p.cards.every(isEmptyCard);
+    c.rows.length === 0 &&
+    artifactsOf(c.ws, []).length === 0 &&
+    drawingsOf(c.ws).length === 0 &&
+    notesOf(c.ws).length === 0 &&
+    !(renaming?.kind === "ws" && renaming.key === c.key);
+  const isEmptyProject = (p: Project) =>
+    !(renaming?.kind === "project" && renaming.key === p.key) &&
+    p.cards.every(isEmptyCard) && drawingsOf(null, p).length === 0 && notesOf(null, p).length === 0 && !(p.id !== null && projectArtifacts.get(p.id)?.length);
+
+  /** The colour of the line that runs down a project's rows: its own mark's, else its first repository's. */
+  const lineOf = (p: Project): CSSProperties | undefined => {
+    const repo = p.repos[0];
+    const color =
+      p.id !== null && hasOwnMark(p)
+        ? markColorValue(`project:${p.id}`, p.color)
+        : repo
+          ? markColorValue(markKey(repo.key), payload?.repos.find((r) => r.key === repo.key)?.color)
+          : null;
+    return color ? ({ "--mark": color } as CSSProperties) : undefined;
+  };
 
   const sessionRows = (c: Card, p: Project, rows: SidebarSession[], className: string) => (
     <div key={c.key} className={className}>
@@ -479,21 +865,15 @@ export function WorkspaceTree({
         <Fragment key={c.key}>
           {sessionRows(c, p, rows, "ws-rows bare")}
           {artifactGroup(c.key, artifactsOf(c.ws, c.rows), true)}
+          {noteRows(c.key, notesOf(c.ws), true)}
+          {drawingRows(c.key, drawingsOf(c.ws), true)}
         </Fragment>
+      ) : drawingsOf(c.ws).length + notesOf(c.ws).length > 0 ? (
+        <Fragment key={c.key}>{noteRows(c.key, notesOf(c.ws), true)}
+          {drawingRows(c.key, drawingsOf(c.ws), true)}</Fragment>
       ) : null;
     }
     const arts = artifactsOf(c.ws, c.rows);
-    if (!editing && c.ws && c.rows.length === 1 && rows.length === 1 && arts.length === 0) {
-      return (
-        <div
-          key={c.key}
-          className={`ws-card flat${c.ws.id === activeWorkspaceId ? " open-page" : ""}${sort?.dragging ? " dragging" : ""}`}
-          style={sort?.style}
-        >
-          <div className="ws-rows bare">{row(rows[0]!, c, p, c)}</div>
-        </div>
-      );
-    }
     return (
       <div
         key={c.key}
@@ -524,6 +904,7 @@ export function WorkspaceTree({
           >
             <ChevronIcon />
           </span>
+          {c.ws && c.byRepo && <ProjectMark projectKey={c.ws.repoKey} name={c.ws.repoName} size={14} className="ws-card-mark" />}
           <span className="ws-card-text">
             {editing && c.ws ? (
               <span className="ws-card-title">
@@ -538,13 +919,13 @@ export function WorkspaceTree({
                 />
               </span>
             ) : (
-              <span className={`ws-card-title${c.ws && namedByBranch(c.ws) ? " branch" : ""}`}>
-                {c.ws && namedByBranch(c.ws) && <GitIcon />}
+              <span className={`ws-card-title${c.ws && !c.byRepo && namedByBranch(c.ws) ? " branch" : ""}`}>
+                {c.ws && !c.byRepo && namedByBranch(c.ws) && <GitIcon />}
                 {c.title}
               </span>
             )}
           </span>
-          {c.ws && !namedByBranch(c.ws) && offMain(c.ws.branch) && (
+          {c.ws && (c.byRepo || !namedByBranch(c.ws)) && offMain(c.ws.branch) && (
             <span className="ws-card-sub" title={`Branch ${c.ws!.branch}`}>
               <GitIcon />
               {c.ws!.branch}
@@ -592,6 +973,8 @@ export function WorkspaceTree({
         </div>
         {rows.length > 0 && !shut && sessionRows(c, p, rows, "ws-rows")}
         {!shut && artifactGroup(c.key, arts, false)}
+        {!shut && noteRows(c.key, notesOf(c.ws), false)}
+          {!shut && drawingRows(c.key, drawingsOf(c.ws), false)}
       </div>
     );
   };
@@ -602,33 +985,77 @@ export function WorkspaceTree({
     const needs = p.cards.reduce((n, c) => n + c.needs, 0);
     if (only && needs === 0) return null;
     const restKey = `rest:${p.key}`;
-    const bare = p.cards.find((c) => c.bare);
-    const projectItems: MenuItem[] = [
-      {
-        label: "New session",
-        icon: <PlusIcon />,
-        run: () => (bare?.ws ? onNewSession(bare.ws.folder, bare.ws.id) : onNewSession(p.root)),
-      },
-      {
-        label: "New terminal",
-        icon: <TerminalIcon />,
-        run: () => (bare?.ws ? onNewTerminal(bare.ws.folder, bare.ws.id) : onNewTerminal(p.root, null)),
-      },
-      { label: "New workspace…", icon: <WorktreeIcon />, run: () => onNewWorkspace(p.root) },
-    ];
+    const bare = p.cards.find((c) => c.bare && c.ws);
+    const root = bare?.ws?.folder ?? p.repos[0]?.root ?? null;
+    const projectId = p.id;
+    const editingName = renaming?.kind === "project" && renaming.key === p.key;
+    const projectItems: MenuItem[] = [];
+    if (projectId !== null) projectItems.push({ label: "Open project", icon: <FolderIcon open />, run: () => onOpenProject(projectId) }, "sep");
+    const inProjectFolder = projectId !== null && !p.general;
+    if (inProjectFolder) {
+      projectItems.push(
+        { label: "New session in the project folder", icon: <PlusIcon />, run: () => onNewProjectSession(projectId) },
+        { label: "New terminal in the project folder", icon: <TerminalIcon />, run: () => onNewProjectTerminal(projectId) },
+      );
+    } else if (root) {
+      projectItems.push(
+        { label: "New session", icon: <PlusIcon />, run: () => (bare?.ws ? onNewSession(bare.ws.folder, bare.ws.id) : onNewSession(root)) },
+        { label: "New terminal", icon: <TerminalIcon />, run: () => (bare?.ws ? onNewTerminal(bare.ws.folder, bare.ws.id) : onNewTerminal(root, null)) },
+      );
+    }
+    projectItems.push({
+      label: "Add a workspace…",
+      icon: <WorktreeIcon />,
+      run: () => onNewWorkspace(root ?? undefined, p.general ? undefined : (projectId ?? undefined)),
+    });
+    if (projectId !== null && !p.general) {
+      projectItems.push({ label: "Rename project…", icon: <PencilIcon />, run: () => setRenaming({ kind: "project", key: p.key }) });
+    }
+    if (projectId !== null) {
+      projectItems.push("sep", {
+        label: "Change icon…",
+        icon: hasOwnMark(p) ? <OwnProjectMark project={{ id: projectId, name: p.name, icon: p.icon, color: p.color }} size={15} /> : <FolderIcon />,
+        run: () => menuAnchor.current && setMarking({ goalId: projectId, name: p.name, anchor: menuAnchor.current }),
+      });
+    }
     if (bare?.ws) {
       projectItems.push("sep", { label: "Name the sessions here…", icon: <PencilIcon />, run: () => setRenaming({ kind: "ws", key: bare.key }) });
     }
-    projectItems.push("sep", {
-      label: "Delete project…",
-      icon: <TrashIcon />,
-      danger: true,
-      run: () => setDeletingProject(p),
-    });
+    if (p.repos.length === 1) {
+      const repo = p.repos[0]!;
+      projectItems.push("sep", {
+        label: "Change repository icon…",
+        icon: <ProjectMark projectKey={repo.key} name={repo.name} size={15} />,
+        run: () => menuAnchor.current && setMarking({ repoKey: repo.key, name: repo.name, anchor: menuAnchor.current }),
+      });
+    }
+    if (projectId !== null) {
+      projectItems.push("sep", {
+        label: "Archive project",
+        icon: <ArchiveIcon />,
+        run: () => void workspaceApi.archiveProject(projectId).catch(() => {}),
+      });
+      projectItems.push({
+        label: "Delete project…",
+        icon: <TrashIcon />,
+        danger: true,
+        run: () => setDeletingProject(p),
+      });
+    }
     const rest = [...p.paused, ...p.archived];
-    const named = p.cards.filter((c) => !c.bare && !isEmptyCard(c));
-    const empties = p.cards.filter((c) => !c.bare && isEmptyCard(c));
-    const emptyKey = `empty:${p.key}`;
+    const named = p.cards.filter((c) => !c.bare);
+    const parts = shut
+      ? []
+      : inSavedOrder(
+          [
+            ...p.cards.filter((c) => c.bare).map((c) => ({ key: c.key, card: null as Card | null, node: cardView(c, p) })),
+            ...named.map((c) => ({ key: c.key, card: c as Card | null, node: null as ReactNode })),
+            { key: "arts", card: null, node: artifactGroup(`p:${p.key}`, p.id === null ? [] : (projectArtifacts.get(p.id) ?? []), true) },
+            { key: "notes", card: null, node: noteRows(p.key, notesOf(null, p), true) },
+            { key: "draws", card: null, node: drawingRows(p.key, drawingsOf(null, p), true) },
+          ].filter((s) => s.card || s.node),
+          prefs.order?.[p.key],
+        );
     return (
       <section key={p.key} className={`ws-project${sort?.dragging ? " dragging" : ""}`} style={sort?.style}>
         <div
@@ -638,16 +1065,46 @@ export function WorkspaceTree({
           onKeyDown={(e) => (e.target as HTMLElement).classList.contains("ws-project-btn") && sort?.handle.onKeyDown?.(e)}
         >
           <button
-            className="ws-project-btn"
+            className={`ws-project-btn${projectId !== null && activeProjectId === projectId ? " active" : ""}`}
             aria-expanded={!shut}
-            title={p.root}
-            onClick={() => sidebarPrefs.fold(key, !shut)}
+            title={p.repos.length ? p.repos.map((r) => r.root).join("\n") : p.name}
+            onClick={() => (projectId !== null && !editingName ? onOpenProject(projectId) : sidebarPrefs.fold(key, !shut))}
           >
-            <span className={`ws-chev${shut ? "" : " open"}`}>
+            <span
+              className={`ws-chev${shut ? "" : " open"}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                sidebarPrefs.fold(key, !shut);
+              }}
+            >
               <ChevronIcon />
             </span>
-            <FolderIcon open={!shut} />
-            <span className="ws-project-name">{p.name}</span>
+            {projectId !== null && hasOwnMark(p) ? (
+              <OwnProjectMark project={{ id: projectId, name: p.name, icon: p.icon, color: p.color }} />
+            ) : p.repos.length === 0 ? (
+              <FolderIcon />
+            ) : (
+              <span className="ws-project-marks">
+                {p.repos.slice(0, 3).map((r) => (
+                  <ProjectMark key={r.key} projectKey={r.key} name={r.name} />
+                ))}
+              </span>
+            )}
+            {editingName && projectId !== null ? (
+              <span className="ws-project-name" onClick={(e) => e.stopPropagation()}>
+                <TitleEditInput
+                  initial={p.name}
+                  placeholder="Name this project"
+                  onCancel={() => setRenaming(null)}
+                  onCommit={(v) => {
+                    setRenaming(null);
+                    if (v && v !== p.name) void workspaceApi.renameProject(projectId, v).catch(() => {});
+                  }}
+                />
+              </span>
+            ) : (
+              <span className="ws-project-name">{p.name}</span>
+            )}
             {!shut && offMain(bare?.ws?.branch) && <span className="ws-project-branch">{bare!.ws!.branch}</span>}
           </button>
           <span className="ws-project-trail">
@@ -668,31 +1125,35 @@ export function WorkspaceTree({
           </span>
         </div>
         {!shut && (
-          <>
-            {p.cards.filter((c) => c.bare).map((c) => cardView(c, p))}
+          <div className="ws-project-body" style={lineOf(p)}>
             <SortableGroup
-              items={named}
-              itemSelector=":scope > .ws-card"
-              disabled={only || named.length < 2}
+              items={parts}
+              itemSelector=":scope > .ws-card, :scope > .ws-sec"
+              disabled={only || parts.length < 2}
               onMove={(from, to) => {
-                const ids = [...moved(named, from, to), ...empties].flatMap((c) => (c.ws ? [c.ws.id] : []));
-                void workspaceApi.reorder({ ids }).catch(() => {});
+                const next = moved(parts, from, to);
+                sidebarPrefs.setOrder(p.key, next.map((s) => s.key));
+                const ids = next.flatMap((s) => (s.card?.ws ? [s.card.ws.id] : []));
+                if (ids.length > 1) void workspaceApi.reorder({ ids }).catch(() => {});
               }}
             >
-              {(c, s) => cardView(c, p, s)}
+              {(s, sort) =>
+                s.card ? (
+                  cardView(s.card, p, sort)
+                ) : (
+                  <div
+                    key={s.key}
+                    className={`ws-sec${sort.dragging ? " dragging" : ""}`}
+                    style={sort.style}
+                    onPointerDown={(e) => {
+                      if ((e.target as HTMLElement).closest(".ws-arts-head")) sort.handle.onPointerDown?.(e);
+                    }}
+                  >
+                    {s.node}
+                  </div>
+                )
+              }
             </SortableGroup>
-            {empties.length > 0 && !only && (
-              <>
-                <button
-                  className="ws-rest-btn"
-                  aria-expanded={prefs.folds[emptyKey] === false}
-                  onClick={() => sidebarPrefs.fold(emptyKey, prefs.folds[emptyKey] === false)}
-                >
-                  {empties.length} empty
-                </button>
-                {prefs.folds[emptyKey] === false && empties.map((c) => cardView(c, p))}
-              </>
-            )}
             {rest.length > 0 && !only && (
               <>
                 <button
@@ -720,7 +1181,7 @@ export function WorkspaceTree({
                   ))}
               </>
             )}
-          </>
+          </div>
         )}
       </section>
     );
@@ -734,7 +1195,7 @@ export function WorkspaceTree({
   return (
     <div
       className="ws-tree"
-      aria-label="Workspaces"
+      aria-label="Projects"
       onDrop={(e) => {
         if (!e.dataTransfer.types.includes(SESSION_DRAG_MIME)) return;
         e.preventDefault();
@@ -742,7 +1203,7 @@ export function WorkspaceTree({
       }}
     >
       <div className="ws-head">
-        <span className="ws-head-label">Workspaces</span>
+        <span className="ws-head-label">Projects</span>
         {needsTotal > 0 && (
           <button
             className={`ws-filter${only ? " on" : ""}`}
@@ -757,9 +1218,22 @@ export function WorkspaceTree({
         <span style={{ flex: 1 }} />
         <button
           className="ws-hover-btn show"
-          title="New workspace"
-          aria-label="New workspace"
-          onClick={() => onNewWorkspace()}
+          title="New project or workspace"
+          aria-label="New project or workspace"
+          onClick={(e) =>
+            openMenu(e, [
+              {
+                label: "New project",
+                icon: <FolderIcon />,
+                run: () =>
+                  void workspaceApi
+                    .createProject("New project", { unnamed: true })
+                    .then((r) => setRenaming({ kind: "project", key: `p${r.project.id}` }))
+                    .catch(() => {}),
+              },
+              { label: "New workspace…", icon: <WorktreeIcon />, run: () => onNewWorkspace() },
+            ])
+          }
         >
           <PlusIcon />
         </button>
@@ -778,7 +1252,7 @@ export function WorkspaceTree({
           itemSelector=":scope > .ws-project"
           disabled={only || filledProjects.length < 2}
           onMove={(from, to) => {
-            const projects = [...moved(filledProjects, from, to), ...emptyProjects].map((p) => p.key);
+            const projects = [...moved(filledProjects, from, to), ...emptyProjects].flatMap((p) => (p.id === null ? [] : [p.id]));
             void workspaceApi.reorder({ projects }).catch(() => {});
           }}
         >
@@ -832,10 +1306,19 @@ export function WorkspaceTree({
           </>
         )}
       </div>
-      {deletingProject && (
+      {marking && (marking.repoKey !== undefined || markedGoal) && (
+        <ProjectMarkPicker
+          anchor={marking.anchor}
+          projectKey={marking.repoKey}
+          goal={markedGoal}
+          name={marking.name}
+          onClose={() => setMarking(null)}
+        />
+      )}
+      {deletingProject && deletingProject.id !== null && (
         <DeleteProjectDialog
-          project={deletingProject}
-          workspaces={(payload?.workspaces ?? []).filter((w) => w.projectKey === deletingProject.key).length}
+          project={{ id: deletingProject.id, name: deletingProject.name }}
+          workspaces={(payload?.workspaces ?? []).filter((w) => w.projectId === deletingProject.id).length}
           sessions={deletingProject.cards.reduce((n, c) => n + c.rows.length, 0)}
           onClose={() => setDeletingProject(null)}
         />

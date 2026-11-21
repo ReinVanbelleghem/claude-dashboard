@@ -149,6 +149,8 @@ COPY=(
   public
   dist
   scripts
+  electron
+  electron-builder.yml
 )
 for item in "${COPY[@]}"; do
   [ -e "$item" ] || { warn "skipping missing $item"; continue; }
@@ -164,9 +166,11 @@ chmod +x "$STAGE/install.sh" "$STAGE/start.sh" "$STAGE/scripts/"*.sh
 # ── belt and braces: refuse to ship anything that smells like a secret ─────────
 step "Secret scan"
 PATTERN='sk-ant-[A-Za-z0-9_-]{10,}|AIza[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]+|ghp_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|chat\.googleapis\.com/v1/spaces/[A-Za-z0-9_-]+/messages\?key='
-if grep -rEIl "$PATTERN" "$STAGE" >/dev/null 2>&1; then
+# dist/ is left out: it is built from src/, which is scanned, plus third-party
+# packages, and Excalidraw's own bundle carries the public key of its hosted service.
+if grep -rEIl --exclude-dir=dist "$PATTERN" "$STAGE" >/dev/null 2>&1; then
   bad "possible secret found in the staged tree — refusing to package:"
-  grep -rEIln "$PATTERN" "$STAGE" | sed 's/^/      /'
+  grep -rEIln --exclude-dir=dist "$PATTERN" "$STAGE" | sed 's/^/      /'
   exit 1
 fi
 ok "no credentials, keys or webhook URLs in the staged tree"

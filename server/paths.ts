@@ -1,5 +1,8 @@
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
+import { DRAWING_EXT, isDrawingSlug } from "../shared/drawings.ts";
+import { isNotePath, notePathIn } from "../shared/notes.ts";
+import { projectFileId } from "../shared/projectFiles.ts";
 
 /** Claude Code's own state. We only ever READ from here. */
 export const CLAUDE_HOME = process.env.CLAUDE_HOME ?? join(homedir(), ".claude");
@@ -59,8 +62,14 @@ export const DROPPED_DIR = join(DATA_DIR, "dropped");
  * variable, when set, is the starting value rather than a lock — a setting the UI
  * offers but silently ignores is worse than no setting at all.
  */
-export const DEFAULT_ARTIFACTS_DIR =
-  process.env.CLAUDE_ARTIFACTS_DIR ?? join(homedir(), "Notes", "artifacts");
+export const DEFAULT_ARTIFACTS_DIR = process.env.CLAUDE_ARTIFACTS_DIR ?? join(homedir(), "artifacts");
+
+/**
+ * Where artifacts were kept before they had a folder of their own. Nothing is
+ * read from it any more, but a transcript from then still names it, and a write
+ * there is still a write to the artifact of that name.
+ */
+const FORMER_ARTIFACTS_DIR = join(homedir(), "Notes", "artifacts");
 
 let artifactsDirValue = DEFAULT_ARTIFACTS_DIR;
 
@@ -75,6 +84,140 @@ export function setArtifactsDir(dir: string): boolean {
   artifactsDirValue = next;
   artifactPathRe = buildArtifactPathRe();
   return true;
+}
+
+/**
+ * Where drawings live: one `.excalidraw` file each, in a folder of your own
+ * rather than the dashboard's, so they outlive it and an agent can read and
+ * write them like any other file.
+ */
+export const DEFAULT_DRAWINGS_DIR = process.env.DASHBOARD_DRAWINGS_DIR ?? join(homedir(), "drawings");
+
+let drawingsDirValue = DEFAULT_DRAWINGS_DIR;
+
+export function drawingsDir(): string {
+  return drawingsDirValue;
+}
+
+/** Returns true when the root actually moved, so the caller knows to re-scan. */
+export function setDrawingsDir(dir: string): boolean {
+  const next = dir.trim() ? resolve(dir.trim().replace(/^~(?=$|\/)/, homedir())) : DEFAULT_DRAWINGS_DIR;
+  if (next === drawingsDirValue) return false;
+  drawingsDirValue = next;
+  return true;
+}
+
+/** The drawing a path is, or null when it is not an `.excalidraw` file directly in a drawings folder. */
+export function drawingSlug(filePath: string): string | null {
+  if (!filePath) return null;
+  const expanded = filePath.startsWith("~/") ? join(homedir(), filePath.slice(2)) : filePath;
+  const abs = resolve(expanded);
+  for (const r of drawingRoots()) {
+    const root = resolve(r.dir);
+    if (!abs.startsWith(root + sep)) continue;
+    const name = abs.slice(root.length + 1);
+    if (name.includes(sep) || !name.toLowerCase().endsWith(DRAWING_EXT)) return null;
+    const slug = name.slice(0, -DRAWING_EXT.length);
+    return isDrawingSlug(slug) ? projectFileId(r.projectId, slug) : null;
+  }
+  return null;
+}
+
+/**
+ * Where projects live: one folder each, holding the project's worktrees and its
+ * notes, drawings and artifacts. A project made before this existed gets its
+ * folder the first time something needs one.
+ */
+export const DEFAULT_PROJECTS_DIR = process.env.DASHBOARD_PROJECTS_DIR ?? join(homedir(), "projects");
+
+let projectsDirValue = DEFAULT_PROJECTS_DIR;
+
+export function projectsDir(): string {
+  return projectsDirValue;
+}
+
+/** Only new projects follow a move: a project that has a folder keeps it. */
+export function setProjectsDir(dir: string): boolean {
+  const next = dir.trim() ? resolve(dir.trim().replace(/^~(?=$|\/)/, homedir())) : DEFAULT_PROJECTS_DIR;
+  if (next === projectsDirValue) return false;
+  projectsDirValue = next;
+  return true;
+}
+
+/**
+ * The projects that have a folder, kept here by workspaces.ts so that a path
+ * can be told to be a project's drawing or artifact without the database.
+ */
+let projectFolders: { id: number; folder: string }[] = [];
+
+export function setProjectFolders(list: { id: number; folder: string }[]) {
+  projectFolders = list;
+  artifactPathRe = buildArtifactPathRe();
+}
+
+/** The project folder a path is in, when it is in one: the only folders outside a repository whose files are browsed and edited. */
+export function projectFolderHolding(path: string): string | null {
+  const abs = resolve(path);
+  return (
+    projectFolders
+      .map((p) => p.folder)
+      .filter((folder) => abs === folder || abs.startsWith(folder + sep))
+      .sort((a, b) => b.length - a.length)[0] ?? null
+  );
+}
+
+export const projectFolderOf = (projectId: number): string | null => projectFolders.find((p) => p.id === projectId)?.folder ?? null;
+
+/** One place files of a kind are kept: the old single folder (no project), or a project's subfolder. */
+export type FileRoot = { projectId: number | null; dir: string };
+
+const rootsOf = (old: string, sub: string): FileRoot[] => [
+  { projectId: null, dir: old },
+  ...projectFolders.map((p) => ({ projectId: p.id, dir: join(p.folder, sub) })),
+];
+
+export const artifactRoots = (): FileRoot[] => rootsOf(artifactsDirValue, "artifacts");
+/** Every folder a path may name an artifact in: the ones read from, and the former one old transcripts still mention. */
+const artifactPathRoots = (): FileRoot[] =>
+  artifactsDirValue === FORMER_ARTIFACTS_DIR ? artifactRoots() : [...artifactRoots(), { projectId: null, dir: FORMER_ARTIFACTS_DIR }];
+export const drawingRoots = (): FileRoot[] => rootsOf(drawingsDirValue, "drawings");
+export const noteRoots = (): FileRoot[] => rootsOf(notesDirValue, "notes");
+export const noteRootDir = (projectId: number | null): string | null => noteRoots().find((r) => r.projectId === projectId)?.dir ?? null;
+export const artifactRootOf = (projectId: number | null): string | null =>
+  artifactRoots().find((r) => r.projectId === projectId)?.dir ?? null;
+export const drawingRootOf = (projectId: number | null): string | null =>
+  drawingRoots().find((r) => r.projectId === projectId)?.dir ?? null;
+
+/** Where notes live: the Markdown folder Obsidian, or any other editor, works on too. */
+export const DEFAULT_NOTES_DIR = process.env.DASHBOARD_NOTES_DIR ?? join(homedir(), "Notes");
+
+let notesDirValue = DEFAULT_NOTES_DIR;
+
+export function notesDir(): string {
+  return notesDirValue;
+}
+
+/** Returns true when the root actually moved, so the caller knows to re-scan. */
+export function setNotesDir(dir: string): boolean {
+  const next = dir.trim() ? resolve(dir.trim().replace(/^~(?=$|\/)/, homedir())) : DEFAULT_NOTES_DIR;
+  if (next === notesDirValue) return false;
+  notesDirValue = next;
+  return true;
+}
+
+/** The note a path is, by its id, or null when it is not a Markdown file a note could be. */
+export function notePath(filePath: string): string | null {
+  if (!filePath) return null;
+  const expanded = filePath.startsWith("~/") ? join(homedir(), filePath.slice(2)) : filePath;
+  const abs = resolve(expanded);
+  const roots = noteRoots();
+  for (const r of [...roots.slice(1), roots[0]!]) {
+    const root = resolve(r.dir);
+    if (!abs.startsWith(root + sep)) continue;
+    const rel = abs.slice(root.length + 1).split(sep).join("/");
+    return isNotePath("", rel) && !rel.startsWith("artifacts/") ? notePathIn(r.projectId, rel) : null;
+  }
+  return null;
 }
 
 /**
@@ -97,11 +240,13 @@ function escapeRe(s: string): string {
  * and the reconciler finds the folder either way.
  */
 function buildArtifactPathRe(): RegExp {
-  const dir = artifactsDirValue;
-  const alts = [escapeRe(dir)];
-  if (dir.startsWith(homedir() + sep)) {
-    const tail = dir.slice(homedir().length);
-    alts.push(`~${escapeRe(tail)}`, `\\$HOME${escapeRe(tail)}`);
+  const alts: string[] = [];
+  for (const { dir } of artifactPathRoots()) {
+    alts.push(escapeRe(dir));
+    if (dir.startsWith(homedir() + sep)) {
+      const tail = dir.slice(homedir().length);
+      alts.push(`~${escapeRe(tail)}`, `\\$HOME${escapeRe(tail)}`);
+    }
   }
   return new RegExp(`(?:${alts.join("|")})[^\\s'"\`;|&)>]*`, "g");
 }
@@ -132,15 +277,18 @@ export function artifactSlug(filePath: string): string | null {
   if (!filePath) return null;
   const expanded = filePath.startsWith("~/") ? join(homedir(), filePath.slice(2)) : filePath;
   const abs = resolve(expanded);
-  const root = resolve(artifactsDirValue);
-  if (!abs.startsWith(root + sep)) return null;
-  const parts = abs.slice(root.length + 1).split(sep).filter(Boolean);
-  if (parts.length === 0) return null;
-  const first = parts[0]!;
-  if (!isArtifactName(first)) return null;
-  // A loose file at the root is only an artifact if it is the page itself.
-  if (parts.length === 1) return first.toLowerCase().endsWith(".html") ? first.slice(0, -5) : null;
-  return first;
+  for (const r of artifactPathRoots()) {
+    const root = resolve(r.dir);
+    if (!abs.startsWith(root + sep)) continue;
+    const parts = abs.slice(root.length + 1).split(sep).filter(Boolean);
+    if (parts.length === 0) return null;
+    const first = parts[0]!;
+    if (!isArtifactName(first)) return null;
+    // A loose file at the root is only an artifact if it is the page itself.
+    if (parts.length === 1) return first.toLowerCase().endsWith(".html") ? projectFileId(r.projectId, first.slice(0, -5)) : null;
+    return projectFileId(r.projectId, first);
+  }
+  return null;
 }
 
 /** Every artifact slug a shell command appears to touch. */

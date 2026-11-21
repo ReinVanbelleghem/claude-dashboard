@@ -13,6 +13,7 @@ import {
   type ProvisionRule,
 } from "./provision.ts";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import type { DiffRange } from "../shared/stacks.ts";
 
 /**
  * Git access for the dashboard. Every command goes through run(), which never uses
@@ -454,6 +455,7 @@ export async function listFiles(cwd: string): Promise<string[]> {
 
 // ── diffs ─────────────────────────────────────────────────────────────────────
 export type DiffScope = "uncommitted" | "branch";
+export type { DiffRange };
 
 /**
  * A unified diff, as text, for the whole scope or one file.
@@ -469,6 +471,8 @@ export async function diff(opts: {
   path?: string;
   ignoreWhitespace?: boolean;
   context?: number;
+  /** For the "branch" scope: compare these two refs instead of the base and HEAD. */
+  range?: DiffRange;
 }): Promise<{ ok: boolean; patch: string; error: string | null }> {
   const status = await repoStatus(opts.cwd);
   if (!status.isRepo || !status.root) return { ok: false, patch: "", error: "not a git repository" };
@@ -489,11 +493,16 @@ export async function diff(opts: {
     }
   }
 
+  const range = opts.scope === "branch" && opts.range ? await verifiedRange(root, opts.range) : null;
+  if (opts.scope === "branch" && opts.range && !range) return { ok: false, patch: "", error: "no such ref" };
+
   const args =
     opts.scope === "branch"
-      ? status.base && !status.onBase
-        ? ["diff", ...flags, `${status.base}...HEAD`]
-        : null
+      ? range
+        ? ["diff", ...flags, range]
+        : status.base && !status.onBase
+          ? ["diff", ...flags, `${status.base}...HEAD`]
+          : null
       : ["diff", ...flags, "HEAD"];
 
   if (!args) return { ok: true, patch: "", error: null };
@@ -504,16 +513,94 @@ export async function diff(opts: {
   return { ok: true, patch: r.out, error: null };
 }
 
+/** A ref name from the browser: no flags, no range syntax, no whitespace. */
+const safeRef = (ref: string) => !!ref && !ref.startsWith("-") && !/[\s~^:?*\[\\]|\.\.|@\{/.test(ref);
+
+const commitOf = (root: string, ref: string) =>
+  safeRef(ref) ? line(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]) : Promise.resolve(null);
+
+/** `base...head` once both ends are known to name a commit, else null. */
+async function verifiedRange(root: string, range: DiffRange): Promise<string | null> {
+  const [base, head] = await Promise.all([commitOf(root, range.base), commitOf(root, range.head)]);
+  return base && head ? `${range.base}...${range.head}` : null;
+}
+
+/** The ref to read a branch through: the local branch when there is one, else origin's copy. */
+export async function branchRef(cwd: string, branch: string): Promise<string | null> {
+  if (!safeRef(branch)) return null;
+  if (await line(cwd, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])) return branch;
+  if (await line(cwd, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`])) return `origin/${branch}`;
+  return null;
+}
+
+/** How far `head` is ahead of `base`, and whether `base` has commits `head` was not cut from. */
+export async function layerState(cwd: string, base: string, head: string): Promise<{ commits: number; needsRebase: boolean }> {
+  if (!safeRef(base) || !safeRef(head)) return { commits: 0, needsRebase: false };
+  const [count, behind] = await Promise.all([
+    line(cwd, ["rev-list", "--count", `${base}..${head}`]),
+    line(cwd, ["rev-list", "--count", `${head}..${base}`]),
+  ]);
+  return { commits: Number(count ?? 0) || 0, needsRebase: (Number(behind ?? 0) || 0) > 0 };
+}
+
+/** The GitHub repository `origin` points at, or null for any other remote. */
+export async function originRepo(cwd: string): Promise<{ owner: string; repo: string } | null> {
+  const url = await line(cwd, ["remote", "get-url", "origin"]);
+  const m = url ? /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url) : null;
+  return m ? { owner: m[1]!, repo: m[2]! } : null;
+}
+
+export type GrepHit = { path: string; line: number; column: number; text: string };
+
+const GREP_LIMIT = 500;
+const GREP_LINE_MAX = 240;
+
+/**
+ * Search file contents across the repository: tracked and untracked files, never
+ * what .gitignore excludes and never binaries. Through git, so no search tool
+ * has to be installed and the answer matches what the file finder lists.
+ */
+export async function grep(
+  cwd: string,
+  query: string,
+  opts: { caseSensitive?: boolean; regex?: boolean } = {},
+): Promise<{ ok: boolean; hits: GrepHit[]; truncated: boolean; error: string | null }> {
+  const status = await repoStatus(cwd);
+  if (!status.isRepo || !status.root) return { ok: false, hits: [], truncated: false, error: "not a git repository" };
+  if (!query) return { ok: true, hits: [], truncated: false, error: null };
+  const args = ["grep", "--no-color", "-n", "--column", "-I", "--untracked", "--max-count=50"];
+  if (!opts.caseSensitive) args.push("-i");
+  args.push(opts.regex ? "-E" : "-F", "-e", query, "--", ".");
+  const r = await run(status.root, args);
+  // Exit 1 is "nothing matched", which is an answer and not a failure.
+  if (!r.ok && r.err) return { ok: false, hits: [], truncated: false, error: r.err.split("\n")[0] ?? "search failed" };
+  const hits: GrepHit[] = [];
+  let truncated = false;
+  for (const row of r.out.split("\n")) {
+    const m = /^(.+?):(\d+):(\d+):(.*)$/.exec(row);
+    if (!m) continue;
+    if (hits.length >= GREP_LIMIT) {
+      truncated = true;
+      break;
+    }
+    hits.push({ path: m[1]!, line: Number(m[2]), column: Number(m[3]), text: m[4]!.slice(0, GREP_LINE_MAX) });
+  }
+  return { ok: true, hits, truncated, error: null };
+}
+
 function clampContext(n: number | undefined): number {
   if (!Number.isFinite(n)) return 3;
   return Math.min(20, Math.max(0, Math.floor(n as number)));
 }
 
 /** Files a branch touches relative to its base, with line counts. */
-export async function branchFiles(cwd: string): Promise<ChangedFile[]> {
+export async function branchFiles(cwd: string, between?: DiffRange): Promise<ChangedFile[]> {
   const status = await repoStatus(cwd);
-  if (!status.isRepo || !status.root || !status.base || status.onBase) return [];
-  const range = `${status.base}...HEAD`;
+  if (!status.isRepo || !status.root) return [];
+  const picked = between ? await verifiedRange(status.root, between) : null;
+  if (between && !picked) return [];
+  if (!picked && (!status.base || status.onBase)) return [];
+  const range = picked ?? `${status.base}...HEAD`;
   const [r, named] = await Promise.all([
     run(status.root, ["diff", "--numstat", "-z", range]),
     run(status.root, ["diff", "--name-status", "-z", range]),
@@ -1930,6 +2017,16 @@ export function worktreeSlug(branch: string): string {
 export function defaultWorktreePath(mainRoot: string, branch: string, root?: string): string {
   const base = root?.trim() ? root.trim() : dirname(mainRoot);
   return join(base, `${basename(mainRoot)}-${worktreeSlug(branch)}`);
+}
+
+/**
+ * Where a project's checkout of a repository goes: the repository's name inside
+ * the project's folder, and with the branch added when that name is taken by an
+ * earlier checkout of the same repository.
+ */
+export function projectWorktreePath(projectFolder: string, mainRoot: string, branch: string): string {
+  const plain = join(projectFolder, basename(mainRoot));
+  return existsSync(plain) ? join(projectFolder, `${basename(mainRoot)}-${worktreeSlug(branch)}`) : plain;
 }
 
 /**

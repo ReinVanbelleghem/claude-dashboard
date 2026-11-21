@@ -2,7 +2,13 @@ import { isArtifactKey } from "../../shared/artifacts.ts";
 import { ClaudeMark } from "./Icons.tsx";
 import { isTerminalKey } from "../../shared/terminals.ts";
 import { ArtifactPanel } from "./ArtifactPane.tsx";
+import { DrawingPanel } from "./DrawingPane.tsx";
+import { isDrawingKey } from "../../shared/drawings.ts";
+import { isNoteKey } from "../../shared/notes.ts";
+import { NotePanel } from "./NotePane.tsx";
 import { TerminalPanel } from "./TerminalPane.tsx";
+import { ServicePanel } from "./services/ServicePane.tsx";
+import { isServiceKey } from "../../shared/services.ts";
 import { useEffect, useRef, useState } from "react";
 import {
   agentApi,
@@ -56,6 +62,24 @@ export function ExternalNotice({ canAdopt }: { canAdopt?: boolean }) {
 export function SessionPanelContent(props: Parameters<typeof SessionPanelBody>[0]) {
   if (isTerminalKey(props.id)) {
     return <TerminalPanel id={props.id} onClose={props.onClose} onHeadPointerDown={props.onHeadPointerDown} headStart={props.headStart} />;
+  }
+  if (isServiceKey(props.id)) {
+    return <ServicePanel id={props.id} onClose={props.onClose} onHeadPointerDown={props.onHeadPointerDown} headStart={props.headStart} />;
+  }
+  if (isNoteKey(props.id)) {
+    return (
+      <NotePanel
+        id={props.id}
+        onOpen={(key) => {
+          window.location.hash = `#/session/${encodeURIComponent(key)}`;
+        }}
+        onHeadPointerDown={props.onHeadPointerDown}
+        headStart={props.headStart}
+      />
+    );
+  }
+  if (isDrawingKey(props.id)) {
+    return <DrawingPanel id={props.id} onHeadPointerDown={props.onHeadPointerDown} headStart={props.headStart} />;
   }
   if (isArtifactKey(props.id)) {
     return <ArtifactPanel id={props.id} onHeadPointerDown={props.onHeadPointerDown} headStart={props.headStart} />;

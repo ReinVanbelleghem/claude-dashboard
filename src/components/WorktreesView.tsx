@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { gitApi, settingsApi, shortPath, type RepoStatus, type Settings, type WorktreeRepo } from "../api.ts";
 import { StarIcon } from "./Icons.tsx";
+import { ProjectMark } from "./ProjectMark.tsx";
 import { WorktreesPanel } from "./WorktreesPanel.tsx";
 import { cachedStatus, watchStatus } from "./useGitRepo.ts";
 
@@ -171,7 +172,12 @@ function RepoGroup({
       cwd={status?.root ?? repo.root}
       status={status?.isRepo ? status : null}
       initialTrees={repo.worktrees}
-      title={repo.name}
+      title={
+        <span className="wt-repo-title">
+          <ProjectMark projectKey={repo.repoKey} name={repo.name} size={18} />
+          {repo.name}
+        </span>
+      }
       subtitle={shortPath(repo.mainRoot ?? repo.repoKey, 3)}
       titleExtra={
         <>

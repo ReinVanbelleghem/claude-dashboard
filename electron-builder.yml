@@ -1,0 +1,42 @@
+# The macOS app bundle: `bun run app:mac` (scripts/build-app.sh), output in build/app/.
+#
+# The app itself is two files (the bundled main process and its preload), staged
+# in build/app-src. The daemon and the bun that runs it are copied into Resources
+# by the build script afterwards: electron-builder would leave out the daemon's
+# node_modules and add the checkout's own instead.
+appId: local.claude-dashboard
+productName: Claude Dashboard
+asar: false
+npmRebuild: false
+electronDist: node_modules/electron/dist
+directories:
+  app: build/app-src
+  output: build/app
+  buildResources: build/app-resources
+files:
+  - main.mjs
+  - preload.cjs
+  - package.json
+  - "!**/node_modules/**"
+protocols:
+  - name: Claude Dashboard
+    schemes:
+      - claude-dashboard
+mac:
+  target:
+    - target: dir
+      arch: arm64
+  icon: build/app-resources/icon.icns
+  category: public.app-category.developer-tools
+  # scripts/build-app.sh signs the bundle afterwards, leaving Claude Code and bun alone.
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  # The daemon is started by the app, so macOS asks on the app's behalf; without
+  # these texts it refuses without ever showing the prompt.
+  extendInfo:
+    NSCalendarsFullAccessUsageDescription: Claude Dashboard shows your events beside your tasks.
+    NSCalendarsUsageDescription: Claude Dashboard shows your events beside your tasks.
+    NSContactsUsageDescription: Claude Dashboard looks up the people on your events.
+    NSLocalNetworkUsageDescription: Claude Dashboard lets the terminals and sessions you run reach devices on your local network.
+    NSAppleEventsUsageDescription: Claude Dashboard sends notifications and opens what they point at.

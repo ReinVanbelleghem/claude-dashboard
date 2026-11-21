@@ -25,7 +25,9 @@ import {
 
 const DEFAULT_HOUR_PX = 48;
 const MIN_HOUR_PX = 22;
-const MIN_BLOCK_PX = 18;
+/** The least height an event is drawn at. Below TINY_PX it gets one tight line of smaller type. */
+const MIN_BLOCK_PX = 12;
+const TINY_PX = 16;
 const MAX_HOUR_PX = 160;
 const ZOOM_KEY = "calendar.hourPx";
 const ZOOM_SPEED = 0.01;
@@ -275,7 +277,7 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
       if (dragged?.kind === "create" && dragged.end > from && dragged.start < to) {
         blocks.push({ kind: "new", key: "new", from: minutes(Math.max(dragged.start, from)), to: minutes(Math.min(dragged.end, to)), start: dragged.start, end: dragged.end });
       }
-      return layoutColumns(blocks, Math.min((MIN_BLOCK_PX / hourPx) * 60, 25));
+      return layoutColumns(blocks, Math.min(((MIN_BLOCK_PX - 2) / hourPx) * 60, 25));
     });
   }, [days, events, tasks, drag, hourPx]);
 
@@ -397,11 +399,12 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
             {blocksByDay[index].map((block) => {
               const box: CSSProperties = {
                 top: (block.from / 60) * hourPx,
-                height: Math.max(((block.to - block.from) / 60) * hourPx - 2, 16),
+                height: Math.max(((block.to - block.from) / 60) * hourPx - 2, MIN_BLOCK_PX),
                 left: `calc(${(block.column / block.columns) * 100}% + 1px)`,
                 width: `calc(${100 / block.columns}% - 4px)`,
               };
               const short = ((block.to - block.from) / 60) * hourPx < 34;
+              const tiny = ((block.to - block.from) / 60) * hourPx - 2 < TINY_PX;
               if (block.kind === "new") {
                 return (
                   <div className="cal-ev new" key={block.key} style={box}>
@@ -428,7 +431,7 @@ export function TimeGrid({ days, today, events, tasks, projects, onOpenEvent, on
               const { event } = block;
               return (
                 <div
-                  className={`cal-ev ${short ? "short" : ""} ${block.ghost ? "ghost" : ""} ${event.editable ? "" : "locked"} ${event.other ? "other" : ""} ${event.draft ? "draft" : ""} ${event.status ? `status ${event.status.kind}` : ""} ${replyClass(event)}`}
+                  className={`cal-ev ${short ? "short" : ""} ${tiny ? "tiny" : ""} ${block.ghost ? "ghost" : ""} ${event.editable ? "" : "locked"} ${event.other ? "other" : ""} ${event.draft ? "draft" : ""} ${event.status ? `status ${event.status.kind}` : ""} ${replyClass(event)}`}
                   key={block.key}
                   style={{ ...box, ...tint(event.color) }}
                   {...hover.bind(event)}

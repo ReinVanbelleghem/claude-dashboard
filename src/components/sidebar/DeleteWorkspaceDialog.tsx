@@ -32,7 +32,7 @@ export function DeleteWorkspaceDialog({
     let alive = true;
     void (async () => {
       const st = await gitApi.status(w.folder, true).catch(() => null);
-      const linked = !!st?.isRepo && st.isLinkedWorktree && !w.projectKey.startsWith("review:");
+      const linked = !!st?.isRepo && st.isLinkedWorktree && !w.repoKey.startsWith("review:");
       const dirty = linked
         ? await gitApi
             .dirty([w.folder])
@@ -107,7 +107,7 @@ export function DeleteWorkspaceDialog({
         )}
         {checkout && !checkout.linked && (
           <p className="hint">
-            {w.projectKey.startsWith("review:")
+            {w.repoKey.startsWith("review:")
               ? "Its review checkout is one of the dashboard's own and is cleaned up by the dashboard."
               : `It lives in ${path}, which is not a worktree and stays as it is.`}
           </p>
@@ -139,7 +139,7 @@ export function DeleteProjectDialog({
   sessions,
   onClose,
 }: {
-  project: { key: string; name: string; root: string };
+  project: { id: number; name: string };
   workspaces: number;
   sessions: number;
   onClose: () => void;
@@ -157,7 +157,7 @@ export function DeleteProjectDialog({
     setBusy(true);
     setError(null);
     try {
-      await workspaceApi.removeProject(project.key);
+      await workspaceApi.removeProject(project.id);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -175,8 +175,8 @@ export function DeleteProjectDialog({
             ? `Its ${workspaces} workspace${workspaces === 1 ? "" : "s"} go with it, archived ones included. `
             : "It has no workspaces. "}
           {sessions > 0 ? `${sessions} session${sessions === 1 ? "" : "s"} will be ended. ` : ""}
-          Nothing on disk changes: {project.root.replace(/^\/Users\/[^/]+/, "~")}, its worktrees and its branches all
-          stay, and transcripts remain in History. Starting a session there again brings the project back.
+          Nothing on disk changes: its folders, worktrees and branches all stay, its drawings stay in the drawings
+          folder, and transcripts remain in History.
         </p>
         {error && <div className="chat-error">{error}</div>}
         <div className="modal-actions">

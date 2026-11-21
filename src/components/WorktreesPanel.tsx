@@ -47,7 +47,7 @@ export const WorktreesPanel = memo(function WorktreesPanel({
   /** Start work in one of these checkouts. */
   onOpenWorktree?: (path: string) => void;
   /** Heading, when this panel is one repository among several on screen. */
-  title?: string;
+  title?: ReactNode;
   subtitle?: string | null;
   /** Controls that sit beside the title — the Worktrees page puts its pin here. */
   titleExtra?: ReactNode;

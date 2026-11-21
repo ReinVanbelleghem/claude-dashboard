@@ -17,6 +17,7 @@
  * an icon file exported by hand from iconPng().
  */
 
+import { shell } from "./shell.ts";
 import {
   buildSurfaces,
   DEFAULT_CUSTOM_PALETTE,
@@ -1000,6 +1001,7 @@ window.matchMedia?.("(prefers-reduced-motion: reduce)").addEventListener("change
  * badge is already carrying the same signal.
  */
 function setDockBadge(count: number) {
+  if (shell) return shell.setBadge(count);
   const nav = navigator as Navigator & {
     setAppBadge?: (n?: number) => Promise<void>;
     clearAppBadge?: () => Promise<void>;
@@ -1071,6 +1073,30 @@ export function iconPng(a: Appearance, size = 1024): Promise<Blob> {
     img.onerror = () => reject(new Error("icon did not load"));
     img.src = source;
   });
+}
+
+const DOCK_SIZE = 1024;
+const DOCK_TILE = 824;
+let dockSvg: string | null = null;
+
+/** The chosen icon as the app's Dock icon, with the margin macOS expects around one. */
+function applyDockIcon(a: Appearance) {
+  if (!shell || shell.windowSlot !== 1) return;
+  const svg = faviconSvg(a.favicon, iconColor(a), false, undefined, glyphInk(a));
+  if (svg === dockSvg) return;
+  dockSvg = svg;
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = DOCK_SIZE;
+    canvas.height = DOCK_SIZE;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const inset = (DOCK_SIZE - DOCK_TILE) / 2;
+    ctx.drawImage(img, inset, inset, DOCK_TILE, DOCK_TILE);
+    shell?.setDockIcon(canvas.toDataURL("image/png"));
+  };
+  img.src = `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
 const KEY = "appearance";
@@ -1201,6 +1227,7 @@ export function applyAppearance(a: Appearance) {
   retime();
   // After the variables are written, not before: this reads the value back.
   applyThemeColor();
+  applyDockIcon(a);
 
   try {
     localStorage.setItem(KEY, JSON.stringify(a));

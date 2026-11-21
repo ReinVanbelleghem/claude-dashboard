@@ -48,6 +48,7 @@ type TaskRow = {
   created_at: number;
   reminded_for: string | null;
   workspace_id: number | null;
+  work_project_id: number | null;
   links: string | null;
 };
 
@@ -103,6 +104,7 @@ export function initTasks(database: Database, emitter: (payload: TasksPayload) =
   const cols = db.query<{ name: string }, []>("PRAGMA table_info(task_projects)").all();
   if (!cols.some((c) => c.name === "repo_key")) db.exec("ALTER TABLE task_projects ADD COLUMN repo_key TEXT");
   const taskCols = db.query<{ name: string }, []>("PRAGMA table_info(tasks)").all();
+  if (!taskCols.some((c) => c.name === "work_project_id")) db.exec("ALTER TABLE tasks ADD COLUMN work_project_id INTEGER");
   if (!taskCols.some((c) => c.name === "workspace_id")) {
     db.exec("ALTER TABLE tasks ADD COLUMN workspace_id INTEGER");
     try {
@@ -142,23 +144,67 @@ const parseJson = <T>(raw: string | null, fallback: T): T => {
   }
 };
 
-type WorkspaceRef = { id: number; folder: string; named: boolean };
+type WorkspaceRef = { id: number; folder: string; named: boolean; projectId: number | null };
 
 /** The workspaces a task can belong to: the ones that are not archived. Empty before the workspaces table exists. */
 function openWorkspaces(): WorkspaceRef[] {
   try {
     return db
-      .query<{ id: number; folder: string; goal: string; explicit: number; review_key: string | null }, []>(
-        "SELECT id, folder, goal, explicit, review_key FROM workspaces WHERE status != 'archived'",
+      .query<{ id: number; folder: string; goal: string; explicit: number; review_key: string | null; project_id: number | null }, []>(
+        "SELECT id, folder, goal, explicit, review_key, project_id FROM workspaces WHERE status != 'archived'",
       )
       .all()
-      .map((w) => ({ id: w.id, folder: w.folder, named: !w.review_key && (w.explicit === 1 || w.goal.trim() !== "") }));
+      .map((w) => ({
+        id: w.id,
+        folder: w.folder,
+        named: !w.review_key && (w.explicit === 1 || w.goal.trim() !== ""),
+        projectId: w.project_id,
+      }));
   } catch {
     return [];
   }
 }
 
 const liveWorkspaceIds = () => new Set(openWorkspaces().map((w) => w.id));
+
+type WorkProject = { id: number; folder: string | null; general: boolean };
+
+/** The pieces of work a task can be part of: the sidebar's projects. Empty before that table exists. */
+function workProjects(): WorkProject[] {
+  try {
+    return db
+      .query<{ id: number; folder: string | null; general_key: string | null }, []>("SELECT id, folder, general_key FROM projects")
+      .all()
+      .map((p) => ({ id: p.id, folder: p.folder, general: p.general_key !== null }));
+  } catch {
+    return [];
+  }
+}
+
+/** What a task's ties are checked against: each open workspace with its project, and the projects there are. */
+type Ties = { workspaces: Map<number, number | null>; projects: Set<number> };
+const ties = (): Ties => ({
+  workspaces: new Map(openWorkspaces().map((w) => [w.id, w.projectId])),
+  projects: new Set(workProjects().map((p) => p.id)),
+});
+
+/**
+ * The piece of work a folder is part of, for a task added from it that no
+ * named workspace takes: the project whose own folder it is in, else the
+ * project of the checkout it is in. A repository's standing project is no
+ * piece of work, so a task from a main checkout is tied to none.
+ */
+function workProjectForFolder(cwd: string): number | null {
+  const dir = cwd.replace(/\/+$/, "");
+  const holds = (folder: string) => dir === folder || dir.startsWith(`${folder}/`);
+  const projects = workProjects().filter((p) => !p.general);
+  const own = projects.filter((p) => p.folder && holds(p.folder)).sort((a, b) => b.folder!.length - a.folder!.length)[0];
+  if (own) return own.id;
+  const inside = openWorkspaces()
+    .filter((w) => holds(w.folder))
+    .sort((a, b) => b.folder.length - a.folder.length)[0];
+  return inside && projects.some((p) => p.id === inside.projectId) ? inside.projectId : null;
+}
 
 /** The named workspace a folder is part of: the deepest one. Sessions in a plain checkout belong to no piece of work in particular. */
 function workspaceForFolder(cwd: string): number | null {
@@ -169,7 +215,7 @@ function workspaceForFolder(cwd: string): number | null {
   return fits[0]?.id ?? null;
 }
 
-const toTask = (r: TaskRow, live: Set<number>): Task => ({
+const toTask = (r: TaskRow, known: Ties): Task => ({
   id: r.id,
   projectId: r.project_id,
   content: r.content,
@@ -184,7 +230,13 @@ const toTask = (r: TaskRow, live: Set<number>): Task => ({
   order: r.sort,
   completedAt: r.completed_at,
   createdAt: r.created_at,
-  workspaceId: r.workspace_id !== null && live.has(r.workspace_id) ? r.workspace_id : null,
+  workspaceId: r.workspace_id !== null && known.workspaces.has(r.workspace_id) ? r.workspace_id : null,
+  workProjectId:
+    r.workspace_id !== null && known.workspaces.has(r.workspace_id)
+      ? (known.workspaces.get(r.workspace_id) ?? null)
+      : r.work_project_id !== null && known.projects.has(r.work_project_id)
+        ? r.work_project_id
+        : null,
 });
 
 const projectRows = () =>
@@ -195,7 +247,7 @@ const projectRows = () =>
 const taskRow = (id: number) => db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(id);
 
 export function tasksPayload(now = Date.now()): TasksPayload {
-  const live = liveWorkspaceIds();
+  const live = ties();
   const rows = db
     .query<TaskRow, [number]>("SELECT * FROM tasks WHERE completed_at IS NULL OR completed_at > ? ORDER BY sort, id")
     .all(now - COMPLETED_SHOWN_MS);
@@ -204,7 +256,7 @@ export function tasksPayload(now = Date.now()): TasksPayload {
 
 export function getTask(id: number): Task | null {
   const r = taskRow(id);
-  return r ? toTask(r, liveWorkspaceIds()) : null;
+  return r ? toTask(r, ties()) : null;
 }
 
 /** Tell every page the list changed. Also called when a workspace link changes, which this module does not write. */
@@ -283,13 +335,23 @@ export async function addTask(input: TaskAdd, now = new Date()): Promise<Task | 
       : input.cwd
         ? workspaceForFolder(input.cwd)
         : null;
+  const workProjectId =
+    workspaceId !== null
+      ? null
+      : input.workProjectId != null
+        ? workProjects().some((p) => p.id === input.workProjectId)
+          ? input.workProjectId
+          : null
+        : input.cwd
+          ? workProjectForFolder(input.cwd)
+          : null;
   const at = now.getTime();
   const sort = (db.query<{ n: number | null }, [number]>("SELECT MAX(sort) AS n FROM tasks WHERE project_id = ?").get(project.id)?.n ?? 0) + 1;
   const d = dueColumns(due);
   const id = db
-    .query<{ id: number }, [number, string, string, number, string | null, string | null, string | null, string | null, string, number, string, number, number, number | null, string]>(
-      `INSERT INTO tasks (project_id, content, description, priority, due_date, due_time, due_string, recurrence, labels, sort, created_by_kind, created_at, updated_at, workspace_id, links)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    .query<{ id: number }, [number, string, string, number, string | null, string | null, string | null, string | null, string, number, string, number, number, number | null, number | null, string]>(
+      `INSERT INTO tasks (project_id, content, description, priority, due_date, due_time, due_string, recurrence, labels, sort, created_by_kind, created_at, updated_at, workspace_id, work_project_id, links)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     )
     .get(
       project.id,
@@ -306,6 +368,7 @@ export async function addTask(input: TaskAdd, now = new Date()): Promise<Task | 
       at,
       at,
       workspaceId,
+      workProjectId,
       JSON.stringify(links),
     )!.id;
   tasksChanged();
@@ -383,7 +446,16 @@ export function deleteTask(id: number): boolean {
 export function setTaskWorkspace(id: number, workspaceId: number | null): Task | { error: string } | null {
   if (!taskRow(id)) return null;
   if (workspaceId !== null && !liveWorkspaceIds().has(workspaceId)) return { error: "no such workspace" };
-  db.query("UPDATE tasks SET workspace_id = ?, updated_at = ? WHERE id = ?").run(workspaceId, Date.now(), id);
+  db.query("UPDATE tasks SET workspace_id = ?, work_project_id = NULL, updated_at = ? WHERE id = ?").run(workspaceId, Date.now(), id);
+  tasksChanged();
+  return getTask(id);
+}
+
+/** Tie a task to a piece of work as a whole, a project from the sidebar, rather than to one workspace in it. */
+export function setTaskWorkProject(id: number, projectId: number): Task | { error: string } | null {
+  if (!taskRow(id)) return null;
+  if (!workProjects().some((p) => p.id === projectId)) return { error: "no such project" };
+  db.query("UPDATE tasks SET work_project_id = ?, workspace_id = NULL, updated_at = ? WHERE id = ?").run(projectId, Date.now(), id);
   tasksChanged();
   return getTask(id);
 }

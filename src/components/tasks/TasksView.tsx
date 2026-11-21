@@ -1,6 +1,8 @@
+import { ProjectIcon, ProjectMark } from "../ProjectMark.tsx";
+import { dayLabel, TaskQuickAdd } from "./TaskQuickAdd.tsx";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { calendarApi, taskApi, type CalendarEvent, type Task, type TaskProject, type TasksPayload, type Workspace } from "../../api.ts";
+import { calendarApi, taskApi, type CalendarEvent, type Project, type Task, type TaskProject, type TasksPayload, type Workspace } from "../../api.ts";
 import { replyOf } from "../../../shared/calendar.ts";
 import { addDays, describeRecurrence, localDay, parseQuickAdd, weekdayOf } from "../../../shared/taskDates.ts";
 import { cleanLinks, linkInfo, MAX_TASK_LINKS } from "../../../shared/taskLinks.ts";
@@ -13,7 +15,7 @@ import { DatePicker } from "../DatePicker.tsx";
 import { ServiceMark } from "./ServiceMark.tsx";
 import { TaskModal } from "../calendar/EventModal.tsx";
 import { workspaceTitle } from "../../../shared/workspaces.ts";
-import {
+import { FolderIcon,
   CalendarIcon,
   CheckIcon,
   ChevronIcon,
@@ -55,19 +57,6 @@ const byDue = (a: Task, b: Task) =>
   a.priority - b.priority ||
   a.order - b.order;
 
-function dayLabel(day: string, today: string): string {
-  if (day === today) return "Today";
-  if (day === addDays(today, 1)) return "Tomorrow";
-  if (day === addDays(today, -1)) return "Yesterday";
-  const [y, m, d] = day.split("-").map(Number);
-  const date = new Date(y!, m! - 1, d!);
-  return date.toLocaleDateString(undefined, {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    ...(y !== Number(today.slice(0, 4)) ? { year: "numeric" } : {}),
-  });
-}
 
 /**
  * The to-do list: what is due today, what is coming, and each project's tasks.
@@ -75,17 +64,14 @@ function dayLabel(day: string, today: string): string {
  * #backend"), with what was understood shown under the field before it is saved.
  */
 const DRAFT_KEY = "tasks-add-draft";
-const readDraft = () => {
-  try {
-    return localStorage.getItem(DRAFT_KEY) ?? "";
-  } catch {
-    return "";
-  }
-};
+
+const NO_WORK_PROJECTS: Project[] = [];
 
 export function TasksView({
   payload,
   workspaces,
+  workProjects = NO_WORK_PROJECTS,
+  onOpenWorkProject,
   onStartWorkspace,
   onOpenWorkspace,
   focusTaskId = null,
@@ -101,6 +87,9 @@ export function TasksView({
   onFocused?: () => void;
   payload: TasksPayload | null;
   workspaces: Workspace[];
+  /** The sidebar's projects: the pieces of work a task can be part of. Not the task lists here. */
+  workProjects?: Project[];
+  onOpenWorkProject?: (projectId: number) => void;
   /** Start a workspace for this task: the dialog opens with the task as its goal. */
   onStartWorkspace: (task: Task) => void;
   onOpenWorkspace: (workspace: Workspace) => void;
@@ -120,16 +109,6 @@ export function TasksView({
     }, FOCUS_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [focusTaskId, focusProjectId, onFocused]);
-  const [draft, setDraftState] = useState(readDraft);
-  const setDraft = (next: string) => {
-    setDraftState(next);
-    try {
-      if (next) localStorage.setItem(DRAFT_KEY, next);
-      else localStorage.removeItem(DRAFT_KEY);
-    } catch {
-      return;
-    }
-  };
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const openTask = openId === null ? null : (payload?.tasks.find((t) => t.id === openId) ?? null);
@@ -181,25 +160,6 @@ export function TasksView({
   const done = tasks
     .filter((t) => t.completedAt !== null && (view.kind !== "project" || t.projectId === view.id))
     .sort((a, b) => b.completedAt! - a.completedAt!);
-
-  const preview = draft.trim() ? parseQuickAdd(draft.trim()) : null;
-
-  const add = async () => {
-    const text = draft.trim();
-    if (!text) return;
-    setError(null);
-    try {
-      await taskApi.add({
-        text,
-        ...(currentProject && !preview?.project ? { projectId: currentProject.id } : {}),
-        ...(view.kind === "today" && !preview?.due ? { due: "today" } : {}),
-        ...(addTo ? { workspaceId: addTo.id } : {}),
-      });
-      setDraft("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
 
   const week = Array.from({ length: 7 }, (_, i) => addDays(today, i + 1)).map((day) => ({
     day,
@@ -359,33 +319,27 @@ export function TasksView({
           )}
         </header>
 
-        <div className={`tasks-add${draft.trim() ? " filled" : ""}`}>
-          <span className="tasks-add-icon">
-            <PlusIcon />
-          </span>
-          <input
-            value={draft}
-            placeholder="Add a task…  review PR friday 9:00 p1 #backend"
-            aria-label="Add a task"
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && void add()}
-          />
-          <button
-            className={`tasks-add-ws${addTo ? " on" : ""}`}
-            title={addTo ? `New tasks go into ${workspaceTitle(addTo)}` : "Put new tasks in a workspace"}
-            onClick={(e) => setAddAnchor(e.currentTarget)}
-          >
-            <WorktreeIcon />
-            {addTo && <span>{workspaceTitle(addTo)}</span>}
-          </button>
-          {draft.trim() ? (
-            <button className="icon-btn primary tiny" onClick={() => void add()}>
-              Add task
+        <TaskQuickAdd
+          draftKey={DRAFT_KEY}
+          extra={
+            <button
+              className={`tasks-add-ws${addTo ? " on" : ""}`}
+              title={addTo ? `New tasks go into ${workspaceTitle(addTo)}` : "Put new tasks in a workspace"}
+              onClick={(e) => setAddAnchor(e.currentTarget)}
+            >
+              <WorktreeIcon />
+              {addTo && <span>{workspaceTitle(addTo)}</span>}
             </button>
-          ) : (
-            <kbd>↵</kbd>
-          )}
-        </div>
+          }
+          onAdd={(text, read) =>
+            taskApi.add({
+              text,
+              ...(currentProject && !read.project ? { projectId: currentProject.id } : {}),
+              ...(view.kind === "today" && !read.due ? { due: "today" } : {}),
+              ...(addTo ? { workspaceId: addTo.id } : {}),
+            })
+          }
+        />
         {addAnchor && (
           <Popover anchor={addAnchor} onClose={() => setAddAnchor(null)} className="task-menu task-ws-list">
             <div className="svc-menu-heading">New tasks go into</div>
@@ -411,38 +365,13 @@ export function TasksView({
                   }}
                 >
                   <span>{workspaceTitle(w)}</span>
-                  <small>{w.projectName}</small>
+                  <small>{w.repoName}</small>
                   {w.id === addTo?.id && <CheckIcon />}
                 </button>
               ))}
             </div>
             {namedWorkspaces.length === 0 && <p className="task-ws-none">No named workspaces yet. Start one from a task or the sidebar.</p>}
           </Popover>
-        )}
-        {preview && (preview.due || preview.priority || preview.project || preview.labels.length > 0) && (
-          <div className="tasks-preview">
-            <span className="tasks-preview-text">{preview.content || "…"}</span>
-            {preview.due && (
-              <span className="task-chip due">
-                <CalendarIcon />
-                {dayLabel(preview.due.date, today)}
-                {preview.due.time ? ` ${preview.due.time}` : ""}
-              </span>
-            )}
-            {preview.due?.recurrence && (
-              <span className="task-chip">
-                <RepeatIcon />
-                {describeRecurrence(preview.due.recurrence)}
-              </span>
-            )}
-            {preview.priority && <span className={`task-chip tasks-p${preview.priority}`}>P{preview.priority}</span>}
-            {preview.project && <span className="task-chip">#{preview.project}</span>}
-            {preview.labels.map((l) => (
-              <span key={l} className="task-chip">
-                @{l}
-              </span>
-            ))}
-          </div>
         )}
         {error && <div className="chat-error">{error}</div>}
 
@@ -493,6 +422,8 @@ export function TasksView({
                       showDate={view.kind !== "upcoming"}
                       workspace={workspaceOf(t)}
                       workspaces={workspaces}
+                      workProjects={workProjects}
+                      onOpenWorkProject={onOpenWorkProject}
                       projects={projects}
                       onError={setError}
                       onOpen={() => setOpenId(t.id)}
@@ -523,6 +454,8 @@ export function TasksView({
                   showDate={false}
                   workspace={null}
                   workspaces={workspaces}
+                  workProjects={workProjects}
+                  onOpenWorkProject={onOpenWorkProject}
                   projects={projects}
                   onError={setError}
                   onOpen={() => setOpenId(t.id)}
@@ -652,7 +585,7 @@ const MEETINGS_REFRESH_MS = 5 * 60_000;
 const clock = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
 
 /** Today's meetings beside the task list, so tasks are planned around them. Nothing shows when the calendar is off. */
-function TodayMeetings({ today, hidden, onOpenCalendar }: { today: string; hidden: string[]; onOpenCalendar: () => void }) {
+export function TodayMeetings({ today, hidden, onOpenCalendar }: { today: string; hidden: string[]; onOpenCalendar: () => void }) {
   const [events, setEvents] = useState<CalendarEvent[] | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -705,12 +638,17 @@ function TaskRow({
   showDate,
   workspace,
   workspaces,
+  workProjects,
+  onOpenWorkProject,
   projects,
   onError,
   onOpen,
   onStartWorkspace,
   onOpenWorkspace,
 }: {
+  /** The sidebar's projects, to tie the task to one as a whole. */
+  workProjects: Project[];
+  onOpenWorkProject?: (projectId: number) => void;
   task: Task;
   today: string;
   /** The project, where the list mixes projects; null inside one. */
@@ -730,7 +668,12 @@ function TaskRow({
   const [dueFlyout, setDueFlyout] = useState<{ left: boolean } | null>(null);
   const [wsFlyout, setWsFlyout] = useState<{ left: boolean } | null>(null);
   const [linksFlyout, setLinksFlyout] = useState<{ left: boolean } | null>(null);
-  const choices = workspaces.filter((w) => w.status === "active" && (w.explicit || w.goal.trim() !== "" || w.id === t.workspaceId));
+  const pieces = workProjects.filter((p) => !p.generalKey && !p.archivedAt);
+  const inPiece = new Set(pieces.map((p) => p.id));
+  const choices = workspaces.filter(
+    (w) => w.status === "active" && !inPiece.has(w.projectId) && (w.explicit || w.goal.trim() !== "" || w.id === t.workspaceId),
+  );
+  const workProject = workspace ? null : (workProjects.find((p) => p.id === (t.workProjectId ?? null)) ?? null);
   const closeMenu = () => {
     setMenuAnchor(null);
     setDueFlyout(null);
@@ -850,6 +793,11 @@ function TaskRow({
             <WorktreeIcon />
             <span>{workspaceTitle(workspace)}</span>
           </button>
+        ) : workProject ? (
+          <button className="task-ws linked" title={`Part of the project ${workProject.name}. Click to open it.`} onClick={() => onOpenWorkProject?.(workProject.id)}>
+            <FolderIcon />
+            <span>{workProject.name}</span>
+          </button>
         ) : (
           <button className="task-ws start" title="Start a workspace with this task as its goal" onClick={onStartWorkspace}>
             <WorktreeIcon />
@@ -933,8 +881,8 @@ function TaskRow({
               }}
             >
               <WorktreeIcon />
-              <span>Workspace</span>
-              <small>{workspace ? workspaceTitle(workspace) : "none"}</small>
+              <span>Linked to</span>
+              <small>{workspace ? workspaceTitle(workspace) : (workProject?.name ?? "nothing")}</small>
               <span className="task-sub-caret" aria-hidden>
                 ›
               </span>
@@ -960,8 +908,42 @@ function TaskRow({
                   <PlusIcon />
                   Start a new workspace…
                 </button>
-                {choices.length > 0 && <hr />}
+                {pieces.length + choices.length > 0 && <hr />}
                 <div className="task-menu-projects">
+                  {pieces.flatMap((p) => [
+                    <button
+                      key={`p${p.id}`}
+                      className={workProject?.id === p.id ? "on" : ""}
+                      title={`The project as a whole${p.folder ? `\n${p.folder}` : ""}`}
+                      onClick={() => {
+                        closeMenu();
+                        if (workProject?.id !== p.id) void taskApi.linkProject(t.id, p.id).catch((e: Error) => onError(e.message));
+                      }}
+                    >
+                      <ProjectIcon project={p} size={15} />
+                      <span>{p.name}</span>
+                      <small>project</small>
+                      {workProject?.id === p.id && <CheckIcon />}
+                    </button>,
+                    ...workspaces
+                      .filter((w) => w.projectId === p.id && w.status === "active")
+                      .map((w) => (
+                        <button
+                          key={w.id}
+                          className={`task-menu-sub${w.id === t.workspaceId ? " on" : ""}`}
+                          title={w.folder}
+                          onClick={() => {
+                            closeMenu();
+                            if (w.id !== t.workspaceId) void taskApi.link(t.id, w.id).catch((e: Error) => onError(e.message));
+                          }}
+                        >
+                          <ProjectMark projectKey={w.repoKey} name={w.repoName} size={14} />
+                          <span>{w.repoName}</span>
+                          <small>{w.branch ?? "workspace"}</small>
+                          {w.id === t.workspaceId && <CheckIcon />}
+                        </button>
+                      )),
+                  ])}
                   {choices.map((w) => (
                     <button
                       key={w.id}
@@ -972,13 +954,14 @@ function TaskRow({
                         if (w.id !== t.workspaceId) void taskApi.link(t.id, w.id).catch((e: Error) => onError(e.message));
                       }}
                     >
+                      <ProjectMark projectKey={w.repoKey} name={w.repoName} size={14} />
                       <span>{workspaceTitle(w)}</span>
-                      <small>{w.projectName}</small>
+                      <small>{w.repoName}</small>
                       {w.id === t.workspaceId && <CheckIcon />}
                     </button>
                   ))}
                 </div>
-                {workspace && (
+                {(workspace || workProject) && (
                   <>
                     <hr />
                     <button
@@ -987,7 +970,7 @@ function TaskRow({
                         void taskApi.link(t.id, null).catch((e: Error) => onError(e.message));
                       }}
                     >
-                      Take it out of its workspace
+                      {workspace ? "Take it out of its workspace" : "Take it out of its project"}
                     </button>
                   </>
                 )}

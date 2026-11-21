@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WeekStartContext } from "./components/DatePicker.tsx";
+import { setProjectMarks } from "./projectMarks.ts";
 import {
   agentApi,
   agentBus,
@@ -40,21 +41,26 @@ import {
   setBusy,
   type Appearance,
 } from "./appearance.ts";
+import { shell } from "./shell.ts";
 import {
   ArtifactIcon,
+  DrawingIcon,
+  DocIcon,
+  FolderIcon,
   ChartIcon,
   ClockIcon,
   GearIcon,
   NineDotsIcon,
   PanelLeftIcon,
   PullRequestIcon,
+  HomeIcon,
   PulseIcon,
   SearchIcon,
   SunMoonIcon,
   TasksIcon,
   CalendarIcon,
   TemplateIcon,
-  TerminalIcon,
+  ServiceIcon,
   WorktreeIcon,
 } from "./components/Icons.tsx";
 import { NOTIFY_KINDS, NotificationBell, NotificationCenter } from "./components/NotificationCenter.tsx";
@@ -81,14 +87,29 @@ import { DesktopView } from "./components/DesktopView.tsx";
 import { FindBar } from "./components/FindBar.tsx";
 import { ArtifactsView } from "./components/ArtifactsView.tsx";
 import { HistoryView } from "./components/HistoryView.tsx";
-import { LiveView } from "./components/LiveView.tsx";
+import { HomeView } from "./components/HomeView.tsx";
 import { FoldersModal } from "./components/FoldersModal.tsx";
 import { NewSessionModal } from "./components/NewSessionModal.tsx";
 import { WorkspacePage } from "./components/WorkspacePage.tsx";
 import { TerminalPage } from "./components/TerminalPane.tsx";
 import { isTerminalKey, terminalKey } from "../shared/terminals.ts";
-import { artifactSlugOf, isArtifactKey } from "../shared/artifacts.ts";
+import { artifactKey, artifactSlugOf, isArtifactKey } from "../shared/artifacts.ts";
+import { drawingKey } from "../shared/drawings.ts";
+import { ARTIFACTS_CHANGED } from "./components/ArtifactPane.tsx";
 import { ArtifactPage } from "./components/ArtifactPane.tsx";
+import { DrawingPage } from "./components/DrawingPane.tsx";
+import { ProjectPage } from "./components/ProjectPage.tsx";
+import { ProjectsView } from "./components/ProjectsView.tsx";
+import { DrawingsView } from "./components/DrawingsView.tsx";
+import { DRAWINGS_CHANGED } from "./components/drawingEvents.ts";
+import { isDrawingKey } from "../shared/drawings.ts";
+import { isNoteKey, noteKey, noteName, notePathOf } from "../shared/notes.ts";
+import { isServiceKey, serviceKey, serviceSessionOf, sessionPath } from "../shared/services.ts";
+import { ServicePage, ServicesContext } from "./components/services/ServicePane.tsx";
+import { NotePage } from "./components/NotePane.tsx";
+import { NotesView } from "./components/NotesView.tsx";
+import { NOTES_CHANGED } from "./components/noteEvents.ts";
+import { setProjectList } from "./projectList.ts";
 import { isChatPath, workspaceTitle } from "../shared/workspaces.ts";
 import { Palette } from "./components/Palette.tsx";
 import { SessionDrawer } from "./components/SessionDrawer.tsx";
@@ -128,13 +149,16 @@ const TAB_LABEL: Record<Tab, string> = Object.fromEntries(PAGES.map((p) => [p.ke
  * to swap: change the value here, nothing else. `desktop` is deliberately
  * excluded — it stays icon-only via NineDotsIcon in the dock render. */
 const TAB_ICON: Record<Exclude<Tab, "desktop">, () => JSX.Element> = {
-  live: PulseIcon,
+  live: HomeIcon,
   tasks: TasksIcon,
   calendar: CalendarIcon,
   history: ClockIcon,
   artifacts: ArtifactIcon,
+  drawings: DrawingIcon,
+  notes: DocIcon,
+  projects: () => <FolderIcon />,
   worktrees: WorktreeIcon,
-  services: TerminalIcon,
+  services: ServiceIcon,
   templates: TemplateIcon,
   reviews: PullRequestIcon,
   usage: ChartIcon,
@@ -145,6 +169,12 @@ const TAB_ICON: Record<Exclude<Tab, "desktop">, () => JSX.Element> = {
 function routeSessionId(): string | null {
   const m = window.location.hash.match(/^#\/session\/(.+)$/);
   return m ? decodeURIComponent(m[1]) : null;
+}
+
+/** #/project/<id> for the page of one project. */
+function routeProjectId(): number | null {
+  const m = window.location.hash.match(/^#\/project\/(\d+)$/);
+  return m ? Number(m[1]) : null;
 }
 
 /** #/workspace/<id> for the page of one workspace. */
@@ -159,6 +189,27 @@ const TAB_ROUTES: Record<string, Tab> = { "#/tasks": "tasks", "#/calendar": "cal
 const CALENDAR_AT = /^#\/calendar\/(\d+)$/;
 
 const NO_ARTIFACTS: Artifact[] = [];
+const NO_WORKSPACES: WorkspacesPayload["workspaces"] = [];
+const NO_HOMES: Record<string, number> = {};
+const NO_PROJECT_LIST: WorkspacesPayload["projects"] = [];
+
+/**
+ * A further window of the macOS app. It keeps its own look in its own browser
+ * storage: the daemon's copy belongs to the first window, so this one neither
+ * takes it over on load nor writes its own choice there.
+ */
+const EXTRA_WINDOW = (shell?.windowSlot ?? 1) !== 1;
+
+const SIDEBAR_PIN_KEY = "sidebar-pinned";
+
+function storedSidebarCollapsed(): boolean | null {
+  try {
+    const raw = localStorage.getItem("sidebar-collapsed");
+    return raw === null ? null : raw === "1";
+  } catch {
+    return null;
+  }
+}
 const NO_TASKS: Task[] = [];
 const NO_PROJECTS: TaskProject[] = [];
 
@@ -170,6 +221,7 @@ export default function App() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [pageId, setPageId] = useState<string | null>(routeSessionId);
   const [workspacePageId, setWorkspacePageId] = useState<number | null>(routeWorkspaceId);
+  const [projectPageId, setProjectPageId] = useState<number | null>(routeProjectId);
   const [prRoute, setPrRoute] = useState<PrRoute | null>(routePrNow);
   /** Bumped when the daemon reports the artifact folder changed, to re-pull the list. */
   const [artifactTick, setArtifactTick] = useState(0);
@@ -177,9 +229,9 @@ export default function App() {
   const [services, setServices] = useState<ServicesState | null>(null);
   const [templateRunsKey, setTemplateRunsKey] = useState(0);
   useEffect(() => {
-    if (tab !== "services" || services) return;
+    if ((tab !== "services" && workspacePageId === null && projectPageId === null) || services) return;
     servicesApi.state().then(setServices).catch(() => {});
-  }, [tab, services]);
+  }, [tab, workspacePageId, projectPageId, services]);
   const [desks, setDesks] = useState<DesktopsState>(readDesktops);
   const tiles = useMemo(() => desks.desktops.find((d) => d.id === desks.active)?.tiles ?? NO_TILES, [desks]);
   const nextZ = useRef(1 + desks.desktops.reduce((m, d) => d.tiles.reduce((n, t) => Math.max(n, t.z), m), 0));
@@ -314,8 +366,12 @@ export default function App() {
   /** The workspace a session started from the dialog should be filed in, when one asked for it. */
   const [newInWorkspace, setNewInWorkspace] = useState<number | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspacesPayload | null>(null);
+  useEffect(() => {
+    if (workspaces) setProjectMarks(workspaces.repos);
+    if (workspaces) setProjectList(workspaces.projects, workspaces.workspaces);
+  }, [workspaces]);
   /** The New workspace dialog, with the folder it opens on. */
-  const [newWorkspace, setNewWorkspace] = useState<{ folder: string | null; task?: Task } | null>(null);
+  const [newWorkspace, setNewWorkspace] = useState<{ folder: string | null; task?: Task; projectId?: number } | null>(null);
   const [tasks, setTasks] = useState<TasksPayload | null>(null);
   const [calendarChanged, setCalendarChanged] = useState(0);
   const [focusTaskId, setFocusTaskId] = useState<number | null>(null);
@@ -336,27 +392,70 @@ export default function App() {
   const [showFind, setShowFind] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   const prWatches = usePrWatches();
-  // Read from the last settings payload, but kept local too so the toggle is
-  // instant and survives the window before settings arrive.
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+  // Each window keeps its own: what this browser storage remembers wins, and the
+  // daemon's copy only fills in for a window that has never chosen. Following the
+  // daemon afterwards would make every open window fold together.
+  const sidebarChosen = useRef<boolean>(storedSidebarCollapsed() !== null);
+  /** Pinned, the sidebar keeps its place beside the page. Unpinned, it is out of sight until the pointer reaches the left edge. */
+  const [sidebarPinned, setSidebarPinned] = useState<boolean>(() => {
     try {
-      return localStorage.getItem("sidebar-collapsed") === "1";
+      return localStorage.getItem(SIDEBAR_PIN_KEY) !== "0";
     } catch {
-      return false;
+      return true;
     }
   });
+  const toggleSidebarPin = () =>
+    setSidebarPinned((v) => {
+      try {
+        localStorage.setItem(SIDEBAR_PIN_KEY, v ? "0" : "1");
+      } catch {
+        return !v;
+      }
+      return !v;
+    });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => storedSidebarCollapsed() ?? false);
   useEffect(() => {
-    if (settings?.ui.sidebarCollapsed !== undefined) setSidebarCollapsed(settings.ui.sidebarCollapsed);
+    if (sidebarChosen.current || settings?.ui.sidebarCollapsed === undefined) return;
+    sidebarChosen.current = true;
+    setSidebarCollapsed(settings.ui.sidebarCollapsed);
   }, [settings?.ui.sidebarCollapsed]);
   useEffect(() => {
-    document.documentElement.dataset.sidebar = sidebarCollapsed ? "rail" : "open";
+    document.documentElement.dataset.sidebar = !sidebarPinned ? "hidden" : sidebarCollapsed ? "rail" : "open";
     try {
       localStorage.setItem("sidebar-collapsed", sidebarCollapsed ? "1" : "0");
     } catch {
       // Private mode; the setting still round-trips through the daemon.
     }
-  }, [sidebarCollapsed]);
+  }, [sidebarCollapsed, sidebarPinned]);
+  /** A sidebar folded out of sight opens over the page while the pointer is at the left edge, and goes again once it has left. */
+  const [sidebarPeek, setSidebarPeek] = useState(false);
+  const peekTimer = useRef<number | null>(null);
+  const peekSidebar = useCallback((on: boolean) => {
+    if (peekTimer.current !== null) window.clearTimeout(peekTimer.current);
+    const settle = () => {
+      const typing = document.activeElement instanceof HTMLInputElement && document.activeElement.closest(".sidebar") !== null;
+      const busy = !on && (document.querySelector(".svc-menu") !== null || typing);
+      if (busy) peekTimer.current = window.setTimeout(settle, 400);
+      else setSidebarPeek(on);
+    };
+    peekTimer.current = window.setTimeout(settle, on ? 140 : 280);
+  }, []);
+  const sidebarAway = !sidebarPinned;
+  useEffect(() => {
+    if (!sidebarAway) setSidebarPeek(false);
+  }, [sidebarAway]);
+  const sidebarPinnedRef = useRef(sidebarPinned);
+  sidebarPinnedRef.current = sidebarPinned;
+  /** An unpinned sidebar is out of sight, so a change of its size is shown for a moment. */
+  const flashSidebar = useCallback(() => {
+    if (sidebarPinnedRef.current) return;
+    if (peekTimer.current !== null) window.clearTimeout(peekTimer.current);
+    setSidebarPeek(true);
+    peekTimer.current = window.setTimeout(() => setSidebarPeek(false), 1600);
+  }, []);
   const toggleSidebar = useCallback(() => {
+    sidebarChosen.current = true;
+    flashSidebar();
     setSidebarCollapsed((v) => {
       void settingsApi.save({ ui: { sidebarCollapsed: !v } }).then((r) => setSettings(r.settings)).catch(() => {});
       return !v;
@@ -390,6 +489,7 @@ export default function App() {
       const id = routeSessionId();
       setPageId(id);
       setWorkspacePageId(routeWorkspaceId());
+      setProjectPageId(routeProjectId());
       if (id || routePrNow()) setOpenId(null);
       setPrRoute(routePrNow());
     };
@@ -455,7 +555,7 @@ export default function App() {
   const changeAppearance = useCallback((patch: Partial<Appearance>) => {
     setAppearance((prev) => {
       const next = { ...prev, ...patch };
-      settingsApi.save({ ui: { appearance: next } }).catch(() => {});
+      if (!EXTRA_WINDOW) settingsApi.save({ ui: { appearance: next } }).catch(() => {});
       return next;
     });
   }, []);
@@ -480,7 +580,7 @@ export default function App() {
         // in the next one you open. Local storage only covers the pre-paint gap.
         // Normalised rather than spread: the nested slider and colour objects need
         // filling out too, or a copy written before a key existed arrives missing it.
-        if (r.settings.ui.appearance) {
+        if (r.settings.ui.appearance && !EXTRA_WINDOW) {
           setAppearance(normalizeAppearance(r.settings.ui.appearance));
         }
       })
@@ -541,6 +641,10 @@ export default function App() {
           },
         });
       }
+      if (shell) {
+        if (p.banner !== false) shell.notify({ key: p.key, title: p.title, body: `${p.body}\n${p.context}`, href });
+        return;
+      }
       if (p.banner === false || (p.toast !== false && document.visibilityState === "visible")) return;
       if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
       const note = new Notification(p.title, {
@@ -559,7 +663,33 @@ export default function App() {
       };
     });
     es.addEventListener("index", () => refreshRecent());
-    es.addEventListener("artifacts", () => setArtifactTick((n) => n + 1));
+    const follow = (key: (slug: string) => string, data: string | undefined) => {
+      let moved: { from?: string; to?: string } | undefined;
+      try {
+        moved = (JSON.parse(data ?? "{}") as { moved?: { from?: string; to?: string } }).moved;
+      } catch {
+        return;
+      }
+      if (!moved?.from || !moved.to) return;
+      const from = key(moved.from);
+      const to = key(moved.to);
+      setOpenId((id) => (id === from ? to : id));
+      setPageId((id) => (id === from ? to : id));
+      setTiles((prev) => prev.map((t) => (t.id === from ? { ...t, id: to } : t)));
+    };
+    es.addEventListener("artifacts", (e) => {
+      follow(artifactKey, (e as MessageEvent).data);
+      setArtifactTick((n) => n + 1);
+      window.dispatchEvent(new Event(ARTIFACTS_CHANGED));
+    });
+    es.addEventListener("notes", (e) => {
+      follow(noteKey, (e as MessageEvent).data);
+      window.dispatchEvent(new CustomEvent(NOTES_CHANGED, { detail: JSON.parse((e as MessageEvent).data) }));
+    });
+    es.addEventListener("drawings", (e) => {
+      follow(drawingKey, (e as MessageEvent).data);
+      window.dispatchEvent(new CustomEvent(DRAWINGS_CHANGED, { detail: JSON.parse((e as MessageEvent).data) }));
+    });
     es.addEventListener("services", (e) => setServices(JSON.parse((e as MessageEvent).data)));
     es.addEventListener("template-runs", () => setTemplateRunsKey((k) => k + 1));
 
@@ -644,16 +774,45 @@ export default function App() {
    * Opening a session: the drawer keeps you on the list, the page gives it room.
    * Cards also carry an explicit link that always goes to the page.
    */
+  /**
+   * Back goes to where you came from when that was a page in here, and
+   * otherwise one level up: a workspace's project, else the tab behind it.
+   */
+  const navDepth = useRef(0);
+  const upFromHere = useRef("");
+  useEffect(() => {
+    const moved = () => {
+      navDepth.current += 1;
+    };
+    window.addEventListener("hashchange", moved);
+    return () => window.removeEventListener("hashchange", moved);
+  }, []);
   const closePage = useCallback(() => {
-    window.location.hash = "";
+    if (navDepth.current > 0) {
+      navDepth.current -= 2;
+      window.history.back();
+    } else window.location.hash = upFromHere.current;
   }, []);
   // A PR page is a full page too: tiles hide and the dock deselects the same way.
   const workspacePage = workspacePageId === null ? null : (workspaces?.workspaces.find((w) => w.id === workspacePageId) ?? null);
-  const onFullPage = !!pageId || !!prRoute || !!workspacePage;
+  const projectPage = projectPageId === null ? null : (workspaces?.projects.find((p) => p.id === projectPageId) ?? null);
+  const projectWorkspaces = useMemo(
+    () => (projectPage ? (workspaces?.workspaces ?? []).filter((w) => w.projectId === projectPage.id && w.status !== "archived") : NO_WORKSPACES),
+    [projectPage, workspaces],
+  );
+  const onFullPage = !!pageId || !!prRoute || !!workspacePage || !!projectPage;
+  const openProject = useCallback((id: number) => {
+    window.location.hash = `#/project/${id}`;
+  }, []);
   const openWorkspace = useCallback((w: { id: number }) => {
     window.location.hash = `#/workspace/${w.id}`;
   }, []);
   const closeDrawer = useCallback(() => setOpenId(null), []);
+  const openServiceSettings = useCallback(() => {
+    localStorage.setItem("settings-section", "services");
+    window.location.hash = "";
+    setTab("settings");
+  }, []);
 
   // Persisted so a reload finds the same windows in the same places; re-saved
   // on every change rather than only on close, since a crash or a stray
@@ -830,6 +989,7 @@ export default function App() {
     [settings?.ui.clickOpensIn, settings?.ui.cmdClickOpensIn, settings?.ui.optionClickOpensIn, openTile],
   );
   useAnswerNextKey(blockedQueue, pageId ?? openId, openSession);
+  const servicesContext = useMemo(() => ({ state: services, open: openSession }), [services, openSession]);
   const followLink = useCallback(
     (href: string, gesture?: OpenGesture) => {
       if (!href) return;
@@ -917,6 +1077,16 @@ export default function App() {
       .filter((a) => onScreen.has(a.id) && a.at > (seen[a.id] ?? 0));
     if (stale.length > 0) sidebarPrefs.markSeen(stale.map((a) => a.id));
   }, [agents, onScreen]);
+  /** Running services that belong to a workspace: the ones started in its checkout. */
+  const runningServices = useMemo(
+    () =>
+      (services?.sessions ?? []).flatMap((session) => {
+        const path = sessionPath(services, session.name);
+        const ws = path ? workspaces?.workspaces.find((w) => w.folder === path && w.status === "active") : undefined;
+        return path && ws ? [{ session, path, workspaceId: ws.id }] : [];
+      }),
+    [services, workspaces],
+  );
   const sidebarSessions = useMemo(
     () => [
       ...buildSessions({ agents, live, titles, seen: sidebarSeen, visible: onScreen }),
@@ -954,8 +1124,29 @@ export default function App() {
         external: false,
         terminal: true,
       })),
+      ...runningServices.map((x) => {
+        const dead = x.session.panes.filter((p) => !p.alive).length;
+        return {
+          id: serviceKey(x.session.name),
+          ids: [serviceKey(x.session.name)],
+          agentKey: null,
+          title: x.session.serviceLabel,
+          cwd: x.path,
+          status: "idle" as const,
+          why: dead > 0 ? (dead === x.session.panes.length ? "Crashed" : `${dead} of ${x.session.panes.length} panes crashed`) : null,
+          pending: 0,
+          at: x.session.createdAt,
+          since: x.session.createdAt,
+          chat: false,
+          model: "",
+          external: false,
+          terminal: true,
+          service: true,
+          health: x.session.health,
+        };
+      }),
     ],
-    [agents, live, titles, sidebarSeen, onScreen, terminals, restorable],
+    [agents, live, titles, sidebarSeen, onScreen, terminals, restorable, runningServices],
   );
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   useEffect(() => {
@@ -968,11 +1159,21 @@ export default function App() {
   const workspaceArtifacts = useMemo(() => {
     const out = new Map<number, Artifact[]>();
     for (const a of artifacts) {
-      const homes = new Set(a.sessions.map((s) => workspaces?.sessions[s.id]).filter((id): id is number => id !== undefined));
+      const homes = a.link
+        ? new Set(a.link.workspaceId === null ? [] : [a.link.workspaceId])
+        : new Set(a.sessions.map((s) => workspaces?.sessions[s.id]).filter((id): id is number => id !== undefined));
       for (const id of homes) out.set(id, [...(out.get(id) ?? []), a]);
     }
     return out;
   }, [artifacts, workspaces]);
+  /** Artifacts put on a project as a whole, by hand. */
+  const projectArtifacts = useMemo(() => {
+    const out = new Map<number, Artifact[]>();
+    for (const a of artifacts) {
+      if (a.link && a.link.workspaceId === null && a.link.projectId !== null) out.set(a.link.projectId, [...(out.get(a.link.projectId) ?? []), a]);
+    }
+    return out;
+  }, [artifacts]);
   const sessionArtifacts = useMemo(() => {
     const out = new Map<string, Artifact[]>();
     for (const a of artifacts) for (const s of a.sessions) out.set(s.id, [...(out.get(s.id) ?? []), a]);
@@ -981,9 +1182,20 @@ export default function App() {
   const filedWorkspaces = useMemo(() => {
     if (!workspaces) return workspaces;
     const filed = { ...workspaces.sessions };
-    for (const t of terminals) if (t.workspaceId !== null) filed[terminalKey(t.id)] = t.workspaceId;
-    return { ...workspaces, sessions: filed };
-  }, [workspaces, terminals]);
+    const own = { ...(workspaces.projectSessions ?? {}) };
+    const folders = workspaces.projects.flatMap((p) => (p.folder ? [{ id: p.id, folder: p.folder }] : []));
+    for (const t of terminals) {
+      if (t.workspaceId !== null) filed[terminalKey(t.id)] = t.workspaceId;
+      else {
+        const home = folders
+          .filter((p) => t.folder === p.folder || t.folder.startsWith(`${p.folder}/`))
+          .sort((a, b) => b.folder.length - a.folder.length)[0];
+        if (home) own[terminalKey(t.id)] = home.id;
+      }
+    }
+    for (const x of runningServices) filed[serviceKey(x.session.name)] = x.workspaceId;
+    return { ...workspaces, sessions: filed, projectSessions: own };
+  }, [workspaces, terminals, runningServices]);
   const newTerminal = useCallback(
     (folder: string, workspaceId: number | null) => {
       terminalApi
@@ -1031,6 +1243,24 @@ export default function App() {
     setNewInWorkspace(workspaceId ?? null);
     setShowNew(true);
   }, []);
+  const newProjectTerminal = useCallback(
+    (projectId: number) => {
+      workspaceApi
+        .projectFolder(projectId)
+        .then((r) => newTerminal(r.folder, null))
+        .catch((e) => window.alert(e instanceof Error ? e.message : String(e)));
+    },
+    [newTerminal],
+  );
+  const startProjectSession = useCallback(
+    (projectId: number) => {
+      workspaceApi
+        .projectFolder(projectId)
+        .then((r) => startSessionIn(r.folder))
+        .catch((e) => window.alert(e instanceof Error ? e.message : String(e)));
+    },
+    [startSessionIn],
+  );
 
   const sidebar = (
     <Sidebar
@@ -1040,6 +1270,10 @@ export default function App() {
       onSelect={goTo}
       iconFor={pageIcon}
       collapsed={sidebarCollapsed}
+      away={sidebarAway}
+      peek={sidebarAway && sidebarPeek}
+      onPeek={sidebarAway ? peekSidebar : undefined}
+      onPin={toggleSidebarPin}
       appearance={appearance}
       blocked={blocked}
       thinking={thinking}
@@ -1060,10 +1294,15 @@ export default function App() {
         minimized={minimizedTiles}
         workspaceTasks={workspaceTasks}
         workspaceArtifacts={workspaceArtifacts}
+        projectArtifacts={projectArtifacts}
         sessionArtifacts={sessionArtifacts}
         onOpen={openSession}
-        onNewWorkspace={(folder) => setNewWorkspace({ folder: folder ?? null })}
+        onNewWorkspace={(folder, projectId) => setNewWorkspace({ folder: folder ?? null, projectId })}
+        onOpenProject={openProject}
+        activeProjectId={pageId ? null : (projectPage?.id ?? null)}
         onNewSession={startSessionIn}
+        onNewProjectSession={startProjectSession}
+        onNewProjectTerminal={newProjectTerminal}
         onOpenWorkspace={openWorkspace}
         onNewTerminal={newTerminal}
         activeWorkspaceId={pageId ? null : (workspacePage?.id ?? null)}
@@ -1078,14 +1317,40 @@ export default function App() {
     </Sidebar>
   );
 
+  const projectOf = (id: number | null | undefined) => (id == null ? null : (workspaces?.projects.find((p) => p.id === id) ?? null));
+  const pageWorkspace = pageId
+    ? (workspaceOf(pageId) ?? workspaces?.workspaces.find((w) => w.id === filedWorkspaces?.sessions[pageId]) ?? null)
+    : workspacePage;
+  const pageProject = projectPage
+    ? null
+    : (projectOf(pageWorkspace?.projectId) ??
+      projectOf(pageId ? filedWorkspaces?.projectSessions?.[pageId] : null) ??
+      projectOf(pageId && isArtifactKey(pageId) ? artifacts.find((a) => a.slug === artifactSlugOf(pageId))?.link?.projectId : null));
+  upFromHere.current = workspacePage && pageProject && !pageProject.generalKey ? `#/project/${pageProject.id}` : "";
+  /** What the page on screen sits inside, outermost first: the tab, then its project and workspace when it has them. */
+  const parents: { label: string; go: () => void }[] = [
+    ...(projectPage || pageProject ? [{ label: TAB_LABEL.projects || "Projects", go: () => goTo("projects") }] : []),
+    ...(pageProject ? [{ label: pageProject.name, go: () => openProject(pageProject.id) }] : []),
+    ...(pageId && pageWorkspace ? [{ label: pageWorkspace.repoName, go: () => openWorkspace(pageWorkspace) }] : []),
+  ];
   const crumb = pageId
-    ? isTerminalKey(pageId)
+    ? isServiceKey(pageId)
+      ? (services?.sessions.find((x) => x.name === serviceSessionOf(pageId))?.serviceLabel ?? "Service")
+      : isTerminalKey(pageId)
       ? (terminals.find((t) => terminalKey(t.id) === pageId)?.title ?? "Terminal")
       : isArtifactKey(pageId)
         ? (artifacts.find((a) => a.slug === artifactSlugOf(pageId))?.title ?? "Artifact")
+        : isDrawingKey(pageId)
+          ? "Drawing"
+          : isNoteKey(pageId)
+            ? noteName(notePathOf(pageId))
         : (agentFor(pageId)?.title ?? "Session")
-    : workspacePage
-      ? workspaceTitle(workspacePage)
+    : projectPage
+      ? projectPage.name
+      : workspacePage
+      ? pageProject && !pageProject.generalKey
+        ? `${workspacePage.repoName}${workspacePage.branch ? ` · ${workspacePage.branch}` : ""}`
+        : workspaceTitle(workspacePage)
       : prRoute
         ? "Pull request"
         : TAB_LABEL[tab] || "Desktop";
@@ -1104,6 +1369,16 @@ export default function App() {
         <button className="topbar-crumb" onClick={() => goTo("live")}>
           {appName}
         </button>
+        {parents.map((p) => (
+          <Fragment key={p.label}>
+            <span className="topbar-crumb-sep" aria-hidden>
+              ›
+            </span>
+            <button className="topbar-crumb" onClick={p.go}>
+              {p.label}
+            </button>
+          </Fragment>
+        ))}
         <span className="topbar-crumb-sep" aria-hidden>
           ›
         </span>
@@ -1129,16 +1404,21 @@ export default function App() {
 
   return (
     <WeekStartContext.Provider value={settings?.ui.calendarWeekStart ?? 1}>
+    <ServicesContext.Provider value={servicesContext}>
     <div className="app">
       {sidebar}
+      {sidebarAway && <div className="sidebar-edge" aria-hidden="true" onMouseEnter={() => peekSidebar(true)} onMouseLeave={() => peekSidebar(false)} />}
       <div className="app-main">
         {topbar}
         <div className="shell">
+      {pageId && isServiceKey(pageId) && <ServicePage id={pageId} onBack={closePage} />}
       {pageId && isTerminalKey(pageId) && (
         <TerminalPage id={pageId} onBack={closePage} onOpenWorkspace={(id) => openWorkspace({ id })} />
       )}
       {pageId && isArtifactKey(pageId) && <ArtifactPage id={pageId} onBack={closePage} />}
-      {pageId && !isTerminalKey(pageId) && !isArtifactKey(pageId) && (
+      {pageId && isDrawingKey(pageId) && <DrawingPage id={pageId} onBack={closePage} />}
+      {pageId && isNoteKey(pageId) && <NotePage id={pageId} onBack={closePage} onOpen={(key) => openSession(key, { full: true })} />}
+      {pageId && !isTerminalKey(pageId) && !isServiceKey(pageId) && !isArtifactKey(pageId) && !isDrawingKey(pageId) && !isNoteKey(pageId) && (
         <SessionPage
           id={sessionIdFor(pageId) ?? pageId}
           agent={agentFor(pageId)}
@@ -1176,6 +1456,41 @@ export default function App() {
             setNewIn(path);
             setShowNew(true);
           }}
+          services={services}
+          onOpenServiceSettings={openServiceSettings}
+          project={workspaces?.projects.find((p) => p.id === workspacePage.projectId) ?? null}
+          siblings={(workspaces?.workspaces ?? []).filter((o) => o.id !== workspacePage.id && o.projectId === workspacePage.projectId && o.status !== "archived").length}
+        />
+      )}
+
+      {projectPage && !pageId && (
+        <ProjectPage
+          key={projectPage.id}
+          project={projectPage}
+          workspaces={projectWorkspaces}
+          sessions={sidebarSessions.filter((s) =>
+            s.ids.some(
+              (id) => projectWorkspaces.some((w) => filedWorkspaces?.sessions[id] === w.id) || filedWorkspaces?.projectSessions?.[id] === projectPage.id,
+            ),
+          )}
+          sessionHomes={filedWorkspaces?.sessions ?? NO_HOMES}
+          artifacts={[
+            ...new Map(
+              [...(projectArtifacts.get(projectPage.id) ?? NO_ARTIFACTS), ...projectWorkspaces.flatMap((w) => workspaceArtifacts.get(w.id) ?? NO_ARTIFACTS)].map((a) => [a.slug, a]),
+            ).values(),
+          ]}
+          tasks={(tasks?.tasks ?? [])
+            .filter((t) => (t.workspaceId !== null && projectWorkspaces.some((w) => w.id === t.workspaceId)) || (t.workProjectId ?? null) === projectPage.id)
+            .sort((a, b) => Number(a.completedAt !== null) - Number(b.completedAt !== null) || a.order - b.order)}
+          services={services}
+          onBack={closePage}
+          onOpenSession={openSession}
+          onNewSession={startSessionIn}
+          onNewProjectSession={startProjectSession}
+          onNewProjectTerminal={newProjectTerminal}
+          onNewTerminal={newTerminal}
+          onNewWorkspace={(folder, projectId) => setNewWorkspace({ folder: folder ?? null, projectId })}
+          onOpenServiceSettings={openServiceSettings}
         />
       )}
 
@@ -1198,7 +1513,7 @@ export default function App() {
         />
       )}
 
-      {!onFullPage && usage && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "services" && tab !== "templates" && tab !== "tasks" && tab !== "calendar" && tab !== "history" && (
+      {!onFullPage && usage && tab !== "live" && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "drawings" && tab !== "notes" && tab !== "projects" && tab !== "services" && tab !== "templates" && tab !== "tasks" && tab !== "calendar" && tab !== "history" && (
         <div className="kpis">
           {/* Tokens here are fresh tokens: cache reads are excluded and shown
               separately, since they are ~97% of raw volume at a tenth the rate. */}
@@ -1276,18 +1591,18 @@ export default function App() {
         />
       )}
       {!onFullPage && tab === "live" && (
-        <LiveView
-          live={live}
-          agents={agents}
-          restorable={restorable}
-          titles={titles}
+        <HomeView
+          sessions={sidebarSessions}
+          payload={filedWorkspaces}
+          tasks={tasks}
+          usage={usage}
+          watches={prWatches.watches}
+          calendarHidden={settings?.ui.calendarHidden ?? []}
           onOpen={openSession}
-          // Before init lands there is no session id yet, so the key stands in.
-          onOpenAgent={(a, opts) => openSession(a.sessionId ?? a.key, opts)}
           onNew={() => setShowNew(true)}
-          onManageFolders={() => setShowFolders(true)}
-          settings={settings}
-          onSettings={setSettings}
+          onOpenProject={openProject}
+          onOpenWorkspace={openWorkspace}
+          onGo={goTo}
         />
       )}
       {!onFullPage && tab === "tasks" && (
@@ -1298,6 +1613,8 @@ export default function App() {
           focusTaskId={focusTaskId}
           onFocused={clearFocusTask}
           workspaces={workspaces?.workspaces ?? []}
+          workProjects={workspaces?.projects ?? NO_PROJECT_LIST}
+          onOpenWorkProject={openProject}
           onStartWorkspace={(task) => {
             const repo = tasks?.projects.find((p) => p.id === task.projectId)?.repoKey ?? null;
             const folder = repo?.startsWith("repo:") ? repo.slice(5).replace(/\/\.git$/, "") : null;
@@ -1330,8 +1647,20 @@ export default function App() {
         />
       )}
       {!onFullPage && tab === "artifacts" && (
-        <ArtifactsView onOpenSession={openSession} reloadKey={artifactTick} />
+        <ArtifactsView projects={workspaces?.projects ?? NO_PROJECT_LIST} onOpenSession={openSession} reloadKey={artifactTick} />
       )}
+      {!onFullPage && tab === "projects" && (
+        <ProjectsView
+          projects={workspaces?.projects ?? NO_PROJECT_LIST}
+          workspaces={workspaces?.workspaces ?? NO_WORKSPACES}
+          sessions={sidebarSessions}
+          sessionHomes={filedWorkspaces?.sessions ?? NO_HOMES}
+          tasks={tasks?.tasks ?? NO_TASKS}
+          onOpen={openProject}
+        />
+      )}
+      {!onFullPage && tab === "notes" && <NotesView onOpen={openSession} />}
+      {!onFullPage && tab === "drawings" && <DrawingsView projects={workspaces?.projects ?? NO_PROJECT_LIST} onOpen={openSession} />}
       {!onFullPage && tab === "worktrees" && (
         <WorktreesView
           settings={settings}
@@ -1356,6 +1685,7 @@ export default function App() {
       {!onFullPage && tab === "services" && (
         <ServicesView
           state={services}
+          workspaces={workspaces}
           settings={settings}
           onSettings={setSettings}
           onOpenSettings={() => {
@@ -1420,7 +1750,31 @@ export default function App() {
       )}
       {showPalette && (
         <Palette
-          agents={agents}
+          sessions={sidebarSessions}
+          payload={filedWorkspaces}
+          tasks={tasks}
+          artifacts={artifacts}
+          context={
+            projectPage
+              ? { projectId: projectPage.id, workspaceId: null, name: projectPage.name }
+              : workspacePage
+                ? { projectId: workspacePage.projectId, workspaceId: workspacePage.id, name: workspaceTitle(workspacePage) }
+                : null
+          }
+          onNewChat={() => {
+            setNewChat(true);
+            setShowNew(true);
+          }}
+          onNewWorkspace={(projectId) => setNewWorkspace({ folder: null, projectId })}
+          onNewProjectSession={startProjectSession}
+          onNewProjectTerminal={newProjectTerminal}
+          onOpenProject={openProject}
+          onOpenWorkspace={openWorkspace}
+          onOpenTask={(id) => {
+            setFocusTaskId(id);
+            goTo("tasks");
+          }}
+          pageIcons={TAB_ICON}
           projects={projects}
           recent={recent}
           appearance={appearance}
@@ -1463,6 +1817,8 @@ export default function App() {
         <NewWorkspaceDialog
           initialFolder={newWorkspace.folder}
           initialGoal={newWorkspace.task?.content ?? ""}
+          projectId={newWorkspace.projectId}
+          project={workspaces?.projects.find((p) => p.id === newWorkspace.projectId && !p.generalKey) ?? null}
           projects={projects}
           onClose={() => setNewWorkspace(null)}
           onCreated={(w, startChat) => {
@@ -1501,6 +1857,7 @@ export default function App() {
         </div>
       </div>
     </div>
+    </ServicesContext.Provider>
     </WeekStartContext.Provider>
   );
 }

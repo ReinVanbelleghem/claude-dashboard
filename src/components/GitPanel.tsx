@@ -6,6 +6,7 @@ import {
   settingsApi,
   type SettingsPatch,
   type ChangedFile,
+  type DiffRange,
   type DiffScope,
   type RepoStatus,
   type ReviewComment,
@@ -99,8 +100,13 @@ export const GitPanel = memo(function GitPanel({
   agentKey,
   targets,
   onOpenSession,
+  range = null,
+  onClearRange,
 }: {
   repo: GitRepo;
+  /** Show what lies between two refs, one layer of a stack, where "Whole branch" would be. */
+  range?: (DiffRange & { label: string }) | null;
+  onClearRange?: () => void;
   settings: Settings | null;
   onSettings: (s: Settings) => void;
   /** The session driving this directory, when the dashboard owns one. */
@@ -193,8 +199,15 @@ export const GitPanel = memo(function GitPanel({
   // The file list for branch scope is a different query from the worktree status.
   useEffect(() => {
     if (scope !== "branch" || !status?.isRepo) return;
-    gitApi.branchFiles(cwd).then((r) => setBranchList(r.files)).catch(() => setBranchList([]));
-  }, [scope, cwd, status?.isRepo, status?.head, edits]);
+    gitApi.branchFiles(cwd, range).then((r) => setBranchList(r.files)).catch(() => setBranchList([]));
+  }, [scope, cwd, status?.isRepo, status?.head, edits, range?.base, range?.head]);
+
+  useEffect(() => {
+    if (!range) return;
+    scopeChosen.current = true;
+    setScope("branch");
+    setFile(null);
+  }, [range?.base, range?.head]);
 
 
   const scopeChosen = useRef(false);
@@ -212,11 +225,11 @@ export const GitPanel = memo(function GitPanel({
     if (!cwd || status?.isRepo === false) return;
     setLoading(true);
     gitApi
-      .diff({ cwd, scope, path: file ?? undefined, ignoreWhitespace: ignoreWs })
+      .diff({ cwd, scope, range, path: file ?? undefined, ignoreWhitespace: ignoreWs })
       .then((r) => setPatch(r.patch))
       .catch(() => setPatch(""))
       .finally(() => setLoading(false));
-  }, [cwd, scope, file, ignoreWs, status?.isRepo, status?.head, worktreeStamp, edits]);
+  }, [cwd, scope, file, ignoreWs, status?.isRepo, status?.head, worktreeStamp, edits, range?.base, range?.head]);
 
 
   /**
@@ -529,14 +542,27 @@ export const GitPanel = memo(function GitPanel({
             {(status.counts.staged + status.counts.unstaged + status.counts.untracked) > 0 && <em>{(status.counts.staged + status.counts.unstaged + status.counts.untracked)}</em>}
           </button>
           <button role="tab" aria-selected={showing === "branch"} className={showing === "branch" ? "active" : ""} onClick={() => show("branch")}>
-            Whole branch
+            {range ? range.label : "Whole branch"}
             {branchList && branchList.length > 0 && <em>{branchList.length}</em>}
           </button>
         </div>
-        <span className="git-bar-meta">
-          {status.base && !status.onBase && `${status.aheadOfBase} commit${status.aheadOfBase === 1 ? "" : "s"} over ${status.base}`}
-          {status.onBase && status.base && `On the base branch (${status.base})`}
-        </span>
+        {range ? (
+          <span className="git-bar-meta git-bar-range">
+            <span title={`${range.base}...${range.head}`}>
+              {range.head} over {range.base}
+            </span>
+            {onClearRange && (
+              <button className="link-btn" onClick={onClearRange}>
+                Show the whole branch
+              </button>
+            )}
+          </span>
+        ) : (
+          <span className="git-bar-meta">
+            {status.base && !status.onBase && `${status.aheadOfBase} commit${status.aheadOfBase === 1 ? "" : "s"} over ${status.base}`}
+            {status.onBase && status.base && `On the base branch (${status.base})`}
+          </span>
+        )}
             <div className="seg">
               <button className={mode === "unified" ? "active" : ""} onClick={() => saveUi({ diffMode: "unified" })}>
                 Unified

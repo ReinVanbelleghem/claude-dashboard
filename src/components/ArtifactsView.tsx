@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { artifactApi, fmtAgo, shortPath, type Artifact, type ArtifactTag } from "../api.ts";
+import { artifactApi, fmtAgo, shortPath, type Artifact, type ArtifactTag, type Project } from "../api.ts";
+import { artifactKey } from "../../shared/artifacts.ts";
+import { parseProjectFileId } from "../../shared/projectFiles.ts";
+import { Popover } from "./Popover.tsx";
 import { FindBar } from "./FindBar.tsx";
-import { ArtifactIcon, ExternalIcon, EyeIcon, EyeOffIcon, PinIcon, PlusIcon, PulseIcon, RefreshIcon, TagIcon, TrashIcon, XIcon } from "./Icons.tsx";
+import { ArtifactIcon, ExternalIcon, FolderIcon, EyeIcon, EyeOffIcon, PinIcon, PlusIcon, PulseIcon, RefreshIcon, TagIcon, TrashIcon, XIcon } from "./Icons.tsx";
 
 /**
  * Every HTML page a session has generated.
@@ -20,10 +23,13 @@ import { ArtifactIcon, ExternalIcon, EyeIcon, EyeOffIcon, PinIcon, PlusIcon, Pul
  * by any text plus any number of tags, and pinned artifacts lead the grid.
  */
 export function ArtifactsView({
+  projects = [],
   onOpenSession,
   reloadKey,
 }: {
-  onOpenSession: (id: string) => void;
+  /** Where an artifact can be moved to. */
+  projects?: Project[];
+  onOpenSession: (id: string, opts?: { full?: boolean; option?: boolean }) => void;
   /** Bumped by the SSE `artifacts` event when the daemon notices a change on disk. */
   reloadKey?: number;
 }) {
@@ -37,7 +43,6 @@ export function ArtifactsView({
   const [sort, setSort] = useState<SortKey>("recent");
   const [group, setGroup] = useState<GroupKey>("none");
   const [showHidden, setShowHidden] = useState(false);
-  const [preview, setPreview] = useState<Artifact | null>(null);
 
   const load = useCallback(() => {
     artifactApi
@@ -148,7 +153,7 @@ export function ArtifactsView({
       <div className="artifacts-head">
         <div>
           <p className="hint">
-            Indexed from <code>{root || "the artifact folder"}</code>
+            Indexed from <code>{root || "the artifact folder"}</code> and each project's <code>artifacts</code> folder
           </p>
         </div>
         <div className="artifacts-tools">
@@ -256,11 +261,18 @@ export function ArtifactsView({
                     port={port}
                     knownTags={tags.map((t) => t.tag)}
                     onOpenSession={onOpenSession}
-                    onPreview={() => setPreview(a)}
+                    onOpen={(opts) => onOpenSession(artifactKey(a.slug), opts)}
                     onDelete={() => remove(a)}
                     onPin={() => artifactApi.pin(a.slug, !a.pinned).then((r) => patch(r.artifact))}
                     onHide={() => artifactApi.hide(a.slug, !a.hidden).then((r) => patch(r.artifact))}
                     onTags={(next) => saveTags(a, next)}
+                    projects={projects}
+                    onMove={(projectId) =>
+                      artifactApi
+                        .link(a.slug, { projectId, workspaceId: null })
+                        .then(load)
+                        .catch((e: Error) => setError(e.message))
+                    }
                   />
                 ))}
               </div>
@@ -269,9 +281,6 @@ export function ArtifactsView({
         </>
       )}
 
-      {preview && port !== null && (
-        <ArtifactOverlay artifact={preview} port={port} onClose={() => setPreview(null)} />
-      )}
     </div>
   );
 }
@@ -305,23 +314,33 @@ function ArtifactCard({
   port,
   knownTags,
   onOpenSession,
-  onPreview,
+  onOpen,
   onDelete,
   onPin,
   onHide,
   onTags,
+  projects,
+  onMove,
 }: {
+  /** Projects the artifact can be moved into; null moves it out of every project. */
+  projects: Project[];
+  onMove: (projectId: number | null) => void;
   artifact: Artifact;
   port: number | null;
   knownTags: string[];
   onOpenSession: (id: string) => void;
-  onPreview: () => void;
+  /** Opens the artifact where Settings → Sessions sends that click. */
+  onOpen: (opts: { full: boolean; option: boolean }) => void;
   onDelete: () => void;
   onPin: () => void;
   onHide: () => void;
   onTags: (tags: string[]) => Promise<void> | void;
 }) {
   const href = port !== null && !a.missing ? artifactApi.url(a.slug, port) : null;
+  const inProject = parseProjectFileId(a.slug).projectId;
+  const home = inProject !== null ? inProject : (a.link?.projectId ?? null);
+  const homeName = home === null ? null : (projects.find((p) => p.id === home)?.name ?? null);
+  const [moving, setMoving] = useState<HTMLElement | null>(null);
   const cwd = a.sessions.find((s) => s.cwd)?.cwd ?? null;
   const session = a.sessions[a.sessions.length - 1] ?? null;
   const [adding, setAdding] = useState(false);
@@ -341,7 +360,13 @@ function ArtifactCard({
 
   return (
     <div className={`artifact-card${a.missing ? " missing" : ""}${a.pinned ? " pinned" : ""}`}>
-      <button className="artifact-thumb" onClick={onPreview} disabled={a.missing} title={a.missing ? "No longer on disk" : "Preview"}>
+      <button
+        className="artifact-thumb"
+        onClick={(e) => onOpen({ full: e.metaKey || e.ctrlKey, option: e.altKey })}
+        onAuxClick={(e) => e.button === 1 && onOpen({ full: true, option: false })}
+        disabled={a.missing}
+        title={a.missing ? "No longer on disk" : "Open"}
+      >
         {href ? <ArtifactFrame src={href} title={a.title} /> : <div className="artifact-thumb-gone">gone</div>}
       </button>
 
@@ -442,6 +467,45 @@ function ArtifactCard({
               <a className="icon-btn" href={href} target="_blank" rel="noreferrer" title="Open in a new tab">
                 <ExternalIcon />
               </a>
+            )}
+            {!a.missing && (
+              <button
+                className="icon-btn"
+                onClick={(e) => setMoving(e.currentTarget)}
+                title={homeName ? `In ${homeName}${inProject === null ? ", kept in the shared folder" : ""}. Move to another project…` : "Move to a project…"}
+              >
+                <FolderIcon />
+              </button>
+            )}
+            {moving && (
+              <Popover anchor={moving} onClose={() => setMoving(null)} className="drawing-menu">
+                <div className="svc-menu-heading">Move to</div>
+                <button
+                  role="menuitem"
+                  disabled={inProject === null && home === null}
+                  onClick={() => {
+                    onMove(null);
+                    setMoving(null);
+                  }}
+                >
+                  <span className="ws-menu-label">No project</span>
+                </button>
+                {projects
+                  .filter((p) => !p.generalKey?.startsWith("review:") && !p.archivedAt)
+                  .map((p) => (
+                    <button
+                      key={p.id}
+                      role="menuitem"
+                      disabled={p.id === home && (inProject !== null || !!p.generalKey)}
+                      onClick={() => {
+                        onMove(p.id);
+                        setMoving(null);
+                      }}
+                    >
+                      <span className="ws-menu-label">{p.generalKey ? `${p.name} (general)` : p.name}</span>
+                    </button>
+                  ))}
+              </Popover>
             )}
             <button className="icon-btn" onClick={onHide} title={a.hidden ? "Show again" : "Hide from the grid"} aria-pressed={a.hidden}>
               {a.hidden ? <EyeIcon /> : <EyeOffIcon />}

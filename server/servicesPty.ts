@@ -11,7 +11,7 @@ import { TERMINAL_SESSION_PREFIX } from "./terminals.ts";
  * so two open tabs do not squeeze each other down to the smaller one — and detaching
  * or closing a tab never disturbs what is actually running.
  */
-const VIEW_PREFIX = "dashview";
+const VIEW_PREFIX = `${process.env.DASHBOARD_TMUX_PREFIX ?? "dash"}view`;
 const WINDOW = "dev";
 const BROKER = join(import.meta.dir, "ptyBroker.py");
 const PYTHON = process.env.DASHBOARD_PYTHON ?? "python3";

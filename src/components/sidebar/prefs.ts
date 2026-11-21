@@ -5,6 +5,8 @@ export type SidebarPrefs = {
   folds: Record<string, boolean>;
   seen: Record<string, number>;
   onlyNeeds: boolean;
+  /** The order you dragged the things under a project into, by project: its workspaces and its groups of pages, notes and drawings. */
+  order?: Record<string, string[]>;
 };
 
 const KEY = "sidebar-tree";
@@ -40,6 +42,7 @@ export const sidebarPrefs = {
   },
   fold: (key: string, folded: boolean) => set({ folds: { ...state.folds, [key]: folded } }),
   setOnlyNeeds: (onlyNeeds: boolean) => set({ onlyNeeds }),
+  setOrder: (project: string, keys: string[]) => set({ order: { ...state.order, [project]: keys } }),
   markSeen(ids: string[], at = Date.now()) {
     if (ids.length === 0) return;
     const seen = { ...state.seen };

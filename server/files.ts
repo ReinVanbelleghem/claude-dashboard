@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { invalidateStatus, listFiles, repoStatus, safePath } from "./git.ts";
+import { grep as gitGrep, invalidateStatus, listFiles, repoStatus, safePath } from "./git.ts";
+import { projectFolderHolding } from "./paths.ts";
 
 /**
  * Reading and writing one file inside a session's repository, for the editor in the
@@ -60,14 +61,14 @@ async function locate(
    * the isFile() check below would wave it through, and writing to it severs the
    * worktree from its repository.
    */
-  if (rel === ".git" || rel.startsWith(".git/")) return { error: "not editable: .git" };
+  if (rel.split("/").includes(".git")) return { error: "not editable: .git" };
 
-  const status = await repoStatus(cwd);
-  if (!status.isRepo || !status.root) return { error: "not a git repository" };
+  const base = await baseOf(cwd);
+  if (!base) return { error: "not a git repository" };
 
   let root: string;
   try {
-    root = realpathSync(status.root);
+    root = realpathSync(base.root);
   } catch {
     return { error: "cannot resolve the repository root" };
   }
@@ -88,6 +89,100 @@ async function locate(
   }
 
   return { abs: real, root };
+}
+
+/**
+ * The folder a file path is relative to: the repository `cwd` is in, or, outside
+ * any repository, the project folder it is in. Nothing else on the disk is
+ * browsed or edited from here.
+ */
+async function baseOf(cwd: string): Promise<{ root: string; git: boolean } | null> {
+  const status = await repoStatus(cwd);
+  if (status.isRepo && status.root) return { root: status.root, git: true };
+  const folder = projectFolderHolding(cwd);
+  return folder ? { root: folder, git: false } : null;
+}
+
+const WALK_LIMIT = 5_000;
+const GREP_FILE_BYTES = 1_000_000;
+
+/**
+ * Every file under a plain folder, as paths from it, and the checkouts inside
+ * it. A checkout, a project's worktree, is not walked: it is a repository of
+ * its own, mostly build output to a raw walk, and git is asked about it instead.
+ */
+function plainFiles(root: string, checkouts: string[] = []): string[] {
+  const out: string[] = [];
+  const queue = [""];
+  while (queue.length > 0 && out.length < WALK_LIMIT) {
+    const rel = queue.shift()!;
+    let entries;
+    try {
+      entries = readdirSync(join(root, rel), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    if (rel && entries.some((e) => e.name === ".git")) {
+      checkouts.push(rel);
+      continue;
+    }
+    for (const e of entries) {
+      if (e.name.startsWith(".")) continue;
+      const next = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name)) queue.push(next);
+      } else if (e.isFile()) out.push(next);
+      if (out.length >= WALK_LIMIT) break;
+    }
+  }
+  return out.sort();
+}
+
+export type TextHit = { path: string; line: number; column: number; text: string };
+
+/** Search the text of a plain folder's files: what `git grep` answers inside a repository. */
+export async function grepFolder(
+  cwd: string,
+  query: string,
+  opts: { caseSensitive?: boolean; regex?: boolean } = {},
+): Promise<{ ok: boolean; hits: TextHit[]; truncated: boolean; error: string | null } | null> {
+  const base = await baseOf(cwd);
+  if (!base || base.git) return null;
+  if (!query) return { ok: true, hits: [], truncated: false, error: null };
+  let pattern: RegExp;
+  try {
+    pattern = new RegExp(opts.regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), opts.caseSensitive ? "" : "i");
+  } catch (err) {
+    return { ok: false, hits: [], truncated: false, error: err instanceof Error ? err.message : "bad pattern" };
+  }
+  const hits: TextHit[] = [];
+  const checkouts: string[] = [];
+  for (const path of plainFiles(base.root, checkouts)) {
+    const file = Bun.file(join(base.root, path));
+    if (file.size > GREP_FILE_BYTES) continue;
+    const text = await file.text().catch(() => "");
+    if (!text || text.includes("\0")) continue;
+    let inFile = 0;
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length && inFile < 50; i++) {
+      const m = pattern.exec(lines[i]!);
+      if (!m) continue;
+      if (hits.length >= 1000) return { ok: true, hits, truncated: true, error: null };
+      hits.push({ path, line: i + 1, column: m.index + 1, text: lines[i]!.slice(0, 400) });
+      inFile++;
+    }
+  }
+  let truncated = false;
+  for (const checkout of checkouts) {
+    const found = await gitGrep(join(base.root, checkout), query, opts);
+    if (!found.ok) continue;
+    truncated ||= found.truncated;
+    for (const hit of found.hits) {
+      if (hits.length >= 1000) return { ok: true, hits, truncated: true, error: null };
+      hits.push({ ...hit, path: `${checkout}/${hit.path}` });
+    }
+  }
+  return { ok: true, hits, truncated, error: null };
 }
 
 // ── browsing, to open a file that no diff mentions ────────────────────────────
@@ -133,19 +228,25 @@ export async function browse(
   opts: { path?: string; q?: string } = {},
 ): Promise<Browse> {
   const empty = { root: null, path: "", parent: null, entries: [], truncated: false };
-  const status = await repoStatus(cwd);
-  if (!status.isRepo || !status.root) return { ok: false, ...empty, error: "not a git repository" };
+  const base = await baseOf(cwd);
+  if (!base) return { ok: false, ...empty, error: "not a git repository" };
 
   let root: string;
   try {
-    root = realpathSync(status.root);
+    root = realpathSync(base.root);
   } catch {
     return { ok: false, ...empty, error: "cannot resolve the repository root" };
   }
 
   const q = opts.q?.trim().toLowerCase() ?? "";
   if (q) {
-    const all = await listFiles(cwd);
+    let all: string[];
+    if (base.git) all = await listFiles(cwd);
+    else {
+      const checkouts: string[] = [];
+      all = plainFiles(root, checkouts);
+      for (const checkout of checkouts) all.push(...(await listFiles(join(root, checkout))).map((p) => `${checkout}/${p}`));
+    }
     const hits = all.filter((p) => p.toLowerCase().includes(q));
     return {
       ok: true,

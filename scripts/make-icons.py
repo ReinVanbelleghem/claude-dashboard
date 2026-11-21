@@ -2,14 +2,15 @@
 
 These are only the pre-paint fallback and the answer to a bare /favicon.ico request:
 the icon you actually see comes from Settings > Appearance and is generated in the
-browser as a data URL. This script keeps that fallback in sync with the default
+browser as a data URL. With `--app-icon <file>` it writes the 1024px image the macOS
+app's Dock icon is built from instead, and leaves public/ alone. This script keeps that fallback in sync with the default
 glyph, and has no dependencies, so `python3 scripts/make-icons.py` just works.
 
 It rasterises the same shapes as the "prompt" glyph by supersampled point-in-shape
 tests, rather than parsing SVG, which is why the geometry is repeated here.
 """
 
-import struct, zlib, math
+import struct, sys, zlib, math
 
 TILE=(0xd9,0x59,0x26); MARK=(255,255,255)
 
@@ -44,12 +45,30 @@ def render(n,ss=4):
             px += bytes(col)+bytes([round(a*255)])
     return bytes(px)
 
-def png(n):
-    raw=render(n)
+def padded(n,inner):
+    """The tile at `inner` pixels in the middle of a transparent `n` pixel canvas: the margin macOS expects around a Dock icon."""
+    tile=render(inner); off=(n-inner)//2; row=inner*4+1; out=bytearray()
+    for j in range(n):
+        out.append(0)
+        if off<=j<off+inner:
+            line=tile[(j-off)*row+1:(j-off+1)*row]
+            out+=bytes(off*4)+line+bytes((n-off-inner)*4)
+        else:
+            out+=bytes(n*4)
+    return bytes(out)
+
+def png(n,inner=None):
+    raw=padded(n,inner) if inner else render(n)
     def chunk(t,d):
         c=t+d; return struct.pack(">I",len(d))+c+struct.pack(">I",zlib.crc32(c)&0xffffffff)
     return (b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",struct.pack(">IIBBBBB",n,n,8,6,0,0,0))
             +chunk(b"IDAT",zlib.compress(raw,9))+chunk(b"IEND",b""))
+
+if "--app-icon" in sys.argv:
+    out=sys.argv[sys.argv.index("--app-icon")+1]
+    open(out,"wb").write(png(1024,824))
+    print("ok",out)
+    sys.exit(0)
 
 sizes=[16,32,48,64,128,180,256]
 imgs={n:png(n) for n in sizes}

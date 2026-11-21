@@ -138,6 +138,12 @@ export type Settings = {
      * field keeps following the environment rather than freezing today's value.
      */
     artifactsRoot: string;
+    /** Where drawings are kept. Empty means the built-in default, ~/drawings. */
+    drawingsRoot: string;
+    /** Where notes are kept. Empty means the built-in default, ~/Notes. */
+    notesRoot: string;
+    /** Where a new project's folder is made. Empty means the built-in default, ~/projects. */
+    projectsRoot?: string;
     /**
      * Dock pages turned off, by key. Absent means every page is on, so a page added
      * later arrives visible rather than silently hidden by an older settings file.
@@ -337,6 +343,9 @@ const DEFAULTS: Settings = {
     // Match the old hardcoded behavior exactly, so nobody's click behavior
     // changes just because these settings now exist.
     artifactsRoot: "",
+    drawingsRoot: "",
+    notesRoot: "",
+    projectsRoot: "",
     hiddenPages: [],
     pageOrder: [],
     footerPages: ["settings"],

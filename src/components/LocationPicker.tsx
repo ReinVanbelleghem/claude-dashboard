@@ -9,7 +9,7 @@ import { FolderIcon, GitIcon, PlusIcon, SearchIcon, WorktreeIcon } from "./Icons
  * say it before anything is created. The server decides for real — this only has to
  * agree with it.
  */
-function worktreePathFor(mainRoot: string, branch: string): string {
+function worktreePathFor(mainRoot: string, branch: string, inProject?: { folder: string | null; taken: string[] }): string {
   const slug =
     branch
       .trim()
@@ -19,6 +19,11 @@ function worktreePathFor(mainRoot: string, branch: string): string {
       .slice(0, 80) || "worktree";
   const parent = mainRoot.split("/").slice(0, -1).join("/");
   const name = mainRoot.split("/").filter(Boolean).pop() ?? "repo";
+  if (inProject) {
+    if (!inProject.folder) return `${name} in the project's folder`;
+    const plain = `${inProject.folder}/${name}`;
+    return (inProject.taken.includes(plain) ? `${plain}-${slug}` : plain).replace(/^\/Users\/[^/]+/, "~");
+  }
   return `${parent}/${name}-${slug}`.replace(/^\/Users\/[^/]+/, "~");
 }
 
@@ -43,7 +48,13 @@ export type CheckoutChoice = "here" | "new" | (string & {});
  * "where": the saved shortlist, the chosen directory, what git says about it, and which
  * checkout of it to use.
  */
-export function useLocation(opts: { initialCwd: string | null; initialResearch?: boolean; projects: { path: string }[] }) {
+export function useLocation(opts: {
+  initialCwd: string | null;
+  initialResearch?: boolean;
+  projects: { path: string }[];
+  /** The project a new worktree is for, when it keeps a folder of its own: the checkout is made inside it. */
+  project?: { id: number; folder?: string | null } | null;
+}) {
   const { initialCwd, projects } = opts;
   const [favourites, setFavourites] = useState<Favourite[] | null>(null);
   const [cwd, setCwd] = useState(initialCwd ?? "");
@@ -150,7 +161,7 @@ export function useLocation(opts: { initialCwd: string | null; initialResearch?:
     if (wtSel === "here") return { dir };
     if (wtSel !== "new") return { dir: repo?.root ? sameSpotIn(repo.root, dir, wtSel) : wtSel };
     if (!wtBranch) return { error: "Pick the branch for the new worktree." };
-    const r = await gitApi.worktreeAdd(dir, wtBranch.name, { create: wtBranch.create });
+    const r = await gitApi.worktreeAdd(dir, wtBranch.name, { create: wtBranch.create, projectId: opts.project?.id });
     if (!r.ok || !r.path) {
       return { error: [r.error, r.hint].filter(Boolean).join(" — ") || "could not create the worktree" };
     }
@@ -176,6 +187,7 @@ export function useLocation(opts: { initialCwd: string | null; initialResearch?:
     setFavourites,
     cards,
     resolve,
+    worktreeIn: opts.project ? { folder: opts.project.folder ?? null, taken: trees.map((w) => w.path) } : undefined,
   };
 }
 
@@ -367,8 +379,8 @@ export function LocationFields({
               {wtBranch && (
                 <p className="hint">
                   {wtBranch.create
-                    ? `Creates ${wtBranch.name} off ${wtBranch.from ?? "HEAD"} and checks it out at ${worktreePathFor(repo.mainRoot, wtBranch.name)}.`
-                    : `Checks ${wtBranch.name} out at ${worktreePathFor(repo.mainRoot, wtBranch.name)}.`}{" "}
+                    ? `Creates ${wtBranch.name} off ${wtBranch.from ?? "HEAD"} and checks it out at ${worktreePathFor(repo.mainRoot, wtBranch.name, loc.worktreeIn)}.`
+                    : `Checks ${wtBranch.name} out at ${worktreePathFor(repo.mainRoot, wtBranch.name, loc.worktreeIn)}.`}{" "}
                   Nothing in {repo.name} moves.
                 </p>
               )}

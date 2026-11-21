@@ -237,3 +237,18 @@ export const blankService = (key: string): Service => ({
   restartOn: [],
   restartMax: DEFAULT_RESTART_MAX,
 });
+
+// ── opening a running service like a session ──────────────────────────────────
+const SERVICE_PREFIX = "svc:";
+/** The key a running service is opened with in a drawer, a tile or a page: its tmux session name behind a prefix. */
+export const serviceKey = (session: string) => `${SERVICE_PREFIX}${session}`;
+export const isServiceKey = (key: string | null | undefined): key is string => !!key && key.startsWith(SERVICE_PREFIX);
+export const serviceSessionOf = (key: string) => key.slice(SERVICE_PREFIX.length);
+/** The checkout a running session was started in. */
+export const sessionPath = (state: ServicesState | null, session: string): string | null => {
+  for (const v of state?.services ?? []) {
+    const c = v.checkouts.find((x) => x.session === session);
+    if (c) return c.path;
+  }
+  return null;
+};

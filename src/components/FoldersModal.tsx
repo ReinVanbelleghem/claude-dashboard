@@ -52,8 +52,11 @@ export function FoldersModal({
       <div className={`modal wide ${stacked ? "stacked" : ""}`} role="dialog" aria-modal="true">
         <div className="modal-head">
           <div>
-            <h3>Working directories</h3>
-            <p className="hint">Your shortlist for new sessions — name them how you think of them.</p>
+            <h3>Repositories</h3>
+            <p className="hint">
+              The repositories, and any other folders, you start from: they are the tiles offered when you add a workspace or start a session. Name
+              them how you think of them.
+            </p>
           </div>
           {!adding && (
             <button className="icon-btn primary" onClick={startAdding}>

@@ -1,17 +1,39 @@
-import { useEffect, useMemo, useState } from "react";
+import { useContext, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { servicesApi, type Settings } from "../../api.ts";
+import type { WorkspacesPayload } from "../../../shared/workspaces.ts";
+import { ProjectIcon, ProjectMark } from "../ProjectMark.tsx";
+import { ServicesContext } from "./ServicePane.tsx";
 import {
+  serviceKey,
+  sessionPath,
   sessionTone,
   type ServiceSession,
   type ServicesState,
   type ServiceView,
   type Tone,
 } from "../../../shared/services.ts";
-import { EyeIcon, EyeOffIcon, GearIcon, MoreIcon, PencilIcon, PlayIcon, PromptIcon, RefreshIcon, StopIcon } from "../Icons.tsx";
+import { EyeIcon, EyeOffIcon, GearIcon, GitIcon, MoreIcon, PencilIcon, PlayIcon, RefreshIcon, ServiceIcon, StopIcon } from "../Icons.tsx";
 import { TerminalSheet, type TerminalTarget } from "./TerminalSheet.tsx";
 import { StartMenu } from "./StartMenu.tsx";
 import { RowMenu, type MenuItem } from "./RowMenu.tsx";
 import { ContainersSection } from "./ContainersSection.tsx";
+
+type Place = {
+  label: string;
+  path: string | null;
+  branch: string | null;
+  workspace: WorkspacesPayload["workspaces"][number] | null;
+  project: WorkspacesPayload["projects"][number] | null;
+};
+
+/** Where a running service runs: its checkout, and the workspace and project that checkout is. */
+function placeOf(state: ServicesState, payload: WorkspacesPayload | null, session: ServiceSession): Place {
+  const path = sessionPath(state, session.name);
+  const checkout = state.services.flatMap((v) => v.checkouts).find((c) => c.session === session.name) ?? null;
+  const workspace = (path && payload?.workspaces.find((w) => w.folder === path && w.status !== "archived")) || null;
+  const project = (workspace && payload?.projects.find((p) => p.id === workspace.projectId)) || null;
+  return { label: session.checkout, path, branch: checkout?.branch ?? workspace?.branch ?? null, workspace, project };
+}
 
 /**
  * The local dev stack as one table.
@@ -23,11 +45,14 @@ import { ContainersSection } from "./ContainersSection.tsx";
  */
 export function ServicesView({
   state,
+  workspaces,
   settings,
   onSettings,
   onOpenSettings,
 }: {
   state: ServicesState | null;
+  /** Projects and workspaces, so a running service can say which one it runs in. */
+  workspaces?: WorkspacesPayload | null;
   settings: Settings | null;
   onSettings: (s: Settings) => void;
   onOpenSettings: () => void;
@@ -37,6 +62,9 @@ export function ServicesView({
   const [error, setError] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [startFor, setStartFor] = useState<ServiceView | null>(null);
+  const { open } = useContext(ServicesContext);
+  const openService = (t: TerminalTarget, e?: MouseEvent) =>
+    open && t.kind !== "container" ? open(serviceKey(t.session), { full: !!e && (e.metaKey || e.ctrlKey), option: !!e && e.altKey }) : setTerminal(t);
 
   // A second's tick is what makes the uptime column count up rather than sit still
   // between polls.
@@ -102,6 +130,7 @@ export function ServicesView({
             <thead>
               <tr>
                 <th>Service</th>
+                <th>Running in</th>
                 <th>Status</th>
                 <th>Panes</th>
                 <th>Ports</th>
@@ -112,25 +141,29 @@ export function ServicesView({
             <tbody>
               {visible.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="services-empty">
+                  <td colSpan={7} className="services-empty">
                     {(state.paths?.repos?.length ?? 0) === 0
                       ? "Nothing configured yet. Add a repository, then a service, under Settings → Services."
                       : "No services yet. Add one under Settings → Services."}
                   </td>
                 </tr>
               )}
-              {visible.map((s) => (
+              {visible.flatMap((s) =>
+                (s.sessions.length ? s.sessions : [null]).map((session) => (
                 <ServiceRow
-                  key={s.key}
+                  key={`${s.key}:${session?.name ?? ""}`}
                   service={s}
+                  session={session}
                   busy={busy}
                   onStart={() => setStartFor(s)}
                   onStop={(session) => void act(s.key, () => servicesApi.stop(session))}
                   onRestartDead={(session) => void act(s.key, () => servicesApi.restartDead(session))}
-                  onTerminal={(t) => setTerminal(t)}
+                  onTerminal={openService}
+                  place={session ? placeOf(state, workspaces ?? null, session) : null}
                   onConfigure={onOpenSettings}
                 />
-              ))}
+                )),
+              )}
             </tbody>
           </table>
         </div>
@@ -150,11 +183,11 @@ export function ServicesView({
           onClose={() => setStartFor(null)}
           onStarted={(session) => {
             setStartFor(null);
-            setTerminal({ session, paneId: null, title: startFor.label, checkout: "" });
+            openService({ session, paneId: null, title: startFor.label, checkout: "" });
           }}
           onOpenRunning={(session) => {
             setStartFor(null);
-            setTerminal({ session, paneId: null, title: startFor.label, checkout: "" });
+            openService({ session, paneId: null, title: startFor.label, checkout: "" });
           }}
         />
       )}
@@ -231,31 +264,38 @@ function Description({ service }: { service: ServiceView }) {
 
 function ServiceRow({
   service,
+  session,
   busy,
   onStart,
   onStop,
   onRestartDead,
   onTerminal,
+  place,
   onConfigure,
 }: {
+  place: Place | null;
   service: ServiceView;
+  /** One running copy of the service; a service running in two checkouts gets a row for each. */
+  session: ServiceSession | null;
   busy: string | null;
   onStart: () => void;
   onStop: (session: string) => void;
   onRestartDead: (session: string) => void;
-  onTerminal: (t: TerminalTarget) => void;
+  onTerminal: (t: TerminalTarget, e?: MouseEvent) => void;
   onConfigure: () => void;
 }) {
   const [menuAt, setMenuAt] = useState<HTMLElement | null>(null);
-  const session: ServiceSession | null = service.sessions[0] ?? null;
   const tone = session ? sessionTone(session) : "idle";
   const dead = session?.panes.filter((p) => !p.alive).length ?? 0;
   const working = busy === service.key;
 
-  const attach = () =>
-    session && onTerminal({ session: session.name, paneId: null, title: service.label, checkout: session.checkout });
+  const attach = (e: MouseEvent) =>
+    session && onTerminal({ session: session.name, paneId: null, title: service.label, checkout: session.checkout }, e);
 
-  const items: MenuItem[] = [{ label: "Edit service", icon: <PencilIcon />, onClick: onConfigure }];
+  const items: MenuItem[] = [
+    ...(session ? [{ label: "Start in another checkout…", icon: <PlayIcon />, onClick: onStart }] : []),
+    { label: "Edit service", icon: <PencilIcon />, onClick: onConfigure },
+  ];
 
   return (
     <tr className={service.disabled ? "svc-off" : ""}>
@@ -263,9 +303,42 @@ function ServiceRow({
         <div className="svc-name">
           {service.label}
           {service.disabled && <span className="svc-tag">disabled</span>}
-          {session && <span className="svc-chip">{session.checkout}</span>}
         </div>
         <Description service={service} />
+      </td>
+      <td>
+        {!place && <span className="svc-sub">–</span>}
+        {place?.workspace && (
+          <a className="svc-place" href={`#/workspace/${place.workspace.id}`} title={`Open this workspace\n${place.path}`}>
+            {place.project && (
+              <span className="svc-place-project">
+                <ProjectIcon project={place.project} size={14} /> {place.project.name}
+              </span>
+            )}
+            <span className="svc-place-ws">
+              <ProjectMark projectKey={place.workspace.repoKey} name={place.workspace.repoName} size={14} />
+              <strong>{place.workspace.repoName}</strong>
+              {place.branch && (
+                <code>
+                  <GitIcon /> {place.branch}
+                </code>
+              )}
+            </span>
+          </a>
+        )}
+        {place && !place.workspace && (
+          <span className="svc-place loose" title={place.path ?? undefined}>
+            <span className="svc-place-ws">
+              <strong>{place.label}</strong>
+              {place.branch && (
+                <code>
+                  <GitIcon /> {place.branch}
+                </code>
+              )}
+            </span>
+            <span className="svc-place-project">not in a workspace</span>
+          </span>
+        )}
       </td>
       <td>
         <Pill tone={tone} />
@@ -280,9 +353,9 @@ function ServiceRow({
                 className={`svc-pane-chip ${session ? (p.alive ? "on" : "off") : ""}`}
                 disabled={!session}
                 title={session ? `Open ${p.title}` : "Not running"}
-                onClick={() =>
+                onClick={(e) =>
                   session &&
-                  onTerminal({ session: session.name, paneId: p.id, title: service.label, checkout: session.checkout })
+                  onTerminal({ session: session.name, paneId: p.id, title: service.label, checkout: session.checkout }, e)
                 }
               >
                 {p.title}
@@ -311,12 +384,23 @@ function ServiceRow({
                   <RefreshIcon />
                 </button>
               )}
-              <button className="icon-btn" title="Attach" aria-label="Attach" onClick={attach}>
-                <PromptIcon />
+              <button className="icon-btn" title="Open its panes. ⌘-click and ⌥-click open it the way Settings says." aria-label="Open" onClick={attach}>
+                <ServiceIcon />
               </button>
               <button className="icon-btn" disabled={working} title="Stop" aria-label="Stop" onClick={() => onStop(session.name)}>
                 <StopIcon />
               </button>
+              <button
+                className="icon-btn"
+                title="More"
+                aria-label="More actions"
+                aria-haspopup="menu"
+                aria-expanded={menuAt !== null}
+                onClick={(e) => setMenuAt(menuAt ? null : e.currentTarget)}
+              >
+                <MoreIcon />
+              </button>
+              {menuAt && <RowMenu items={items} anchor={menuAt} onClose={() => setMenuAt(null)} />}
             </>
           ) : (
             <>

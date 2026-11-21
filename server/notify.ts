@@ -209,8 +209,13 @@ async function send(subject: NotifySubject, href: string, now: number) {
   }
 }
 
+/**
+ * Where a click on a notification goes. A daemon started by the macOS app is
+ * handed the app's own link scheme, so the click lands in the app instead of a
+ * browser tab; otherwise it is the address from the settings.
+ */
 function deepLink(hash: string): string {
-  const base = getSettings().notifications.dashboardUrl.replace(/\/$/, "");
+  const base = (process.env.DASHBOARD_LINK_BASE ?? getSettings().notifications.dashboardUrl).replace(/\/$/, "");
   return `${base}/${hash}`;
 }
 

@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { artifactSlug, artifactSlugsInCommand, PROJECTS_DIR } from "./paths.ts";
+import { artifactSlug, artifactSlugsInCommand, drawingSlug, notePath, PROJECTS_DIR } from "./paths.ts";
 
 /** Accumulator for one session while we parse its (possibly partial) JSONL. */
 type Agg = {
@@ -74,6 +74,20 @@ function artifactSlugsIn(block: any): string[] {
     for (const slug of artifactSlugsInCommand(input.command)) out.add(slug);
   }
   return [...out];
+}
+
+/** The drawing a tool call wrote, when it wrote one: an `.excalidraw` file in the drawings folder. */
+function drawingSlugIn(block: any): string | null {
+  if (!FILE_WRITE_TOOLS.has(block.name)) return null;
+  const target = block.input?.file_path ?? block.input?.filePath;
+  return typeof target === "string" ? drawingSlug(target) : null;
+}
+
+/** The note a tool call wrote, when it wrote one: a Markdown file in the notes folder. */
+function notePathIn(block: any): string | null {
+  if (!FILE_WRITE_TOOLS.has(block.name)) return null;
+  const target = block.input?.file_path ?? block.input?.filePath;
+  return typeof target === "string" ? notePath(target) : null;
 }
 
 function ts(v: unknown): number | null {
@@ -271,6 +285,8 @@ function applyLines(
   const toolCounts = new Map<string, number>();
   /** slug → earliest timestamp this session was seen writing to it. */
   const artifactHits = new Map<string, number | null>();
+  const drawingHits = new Map<string, number | null>();
+  const noteHits = new Map<string, number | null>();
   // Only used to synthesise a key for the rare record with no uuid.
   let replySeq = 0;
   const insertPrompt = db.query(
@@ -411,6 +427,10 @@ function applyLines(
             if (b?.type === "tool_use" && b.name) {
               agg.tool_count++;
               toolCounts.set(b.name, (toolCounts.get(b.name) ?? 0) + 1);
+              const noted = notePathIn(b);
+              if (noted && !noteHits.has(noted)) noteHits.set(noted, t);
+              const drawn = drawingSlugIn(b);
+              if (drawn && !drawingHits.has(drawn)) drawingHits.set(drawn, t);
               for (const slug of artifactSlugsIn(b)) {
                 const prev = artifactHits.get(slug);
                 if (prev === undefined || (t !== null && (prev === null || t < prev))) {
@@ -491,6 +511,16 @@ function applyLines(
        ON CONFLICT(slug, session_id) DO UPDATE SET ts = COALESCE(artifact_writes.ts, excluded.ts)`,
     );
     for (const [slug, at] of artifactHits) upArtifact.run(slug, sessionId, at);
+    const upDrawing = db.query(
+      `INSERT INTO drawing_writes (slug, session_id, ts) VALUES (?, ?, ?)
+       ON CONFLICT(slug, session_id) DO UPDATE SET ts = COALESCE(drawing_writes.ts, excluded.ts)`,
+    );
+    for (const [slug, at] of drawingHits) upDrawing.run(slug, sessionId, at);
+    const upNote = db.query(
+      `INSERT INTO note_writes (path, session_id, ts) VALUES (?, ?, ?)
+       ON CONFLICT(path, session_id) DO UPDATE SET ts = COALESCE(note_writes.ts, excluded.ts)`,
+    );
+    for (const [path, at] of noteHits) upNote.run(path, sessionId, at);
   });
 
   run();

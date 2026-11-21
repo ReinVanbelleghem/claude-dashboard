@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { workspaceApi, type Workspace } from "../../api.ts";
+import { workspaceApi, type Project, type Workspace } from "../../api.ts";
 import { LocationFields, useLocation } from "../LocationPicker.tsx";
 
 /**
@@ -13,6 +13,8 @@ import { LocationFields, useLocation } from "../LocationPicker.tsx";
 export function NewWorkspaceDialog({
   initialFolder,
   initialGoal = "",
+  projectId,
+  project = null,
   projects,
   onClose,
   onCreated,
@@ -20,11 +22,15 @@ export function NewWorkspaceDialog({
   initialFolder: string | null;
   /** Prefilled when the workspace is started from a task. */
   initialGoal?: string;
+  /** The project the new checkout joins. Without one it is filed where its repository and branch say. */
+  projectId?: number;
+  /** That project, when it keeps a folder of its own: a new worktree is made inside it. */
+  project?: Project | null;
   projects: { path: string }[];
   onClose: () => void;
   onCreated: (workspace: Workspace, startSession: boolean) => void;
 }) {
-  const loc = useLocation({ initialCwd: initialFolder, projects });
+  const loc = useLocation({ initialCwd: initialFolder, projects, project });
   const { manage } = loc;
   const [goal, setGoal] = useState(initialGoal);
   const [startSession, setStartSession] = useState(false);
@@ -48,7 +54,7 @@ export function NewWorkspaceDialog({
         setBusy(false);
         return;
       }
-      const { workspace } = await workspaceApi.create({ goal: goal.trim(), folder: where.dir });
+      const { workspace } = await workspaceApi.create({ goal: goal.trim(), folder: where.dir, projectId });
       onCreated(workspace, startSession);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -87,7 +93,7 @@ export function NewWorkspaceDialog({
           <span className="field-head">
             Folder
             <button className="link-btn inline" onClick={() => loc.setManage(true)}>
-              Manage folders
+              Manage repositories
             </button>
           </span>
           <LocationFields loc={loc} noun="workspace" allowResearch={false} busy={busy} onEnter={() => void create()} />

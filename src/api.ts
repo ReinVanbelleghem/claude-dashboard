@@ -395,6 +395,9 @@ export type Settings = {
     diffIgnoreWhitespace: boolean;
     /** Where generated artifacts live. Empty follows the daemon's default. */
     artifactsRoot: string;
+    drawingsRoot: string;
+    notesRoot: string;
+    projectsRoot?: string;
     /** Hide tool calls and thinking in conversations. */
     hideToolCalls: boolean;
     /** Dock pages turned off, by key. Absent means all of them are on. */
@@ -884,6 +887,11 @@ const q = (params: Record<string, string | number | boolean | undefined>) =>
     .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
     .join("&");
 
+import type { DiffRange, StackLayer, WorkspaceStack } from "../shared/stacks.ts";
+export type { DiffRange, StackLayer, WorkspaceStack };
+
+export type GrepHit = { path: string; line: number; column: number; text: string };
+
 export const gitApi = {
   status: (cwd: string, force = false) =>
     get<RepoStatus>(`/api/git/status?${q({ cwd, force: force ? 1 : undefined })}`),
@@ -893,11 +901,14 @@ export const gitApi = {
     path?: string;
     ignoreWhitespace?: boolean;
     context?: number;
+    range?: DiffRange | null;
   }) =>
     get<{ ok: boolean; patch: string; error: string | null }>(
       `/api/git/diff?${q({
         cwd: opts.cwd,
         scope: opts.scope,
+        base: opts.range?.base,
+        head: opts.range?.head,
         path: opts.path,
         ws: opts.ignoreWhitespace ? "ignore" : undefined,
         context: opts.context,
@@ -919,7 +930,8 @@ export const gitApi = {
    * dirty worktree or a branch already open elsewhere both come back as `ok: false`
    * with git's own wording, so these go through postResult like the other writes.
    */
-  worktreeAdd: (cwd: string, branch: string, opts: { create?: boolean; from?: string; path?: string } = {}) =>
+  /** `projectId` puts the checkout in that project's folder, under the repository's name. */
+  worktreeAdd: (cwd: string, branch: string, opts: { create?: boolean; from?: string; path?: string; projectId?: number } = {}) =>
     postResult<WorktreeWriteResult>("/api/git/worktree-add", { cwd, branch, ...opts }),
   worktreeRemove: (cwd: string, path: string) =>
     postResult<WorktreeWriteResult>("/api/git/worktree-remove", { cwd, path }),
@@ -947,7 +959,16 @@ export const gitApi = {
     get<{ commits: Commit[]; range: string }>(`/api/git/log?${q({ cwd, limit })}`),
   graph: (cwd: string, opts: { limit?: number; all?: boolean } = {}) =>
     get<GitGraph>(`/api/git/graph?${q({ cwd, limit: opts.limit ?? 300, all: opts.all === false ? 0 : 1 })}`),
-  branchFiles: (cwd: string) => get<{ files: ChangedFile[] }>(`/api/git/branch-files?${q({ cwd })}`),
+  branchFiles: (cwd: string, range?: DiffRange | null) =>
+    get<{ files: ChangedFile[] }>(`/api/git/branch-files?${q({ cwd, base: range?.base, head: range?.head })}`),
+  /** Search file contents across the repository. */
+  grep: (cwd: string, query: string, opts: { caseSensitive?: boolean; regex?: boolean } = {}) =>
+    get<{ ok: boolean; hits: GrepHit[]; truncated: boolean; error: string | null }>(
+      `/api/git/grep?${q({ cwd, q: query, case: opts.caseSensitive ? 1 : undefined, regex: opts.regex ? 1 : undefined })}`,
+    ),
+  /** The stack this checkout's branch belongs to, with each layer's pull request. */
+  stack: (cwd: string, refresh = false) =>
+    get<WorkspaceStack>(`/api/git/stack?${q({ cwd, refresh: refresh ? 1 : undefined })}`),
   commit: (cwd: string, sha: string, ignoreWhitespace = false) =>
     get<{ ok: boolean; commit: Commit | null; patch: string; error: string | null }>(
       `/api/git/commit?${q({ cwd, sha, ws: ignoreWhitespace ? "ignore" : undefined })}`,
@@ -1161,10 +1182,62 @@ export type Artifact = {
   /** The page-declared subset, which cannot be removed from the dashboard. */
   metaTags: string[];
   sessions: ArtifactSession[];
+  /** Where you put it by hand; null means it follows the sessions that wrote it. */
+  link: { projectId: number | null; workspaceId: number | null } | null;
 };
 
 export type ArtifactTag = { tag: string; count: number };
 export type ArtifactList = { artifacts: Artifact[]; port: number; root: string; tags: ArtifactTag[] };
+
+import type { Note, NoteContent, NoteFolderLink, NotesPayload } from "../shared/notes.ts";
+export type { Note, NoteContent, NoteFolderLink, NotesPayload };
+
+export type NoteSave = { ok: true; hash: string; note: Note } | { ok: false; error: string; conflict?: NoteContent };
+
+export const noteApi = {
+  list: () => get<NotesPayload>("/api/notes"),
+  create: (opts: { title?: string; content?: string; folder?: string; projectId?: number | null; workspaceId?: number | null }) =>
+    post<{ note: Note }>("/api/notes", opts),
+  read: (path: string) => get<NoteContent>(`/api/note?path=${encodeURIComponent(path)}`),
+  /** A refused save is an answer, not a fault: it carries the text that is on disk now. */
+  save: (path: string, content: string, baseHash?: string): Promise<NoteSave> =>
+    fetch("/api/note", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ path, content, baseHash }) }).then(
+      (r) => r.json() as Promise<NoteSave>,
+    ),
+  /** Tie a note to a project or a checkout, or give it another file name. */
+  update: (path: string, patch: { rename?: string; projectId?: number | null; workspaceId?: number | null }) =>
+    post<{ note: Note }>("/api/note", { path, ...patch }),
+  createFolder: (path: string) => post<{ folder: string }>("/api/note-dir", { path }),
+  /** Tie a whole folder to a project or a checkout; null for both unties it. */
+  linkFolder: (folder: string, link: { projectId?: number | null; workspaceId?: number | null }) =>
+    post("/api/note-folder", { folder, projectId: link.projectId ?? null, workspaceId: link.workspaceId ?? null }),
+  /** Move a note to the notes folder's `.trash`. */
+  remove: (path: string) => fetch(`/api/note?path=${encodeURIComponent(path)}`, { method: "DELETE" }).then((r) => r.ok),
+  assetUrl: (path: string) => `/api/note-asset?path=${encodeURIComponent(path)}`,
+};
+
+import type { Drawing, DrawingScene, DrawingsPayload } from "../shared/drawings.ts";
+export type { Drawing, DrawingScene, DrawingsPayload };
+
+export type DrawingSave = { ok: true; hash: string; drawing: Drawing } | { ok: false; error: string; conflict?: DrawingScene };
+
+const drawingPath = (slug: string) => `/api/drawings/${encodeURIComponent(slug)}`;
+
+export const drawingApi = {
+  list: () => get<DrawingsPayload>("/api/drawings"),
+  create: (opts: { title?: string; workspaceId?: number | null; projectId?: number | null }) =>
+    post<{ drawing: Drawing }>("/api/drawings", opts),
+  read: (slug: string) => get<DrawingScene>(drawingPath(slug)),
+  /** A refused save is an answer, not a fault: it carries the scene that is on disk now. */
+  save: (slug: string, body: { scene: string; baseHash?: string; preview?: string }): Promise<DrawingSave> =>
+    fetch(drawingPath(slug), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(
+      (r) => r.json() as Promise<DrawingSave>,
+    ),
+  update: (slug: string, patch: { title?: string; workspaceId?: number | null; projectId?: number | null }) =>
+    post<{ drawing: Drawing }>(drawingPath(slug), patch),
+  remove: (slug: string) => fetch(drawingPath(slug), { method: "DELETE" }).then((r) => r.ok),
+  previewUrl: (d: Pick<Drawing, "slug" | "modifiedAt">) => `${drawingPath(d.slug)}/preview.svg?v=${d.modifiedAt}`,
+};
 
 export const artifactApi = {
   list: (opts: { q?: string; sessionId?: string } = {}) => {
@@ -1182,6 +1255,9 @@ export const artifactApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ tags }),
     }).then((r) => r.json() as Promise<{ artifact: Artifact; tags: ArtifactTag[] }>),
+  /** Put an artifact under a project or checkout, under nothing (both null), or back to following its sessions. */
+  link: (slug: string, link: { projectId?: number | null; workspaceId?: number | null } | "follow") =>
+    post(`/api/artifacts/${encodeURIComponent(slug)}/link`, link === "follow" ? { follow: true } : link),
   hide: (slug: string, hidden: boolean) =>
     post<{ artifact: Artifact }>(`/api/artifacts/${encodeURIComponent(slug)}/hide`, { hidden }),
   pin: (slug: string, pinned: boolean) =>
@@ -1274,12 +1350,26 @@ export const agentApi = {
   stop: (key: string) => fetch(`/api/agents/${key}`, { method: "DELETE" }),
 };
 
-import type { Workspace, WorkspacesPayload } from "../shared/workspaces.ts";
-export type { Workspace, WorkspacesPayload };
+import type { Project, Workspace, WorkspaceRepo, WorkspacesPayload } from "../shared/workspaces.ts";
+export type { Project, Workspace, WorkspaceRepo, WorkspacesPayload };
 
 export const workspaceApi = {
   list: () => get<WorkspacesPayload>("/api/workspaces"),
-  create: (opts: { goal: string; folder: string }) => post<{ workspace: Workspace }>("/api/workspaces", opts),
+  create: (opts: { goal: string; folder: string; projectId?: number }) => post<{ workspace: Workspace }>("/api/workspaces", opts),
+  /** `unnamed` says the name is a placeholder about to be typed over, so the folder waits for the real one. */
+  createProject: (name: string, opts: { unnamed?: boolean } = {}) => post<{ project: Project }>("/api/projects", { name, ...opts }),
+  /** The project's own folder, made if it is not there yet. */
+  projectFolder: (id: number) => post<{ folder: string }>(`/api/projects/${id}/folder`),
+  renameProject: (id: number, name: string) => post<{ project: Project }>(`/api/projects/${id}`, { name }),
+  /** A project's own glyph and colour; `icon: null` goes back to the default. */
+  markGoal: (id: number, mark: { icon?: string | null; color?: string | null }) => post(`/api/projects/${id}/mark`, mark),
+  /** Use an image, already drawn down to a small PNG, as a project's own mark. */
+  imageGoal: (id: number, image: string) => post(`/api/projects/${id}/mark`, { image }),
+  /** Put a project away with its checkouts, ending their sessions. Nothing on disk changes. */
+  archiveProject: (id: number) => post(`/api/projects/${id}/archive`),
+  unarchiveProject: (id: number) => post(`/api/projects/${id}/unarchive`),
+  /** Move a checkout into another project. */
+  moveToProject: (id: number, projectId: number) => post(`/api/workspaces/${id}/project`, { projectId }),
   rename: (id: number, goal: string) => post(`/api/workspaces/${id}`, { goal }),
   resume: (id: number) => post(`/api/workspaces/${id}/resume`),
   archive: (id: number, opts: { completeTasks?: boolean } = {}) => post(`/api/workspaces/${id}/archive`, opts),
@@ -1287,12 +1377,19 @@ export const workspaceApi = {
   remove: (id: number, opts: { worktree: boolean }) =>
     post<{ ok: true; worktreeRemoved: boolean }>(`/api/workspaces/${id}/delete`, opts),
   /** Workspace ids in their new order within a project, project keys in theirs, sessions (every id each has) in theirs. */
-  reorder: (order: { ids?: number[]; projects?: string[]; sessions?: string[][] }) =>
+  reorder: (order: { ids?: number[]; projects?: number[]; sessions?: string[][] }) =>
     post("/api/workspaces/reorder", order),
   /** Take a project and all its workspaces off the sidebar, ending their sessions. Nothing on disk changes. */
-  removeProject: (key: string) => post("/api/workspaces/project-delete", { key }),
+  removeProject: (id: number) => post("/api/workspaces/project-delete", { id }),
+  /** A project's glyph and colour; `icon: null` goes back to its initials. */
+  markProject: (key: string, mark: { icon?: string | null; color?: string | null }) =>
+    post("/api/workspaces/project-mark", { key, ...mark }),
+  /** Use an image, already drawn down to a small PNG, as a project's mark. */
+  imageProject: (key: string, image: string) => post("/api/workspaces/project-mark", { key, image }),
   /** Move a session, under every name it has, into another workspace. */
   attach: (id: number, ids: string[]) => post(`/api/workspaces/${id}/attach`, { ids }),
+  /** Move a session, under every name it has, directly under a project, out of any checkout. */
+  attachProject: (id: number, ids: string[]) => post(`/api/projects/${id}/attach`, { ids }),
 };
 
 import type { Task, TaskAdd, TaskPatch, TaskProject, TasksPayload } from "../shared/tasks.ts";
@@ -1345,6 +1442,8 @@ export const taskApi = {
   remove: (id: number) => post(`/api/tasks/${id}/delete`),
   /** Tie the task to the workspace working on it, or untie it with null. */
   link: (id: number, workspaceId: number | null) => post(`/api/tasks/${id}/workspace`, { workspaceId }),
+  /** Tie a task to a piece of work as a whole, a project from the sidebar, rather than to one workspace in it. */
+  linkProject: (id: number, projectId: number) => post(`/api/tasks/${id}/workspace`, { workProjectId: projectId }),
   addProject: (name: string) => post<{ project: TaskProject }>("/api/task-projects", { name }),
   updateProject: (id: number, patch: { name?: string; color?: string | null }) =>
     post<{ project: TaskProject }>(`/api/task-projects/${id}`, patch),

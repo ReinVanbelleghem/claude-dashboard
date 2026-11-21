@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -191,7 +192,7 @@ export function TerminalSheet({
     window.addEventListener("mouseup", up);
   }
 
-  return (
+  return createPortal(
     <>
       <div className="svc-sheet-scrim" onMouseDown={onClose} aria-hidden="true" />
       <div className="svc-sheet" style={{ width }} role="dialog" aria-label={`${target.title} terminal`}>
@@ -278,6 +279,7 @@ export function TerminalSheet({
 
         <div ref={hostRef} className="svc-term" />
       </div>
-    </>
+    </>,
+    document.body,
   );
 }

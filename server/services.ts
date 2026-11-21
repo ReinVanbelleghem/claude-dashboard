@@ -1,6 +1,6 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { composeDir, listContainers } from "./containers.ts";
 import { currentBranch } from "./dirs.ts";
 import {
@@ -94,7 +94,53 @@ export function checkoutsFor(repoKey: string, paths: ServicePaths): Checkout[] {
       out.push({ label: name.slice(repo.key.length + 1), path, main: false, branch: branchOf(path) });
     }
   }
+
+  const known = new Set(out.map((c) => real(c.path)));
+  const labels = new Set(out.map((c) => c.label));
+  for (const path of main ? linkedWorktrees(main) : []) {
+    if (known.has(real(path))) continue;
+    known.add(real(path));
+    const name = basename(path);
+    const plain = name.startsWith(`${repo.key}-`) ? name.slice(repo.key.length + 1) : name;
+    let label = plain;
+    for (let n = 2; labels.has(label); n++) label = `${plain}-${n}`;
+    labels.add(label);
+    out.push({ label, path, main: false, branch: branchOf(path) });
+  }
   return out;
+}
+
+const real = (p: string) => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+};
+
+/**
+ * Every linked worktree git knows for a main checkout, wherever it was put. Read
+ * straight from `.git/worktrees`, where each entry's `gitdir` file names the
+ * worktree's own `.git`, so a worktree outside the configured folder is found too.
+ */
+function linkedWorktrees(main: string): string[] {
+  const dir = join(main, ".git", "worktrees");
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return names
+    .flatMap((name) => {
+      try {
+        const path = dirname(readFileSync(join(dir, name, "gitdir"), "utf8").trim());
+        return existsSync(path) ? [path] : [];
+      } catch {
+        return [];
+      }
+    })
+    .sort();
 }
 
 /** "detached" for a real detached HEAD, "not a checkout" when there is no .git at all. */

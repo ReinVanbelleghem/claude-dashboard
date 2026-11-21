@@ -1,3 +1,5 @@
+import { createPortal } from "react-dom";
+import { FoldersModal } from "./FoldersModal.tsx";
 import { useEffect, useRef, useState } from "react";
 import {
   configApi,
@@ -11,7 +13,7 @@ import {
 import type { Appearance } from "../appearance.ts";
 import { AppearancePanel } from "./AppearancePanel.tsx";
 import { FolderField } from "./FolderPicker.tsx";
-import { CheckIcon, GripIcon, TrashIcon } from "./Icons.tsx";
+import { FolderIcon, CheckIcon, GripIcon, TrashIcon } from "./Icons.tsx";
 import { McpPanel } from "./McpPanel.tsx";
 import { NotificationsPanel } from "./NotificationsPanel.tsx";
 import { OpenTargetPicker } from "./OpenTargetPicker.tsx";
@@ -50,7 +52,7 @@ const SECTIONS: { key: SectionKey; label: string; help: string }[] = [
   { key: "pages", label: "Pages", help: "Which pages the dock shows" },
   { key: "notifications", label: "Notifications", help: "What interrupts you" },
   { key: "sessions", label: "Sessions", help: "Where a card opens, model and permissions" },
-  { key: "artifacts", label: "Artifacts", help: "Where generated pages are kept" },
+  { key: "artifacts", label: "Folders", help: "Your repositories, and where projects, notes, drawings and pages are kept" },
   { key: "services", label: "Services", help: "The local dev stack" },
   { key: "code", label: "Code", help: "Diffs, worktrees and pull requests" },
   { key: "mcp", label: "MCP", help: "Connectors and sign-in" },
@@ -71,6 +73,7 @@ export function SettingsView({
 }) {
   const [saving, setSaving] = useState(false);
   // Remembered, because settings is a place you come back to for one thing.
+  const [showRepos, setShowRepos] = useState(false);
   const [section, setSection] = useState<SectionKey>(() => {
     const saved = localStorage.getItem(SECTION_KEY);
     // Sections have been merged twice — "diffs" into "git", then "git" and "reviews"
@@ -178,7 +181,7 @@ export function SettingsView({
             </p>
             <PagesList settings={settings} save={save} />
             <p className="hint">
-              <b>Live</b> and <b>Settings</b> stay put: one is where a hidden page sends you,
+              <b>Home</b> and <b>Settings</b> stay put: one is where a hidden page sends you,
               the other is the way back here.
             </p>
           </div>
@@ -466,24 +469,78 @@ export function SettingsView({
         )}
 
         {section === "artifacts" && (
-          <div className="settings-section">
-            <h3>Artifacts</h3>
-            <p className="hint">Every HTML page written under this folder is indexed and linked to the session that wrote it.</p>
-            <div style={{ maxWidth: 520 }}>
-              <FolderField
-                label="Keep artifacts in"
-                value={settings.ui.artifactsRoot ?? ""}
-                placeholder="~/Notes/artifacts"
-                onChange={(v) => save({ ui: { artifactsRoot: v } })}
-                pickerTitle="Pick the artifacts folder"
-                pickerHint="Every HTML page written under it is indexed and shown on the Artifacts page."
-              />
+          <>
+            <div className="panel">
+              <h2>Repositories</h2>
+              <p className="hint">
+                The repositories, and any other folders, you start from. They are the tiles offered when you add a workspace to a project or
+                start a session.
+              </p>
+              <button className="icon-btn" onClick={() => setShowRepos(true)}>
+                <FolderIcon /> Manage repositories
+              </button>
+              {showRepos && createPortal(<FoldersModal onClose={() => setShowRepos(false)} />, document.body)}
             </div>
-            <p className="hint">
-              Empty means <code>~/Notes/artifacts</code> or <code>CLAUDE_ARTIFACTS_DIR</code>. Changing it
-              re-scans; your <code>CLAUDE.md</code> has to point Claude at the same folder.
-            </p>
-          </div>
+            <div className="panel">
+              <h2>Projects</h2>
+              <p className="hint">
+                One folder per project, holding its worktrees and its own <code>drawings</code> and <code>artifacts</code>. The three folders
+                below are for what belongs to no project.
+              </p>
+              <div style={{ maxWidth: 520 }}>
+                <FolderField
+                  label="Keep projects in"
+                  value={settings.ui.projectsRoot ?? ""}
+                  placeholder="~/projects (default)"
+                  onChange={(v) => save({ ui: { projectsRoot: v } })}
+                  pickerTitle="Pick the projects folder"
+                  pickerHint="A new project gets a subfolder here. Projects that already have a folder stay where they are."
+                />
+              </div>
+            </div>
+            <div className="panel">
+              <h2>Notes</h2>
+              <p className="hint">Markdown files.</p>
+              <div style={{ maxWidth: 520 }}>
+                <FolderField
+                  label="Keep notes in"
+                  value={settings.ui.notesRoot ?? ""}
+                  placeholder="~/Notes"
+                  onChange={(v) => save({ ui: { notesRoot: v } })}
+                  pickerTitle="Pick the notes folder"
+                  pickerHint="Every Markdown file under it is listed on the Notes page."
+                />
+              </div>
+            </div>
+            <div className="panel">
+              <h2>Drawings</h2>
+              <p className="hint">One .excalidraw file per drawing.</p>
+              <div style={{ maxWidth: 520 }}>
+                <FolderField
+                  label="Keep drawings in"
+                  value={settings.ui.drawingsRoot ?? ""}
+                  placeholder="~/drawings"
+                  onChange={(v) => save({ ui: { drawingsRoot: v } })}
+                  pickerTitle="Pick the drawings folder"
+                  pickerHint="Every .excalidraw file directly in it is shown on the Drawings page."
+                />
+              </div>
+            </div>
+            <div className="panel">
+              <h2>Artifacts</h2>
+              <p className="hint">Generated HTML pages.</p>
+              <div style={{ maxWidth: 520 }}>
+                <FolderField
+                  label="Keep artifacts in"
+                  value={settings.ui.artifactsRoot ?? ""}
+                  placeholder="~/artifacts"
+                  onChange={(v) => save({ ui: { artifactsRoot: v } })}
+                  pickerTitle="Pick the artifacts folder"
+                  pickerHint="Every HTML page written under it is indexed and shown on the Artifacts page."
+                />
+              </div>
+            </div>
+          </>
         )}
 
 

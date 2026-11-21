@@ -3,6 +3,7 @@ import {
   accentColor,
   accentInkColor,
   chipSurface,
+  DEFAULT_APPEARANCE,
   faviconFor,
   lookOf,
   surfacesFor,
@@ -18,6 +19,9 @@ import { PencilIcon } from "./Icons.tsx";
 import { useIconPhase } from "../useIconPhase.ts";
 
 export type { StoredTheme } from "../appearance.ts";
+
+/** The look the dashboard starts with, always on the shelf so there is a way back to it. */
+const DEFAULT_THEME = { name: "Default", look: lookOf(DEFAULT_APPEARANCE) };
 
 /**
  * Appearance, reduced to two things: which saved theme is on, and the button that
@@ -49,7 +53,7 @@ export function AppearancePanel({
   // Read once per render, so legacy entries and current ones behave identically.
   const saved = themes.map(toSavedTheme);
   /** Active when every colour-bearing field matches — the mode is not one of them. */
-  const activeName = saved.find((t) => sameLook(t.look, lookOf(a)))?.name ?? null;
+  const activeName = [...saved, DEFAULT_THEME].find((t) => sameLook(t.look, lookOf(a)))?.name ?? null;
 
   return (
     <div className="panel">
@@ -124,57 +128,72 @@ export function AppearancePanel({
           are in. Stored in settings.json, so a look survives a reload and is there in any
           browser that opens this dashboard.
         </p>
-        {themes.length === 0 ? (
-          <div className="empty">Nothing saved yet — open the studio and name a look.</div>
-        ) : (
-          <div className="saved-themes">
-            {saved.map((t) => (
-              <div key={t.name} className="saved-theme">
-                <button
-                  className={`saved-theme-apply ${t.name === activeName ? "on" : ""}`}
-                  title={`Apply ${t.name}`}
-                  aria-pressed={t.name === activeName}
-                  // The look only — applying a theme must not flip dark/light.
-                  onClick={() => onChange(t.look)}
-                >
-                  <span
-                    className="saved-theme-chip"
-                    style={{
-                      background: chipSurface({ ...t.look, theme: a.theme }),
-                      borderColor: accentColor({ ...t.look, theme: a.theme }),
-                    }}
-                  />
-                  <span className="saved-theme-name">{t.name}</span>
-                  <span className="saved-theme-meta">
-                    hue {Math.round(t.look.customPalette[a.theme].hue)}° ·{" "}
-                    {t.look.accent === "custom" ? "custom accent" : `${t.look.accent} accent`}
-                  </span>
-                </button>
-                <button
-                  className="icon-btn tiny"
-                  title={`Edit ${t.name}`}
-                  aria-label={`Edit ${t.name}`}
-                  onClick={() => {
-                    onChange(t.look);
-                    setEditing(t.name);
-                    setStudio(true);
-                  }}
-                >
-                  <PencilIcon />
-                </button>
-                <button
-                  className="icon-btn tiny danger"
-                  title={`Delete ${t.name}`}
-                  aria-label={`Delete ${t.name}`}
-                  disabled={!onThemes}
-                  onClick={() => onThemes?.(saved.filter((x) => x.name !== t.name))}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
+        <div className="saved-themes">
+          <div className="saved-theme">
+            <button
+              className={`saved-theme-apply ${activeName === DEFAULT_THEME.name ? "on" : ""}`}
+              title="Apply the look the dashboard starts with"
+              aria-pressed={activeName === DEFAULT_THEME.name}
+              onClick={() => onChange(DEFAULT_THEME.look)}
+            >
+              <span
+                className="saved-theme-chip"
+                style={{
+                  background: chipSurface({ ...DEFAULT_THEME.look, theme: a.theme }),
+                  borderColor: accentColor({ ...DEFAULT_THEME.look, theme: a.theme }),
+                }}
+              />
+              <span className="saved-theme-name">{DEFAULT_THEME.name}</span>
+              <span className="saved-theme-meta">built in · blue accent</span>
+            </button>
           </div>
-        )}
+          {saved.map((t) => (
+            <div key={t.name} className="saved-theme">
+              <button
+                className={`saved-theme-apply ${t.name === activeName ? "on" : ""}`}
+                title={`Apply ${t.name}`}
+                aria-pressed={t.name === activeName}
+                // The look only — applying a theme must not flip dark/light.
+                onClick={() => onChange(t.look)}
+              >
+                <span
+                  className="saved-theme-chip"
+                  style={{
+                    background: chipSurface({ ...t.look, theme: a.theme }),
+                    borderColor: accentColor({ ...t.look, theme: a.theme }),
+                  }}
+                />
+                <span className="saved-theme-name">{t.name}</span>
+                <span className="saved-theme-meta">
+                  hue {Math.round(t.look.customPalette[a.theme].hue)}° ·{" "}
+                  {t.look.accent === "custom" ? "custom accent" : `${t.look.accent} accent`}
+                </span>
+              </button>
+              <button
+                className="icon-btn tiny"
+                title={`Edit ${t.name}`}
+                aria-label={`Edit ${t.name}`}
+                onClick={() => {
+                  onChange(t.look);
+                  setEditing(t.name);
+                  setStudio(true);
+                }}
+              >
+                <PencilIcon />
+              </button>
+              <button
+                className="icon-btn tiny danger"
+                title={`Delete ${t.name}`}
+                aria-label={`Delete ${t.name}`}
+                disabled={!onThemes}
+                onClick={() => onThemes?.(saved.filter((x) => x.name !== t.name))}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+        {themes.length === 0 && <p className="set-help">Nothing of your own saved yet — open the studio and name a look.</p>}
       </div>
 
       {studio && (

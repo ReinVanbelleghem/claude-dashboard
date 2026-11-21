@@ -176,7 +176,7 @@ export function NewSessionModal({
             {research ? "No project" : "Working directory"}
             {picking ? (
               <button className="link-btn inline" onClick={() => loc.setManage(true)}>
-                Manage folders
+                Manage repositories
               </button>
             ) : (
               <button className="link-btn inline" onClick={() => setPicking(true)}>

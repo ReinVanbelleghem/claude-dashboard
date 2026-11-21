@@ -240,6 +240,94 @@ export async function getPr(owner: string, repo: string, number: number): Promis
   return { ...toSummary(pr, login, teams), body: pr.body ?? "" };
 }
 
+const STACK_CACHE_MS = 60_000;
+const STACK_DEPTH = 12;
+const stackCache = new Map<string, { at: number; value: PrSummary[] }>();
+
+/** Pull requests of one repository by the branch they come from, or the branch they target. */
+async function prsByBranch(owner: string, repo: string, side: "head" | "base", branch: string): Promise<GqlPr[]> {
+  const arg = side === "head" ? "headRefName" : "baseRefName";
+  const states = side === "head" ? "[OPEN, MERGED]" : "[OPEN]";
+  const data = await graphql<{ repository: { pullRequests: { nodes: (GqlPr & { isCrossRepository: boolean })[] } } | null }>(
+    `query($owner: String!, $repo: String!, $branch: String!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequests(${arg}: $branch, states: ${states}, first: 10, orderBy: { field: UPDATED_AT, direction: DESC }) {
+          nodes { isCrossRepository ${PR_FIELDS} }
+        }
+      }
+    }`,
+    { owner, repo, branch },
+  );
+  // A fork's branch can share a name with one of ours; only our own branches stack.
+  const nodes = (data.repository?.pullRequests.nodes ?? []).filter((p) => !p.isCrossRepository);
+  return [...nodes].sort((a, b) => Number(b.state === "OPEN") - Number(a.state === "OPEN"));
+}
+
+/** The viewer's own open pull requests in one repository: most stacks are read from these alone. */
+async function ownOpenPrs(owner: string, repo: string, login: string): Promise<GqlPr[]> {
+  const data = await graphql<{ search: { nodes: (Partial<GqlPr> & { isCrossRepository?: boolean })[] } }>(
+    `query($q: String!) {
+      search(query: $q, type: ISSUE, first: 50) {
+        nodes { ... on PullRequest { isCrossRepository ${PR_FIELDS} } }
+      }
+    }`,
+    { q: `repo:${owner}/${repo} is:pr is:open author:${login}` },
+  );
+  return data.search.nodes.filter((p): p is GqlPr => !!p.number && !p.isCrossRepository);
+}
+
+/**
+ * The pull requests stacked around a branch, bottom first: the one for the
+ * branch, those it builds on (each one's base is the next one's head) and those
+ * built on it. A stack is whatever the base branches say it is, so one that was
+ * never registered on GitHub reads the same as one that was.
+ *
+ * The viewer's open pull requests are read once and answer most of the walk;
+ * GitHub is asked again only for a layer they do not hold.
+ */
+export async function stackPrs(owner: string, repo: string, branch: string, refresh = false, trunk: string | null = null): Promise<PrSummary[]> {
+  const key = `${owner}/${repo}@${branch}`;
+  const hit = stackCache.get(key);
+  if (!refresh && hit && Date.now() - hit.at < STACK_CACHE_MS) return hit.value;
+
+  const [login, teams] = await Promise.all([viewerLogin(), viewerTeams()]);
+  const [pool, heads, bases] = await Promise.all([
+    ownOpenPrs(owner, repo, login).catch(() => [] as GqlPr[]),
+    prsByBranch(owner, repo, "head", branch),
+    prsByBranch(owner, repo, "base", branch),
+  ]);
+  const seen = new Set<number>();
+  const chain: GqlPr[] = [];
+  const own = heads[0];
+  if (own) {
+    chain.push(own);
+    seen.add(own.number);
+    for (let below = own; chain.length < STACK_DEPTH && below.state === "OPEN" && below.baseRefName !== trunk; ) {
+      const base = below.baseRefName;
+      const next =
+        pool.find((p) => p.headRefName === base && !seen.has(p.number)) ??
+        (await prsByBranch(owner, repo, "head", base)).find((p) => p.state === "OPEN" && !seen.has(p.number));
+      if (!next) break;
+      chain.unshift(next);
+      seen.add(next.number);
+      below = next;
+    }
+  }
+  for (let top = own?.headRefName ?? branch, first = true; chain.length < STACK_DEPTH; first = false) {
+    const next =
+      (first ? bases : []).find((p) => !seen.has(p.number)) ??
+      pool.find((p) => p.baseRefName === top && !seen.has(p.number)) ??
+      (first ? undefined : (await prsByBranch(owner, repo, "base", top)).find((p) => !seen.has(p.number)));
+    if (!next) break;
+    chain.push(next);
+    seen.add(next.number);
+    top = next.headRefName;
+  }
+  const value = chain.map((pr) => toSummary(pr, login, teams));
+  stackCache.set(key, { at: Date.now(), value });
+  return value;
+}
+
 const templateCache = new Map<string, { at: number; body: string }>();
 
 /** The repository's PR template, so its boilerplate links are not mistaken for context. */

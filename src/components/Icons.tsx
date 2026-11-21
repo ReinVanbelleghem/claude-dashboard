@@ -314,6 +314,47 @@ export function ClipIcon() {
   );
 }
 
+export function CollapseAllIcon() {
+  return (
+    <I>
+      <path d="m7 20 5-5 5 5" />
+      <path d="m7 4 5 5 5-5" />
+    </I>
+  );
+}
+
+export function ExpandAllIcon() {
+  return (
+    <I>
+      <path d="m7 15 5 5 5-5" />
+      <path d="m7 9 5-5 5 5" />
+    </I>
+  );
+}
+
+export function FolderPlusIcon() {
+  return (
+    <I>
+      <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+      <path d="M12 10v6" />
+      <path d="M9 13h6" />
+    </I>
+  );
+}
+
+export function ServiceIcon() {
+  return (
+    <I>
+      <rect x="3" y="4" width="18" height="7" rx="2" />
+      <rect x="3" y="13" width="18" height="7" rx="2" />
+      <path d="M7 7.5h.01" />
+      <path d="M7 16.5h.01" />
+      <path d="M11 7.5h6" />
+      <path d="M11 16.5h6" />
+    </I>
+  );
+}
+
 export function TerminalIcon() {
   return (
     <I>
@@ -378,6 +419,55 @@ export function ArtifactIcon() {
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <path d="M3 9h18" />
       <path d="M9 21V9" />
+    </I>
+  );
+}
+
+export function CodeIcon() {
+  return (
+    <I>
+      <path d="m16 18 6-6-6-6" />
+      <path d="m8 6-6 6 6 6" />
+    </I>
+  );
+}
+
+export function SaveIcon() {
+  return (
+    <I>
+      <path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+      <path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" />
+      <path d="M7 3v4a1 1 0 0 0 1 1h7" />
+    </I>
+  );
+}
+
+export function UploadIcon() {
+  return (
+    <I>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="m17 8-5-5-5 5" />
+      <path d="M12 3v12" />
+    </I>
+  );
+}
+
+export function DiffIcon() {
+  return (
+    <I>
+      <path d="M12 3v14" />
+      <path d="M5 10h14" />
+      <path d="M5 21h14" />
+    </I>
+  );
+}
+
+export function DrawingIcon() {
+  return (
+    <I>
+      <path d="M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <circle cx="17.5" cy="17.5" r="3.5" />
     </I>
   );
 }

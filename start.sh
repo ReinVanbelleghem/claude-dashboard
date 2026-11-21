@@ -10,9 +10,22 @@ cd "$(dirname "$0")"
 source scripts/preflight.sh
 require_deps_or_die
 
+# `bun run dev:beside` runs a second dashboard next to the installed app: its own
+# ports and its own data folder, so the two never share a database. Both still
+# read the same ~/.claude.
+if [ "${DASHBOARD_BESIDE:-0}" = "1" ]; then
+  export PORT="${PORT:-5767}"
+  export ARTIFACT_PORT="${ARTIFACT_PORT:-5769}"
+  export DASHBOARD_HOME="${DASHBOARD_HOME:-$HOME/.claude-dashboard-dev}"
+  export DASHBOARD_TMUX_PREFIX="${DASHBOARD_TMUX_PREFIX:-dashdev}"
+  UI_PORT="${UI_PORT:-5768}"
+  echo "→ beside the app: data in $DASHBOARD_HOME"
+fi
+
 API_PORT="${PORT:-5757}"
-UI_PORT=5758
+UI_PORT="${UI_PORT:-5758}"
 ARTIFACT_PORT_SHOWN="${ARTIFACT_PORT:-5759}"
+export PORT="$API_PORT"
 
 if [ ! -d node_modules ]; then
   echo "→ installing dependencies…"

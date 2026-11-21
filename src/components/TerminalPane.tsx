@@ -10,7 +10,7 @@ import { TerminalIcon, TrashIcon } from "./Icons.tsx";
 import { CONTROL_PREFIX, TERMINAL_FONT, TERMINAL_THEME } from "./services/TerminalSheet.tsx";
 
 /** A live attach to one tmux session, sized to whatever box it is put in. */
-export function TerminalPane({ session }: { session: string }) {
+export function TerminalPane({ session, paneId = null }: { session: string; paneId?: string | null }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -23,7 +23,7 @@ export function TerminalPane({ session }: { session: string }) {
     term.open(host);
     fit.fit();
 
-    const socket = new WebSocket(ptyUrl(session, null, term.cols, term.rows));
+    const socket = new WebSocket(ptyUrl(session, paneId, term.cols, term.rows));
     socket.binaryType = "arraybuffer";
     socket.onmessage = (e) => (typeof e.data === "string" ? term.write(e.data) : term.write(new Uint8Array(e.data as ArrayBuffer)));
     socket.onclose = (e) => term.write(`\r\n[disconnected${e.reason ? `: ${e.reason}` : ""}]\r\n`);
@@ -50,7 +50,7 @@ export function TerminalPane({ session }: { session: string }) {
       socket.close();
       term.dispose();
     };
-  }, [session]);
+  }, [session, paneId]);
 
   return (
     <div className="term-host">
